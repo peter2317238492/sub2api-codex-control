@@ -1,0 +1,45 @@
+{
+  "format_version": 1,
+  "product": "sub2api-codex-control-images",
+  "release_version": "0.1.0",
+  "source_workflow": ".github/workflows/control-images-release.yml",
+  "cosign_version": "v3.0.6",
+  "syft_version": "v1.44.0",
+  "certificate_oidc_issuer": "https://token.actions.githubusercontent.com",
+  "platforms": [
+    "linux/amd64"
+  ],
+  "release_input_files": [
+    "package.json",
+    "apps/control-api/pyproject.toml",
+    "apps/control-api/src/control_api/config.py",
+    "apps/pwa/package.json",
+    "versions.lock.json",
+    "packages/control-protocol/schema/control-envelope.schema.json",
+    "packages/appserver-schema/generated/json-schema/codex_app_server_protocol.v2.schemas.json",
+    "docs/contracts/sub2api-auth.v0.1.175.json",
+    "pnpm-lock.yaml",
+    "deploy/constraints/control-api.txt",
+    "deploy/scripts/backup-control-db.sh",
+    "deploy/scripts/probe-sub2api-auth-contract.py"
+  ],
+  "components": {
+    "control-api": {
+      "dockerfile": "deploy/dockerfiles/control-api.Dockerfile",
+      "registry_suffix": "sub2api-codex-control-api",
+      "fixed_build_parameters": {}
+    },
+    "pwa": {
+      "dockerfile": "deploy/dockerfiles/pwa.Dockerfile",
+      "registry_suffix": "sub2api-codex-control-pwa",
+      "fixed_build_parameters": {
+        "VITE_CONTROL_CSRF_COOKIE_NAME": "codex_csrf"
+      }
+    },
+    "postgres-tools": {
+      "dockerfile": "deploy/dockerfiles/postgres-tools.Dockerfile",
+      "registry_suffix": "sub2api-codex-postgres-tools",
+      "fixed_build_parameters": {}
+    }
+  }
+}

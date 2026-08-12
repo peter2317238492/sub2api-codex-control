@@ -1,0 +1,15 @@
+packages:
+  - "apps/pwa"
+  - "packages/*"
+
+storeDir: .pnpm-store
+preferFrozenLockfile: true
+
+overrides:
+  postcss: 8.5.18
+
+onlyBuiltDependencies:
+  - esbuild
+
+allowBuilds:
+  esbuild: true

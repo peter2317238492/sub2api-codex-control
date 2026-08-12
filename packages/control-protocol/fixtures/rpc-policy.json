@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "max_frame_bytes": 262144,
+  "max_ensure_ascii_params_bytes": 229376,
+  "max_ensure_ascii_projected_bytes": 229376,
+  "max_ensure_ascii_text_bytes": 200000,
+  "max_page_size": 100,
+  "max_cwd_filters": 32,
+  "max_text_items": 1,
+  "max_text_length": 200000,
+  "max_opaque_length": 512,
+  "max_search_length": 512,
+  "max_path_length": 4096,
+  "methods": {
+    "model/list": ["cursor", "limit"],
+    "thread/start": ["cwd", "model"],
+    "thread/list": ["cursor", "limit", "cwd", "searchTerm"],
+    "thread/read": ["threadId", "includeTurns"],
+    "thread/resume": ["threadId"],
+    "turn/start": ["threadId", "clientUserMessageId", "input"],
+    "turn/steer": ["threadId", "clientUserMessageId", "input", "expectedTurnId"],
+    "turn/interrupt": ["threadId", "turnId"]
+  }
+}

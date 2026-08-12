@@ -1,0 +1,27 @@
+{
+  "name": "@sub2api-codex/appserver-schema",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pinned generated Codex app-server protocol schemas",
+  "license": "Apache-2.0",
+  "author": "Sub2API Codex Control contributors",
+  "homepage": "https://github.com/peter2317238492/sub2api-codex-control#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/peter2317238492/sub2api-codex-control.git",
+    "directory": "packages/appserver-schema"
+  },
+  "bugs": {
+    "url": "https://github.com/peter2317238492/sub2api-codex-control/issues"
+  },
+  "sideEffects": false,
+  "types": "./generated/typescript/index.ts",
+  "files": [
+    "generated",
+    "codex-version.txt"
+  ],
+  "scripts": {
+    "generate": "./scripts/generate.sh generate",
+    "check": "./scripts/generate.sh check"
+  }
+}

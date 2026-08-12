@@ -1,0 +1,4 @@
+**
+!deploy/
+!deploy/scripts/
+!deploy/scripts/backup-control-db.sh

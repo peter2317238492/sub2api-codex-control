@@ -1,0 +1,238 @@
+name: Connector protected release
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: connector-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_DIR: dist/connector
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  source-only-guard:
+    name: Binary release disabled in the source-only publication
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail closed until binary license evidence is complete
+        run: |
+          echo "Connector binary publication is disabled for the source-only release." >&2
+          exit 1
+
+  build:
+    name: Test and build reproducible candidates
+    needs: source-only-guard
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the immutable tag candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install the pinned Go toolchain
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+
+      - name: Verify public source and licensing before any build
+        run: |
+          python3 scripts/check-public-tree.py
+          python3 scripts/check-licenses.py
+
+      - name: Validate release tooling and tamper rejection
+        run: python3 -m unittest discover -s connector/release/tests -v
+
+      - name: Build every candidate twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")
+          repository="https://github.com/${GITHUB_REPOSITORY}"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
+          python3 connector/release/release.py prepare \
+            --mode release \
+            --output "$RELEASE_DIR" \
+            --source-commit "$GITHUB_SHA" \
+            --source-repository "$repository" \
+            --builder-id "$identity" \
+            --invocation-id "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
+            --source-date-epoch "$source_date_epoch"
+
+      - name: Transfer unsigned candidates
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: connector-candidates-${{ github.run_attempt }}
+          path: dist/connector
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  native-sign:
+    name: Apply Apple signatures and finalize evidence
+    needs: build
+    runs-on: macos-15
+    environment: connector-release-apple
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install the pinned Go toolchain
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+
+      - name: Receive unsigned candidates
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-candidates-${{ github.run_attempt }}
+          path: dist/connector
+
+      - name: Validate unsigned transfer before exposing Apple credentials
+        run: python3 connector/release/release.py validate-work-state --output "$RELEASE_DIR"
+
+      - name: Apply Developer ID signatures and notarize
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_DEVELOPER_ID_APPLICATION: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION }}
+          MACOS_EXPECTED_TEAM_ID: ${{ vars.MACOS_EXPECTED_TEAM_ID }}
+          MACOS_EXPECTED_SIGNING_IDENTITY: ${{ vars.MACOS_EXPECTED_SIGNING_IDENTITY }}
+          MACOS_NOTARY_KEY_BASE64: ${{ secrets.MACOS_NOTARY_KEY_BASE64 }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: connector/release/macos-sign-notarize.sh "$RELEASE_DIR"
+
+      - name: Generate per-artifact SBOM and SLSA provenance
+        run: python3 connector/release/release.py finalize --output "$RELEASE_DIR"
+
+      - name: Transfer finalized unsigned evidence
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: connector-finalized-${{ github.run_attempt }}
+          path: dist/connector
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  attest:
+    name: Keylessly sign and verify
+    needs: native-sign
+    runs-on: macos-15
+    environment: connector-release-sigstore
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      COSIGN_EXPERIMENTAL: "1"
+    steps:
+      - name: Check out the exact release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Receive finalized evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-finalized-${{ github.run_attempt }}
+          path: dist/connector
+
+      - name: Validate all evidence and create keyless bundles
+        run: |
+          python3 connector/release/release.py sign \
+            --output "$RELEASE_DIR" \
+            --apple-team-id "${{ vars.MACOS_EXPECTED_TEAM_ID }}" \
+            --apple-signing-identity "${{ vars.MACOS_EXPECTED_SIGNING_IDENTITY }}"
+
+      - name: Verify with externally fixed certificate claims
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
+          python3 connector/release/release.py verify \
+            --output "$RELEASE_DIR" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger "push" \
+            --apple-team-id "${{ vars.MACOS_EXPECTED_TEAM_ID }}" \
+            --apple-signing-identity "${{ vars.MACOS_EXPECTED_SIGNING_IDENTITY }}"
+
+      - name: Transfer signed and verified assets
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: connector-signed-${{ github.run_attempt }}
+          path: dist/connector
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    name: Publish immutable release
+    needs: attest
+    runs-on: ubuntu-24.04
+    environment: connector-release-publish
+    permissions:
+      contents: write
+    steps:
+      - name: Receive the signed assets verified by the OIDC job
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-signed-${{ github.run_attempt }}
+          path: dist/connector
+
+      - name: Require repository release immutability before publication
+        env:
+          GH_TOKEN: ${{ secrets.IMMUTABLE_RELEASES_READ_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          enabled=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/immutable-releases" \
+            --jq .enabled)
+          test "$enabled" = "true"
+
+      - name: Publish all assets through an immutable draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" "$RELEASE_DIR"/* \
+            --draft \
+            --verify-tag \
+            --latest=false \
+            --title "Connector ${GITHUB_REF_NAME#connector-v}" \
+            --notes "Protected Connector release. Verify manifest.json with the exact issuer, workflow identity, source commit, and push trigger documented in connector/release/README.md."
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false
+          immutable=$(gh release view "$GITHUB_REF_NAME" --json isImmutable --jq .isImmutable)
+          if [ "$immutable" != "true" ]; then
+            echo "::error::Published release is mutable; enable GitHub immutable releases and treat these assets as untrusted."
+            exit 1
+          fi

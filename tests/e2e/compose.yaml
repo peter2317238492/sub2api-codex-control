@@ -1,0 +1,325 @@
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    environment:
+      POSTGRES_DB: sub2api
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/e2e_postgres_admin_password
+    secrets:
+      - e2e_postgres_admin_password
+    volumes:
+      - type: bind
+        source: ${E2E_ROOT}/tests/e2e/postgres-init.sql
+        target: /docker-entrypoint-initdb.d/00-sub2api-isolation.sql
+        read_only: true
+    networks:
+      sub2api-network:
+        aliases:
+          - postgres
+    tmpfs:
+      - /var/lib/postgresql:rw,nosuid,nodev,size=256m
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d postgres
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+
+  redis:
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    command:
+      - sh
+      - -ec
+      - |
+        admin_password=$$(tr -d '\r\n' < /run/secrets/e2e_redis_admin_password)
+        umask 077
+        printf 'user default on >%s ~* &* +@all\n' "$$admin_password" > /data/users.acl
+        exec redis-server --save '' --appendonly no --aclfile /data/users.acl
+    secrets:
+      - e2e_redis_admin_password
+    networks:
+      sub2api-network:
+        aliases:
+          - redis
+    tmpfs:
+      - /data:rw,noexec,nosuid,nodev,size=64m
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - REDISCLI_AUTH="$$(cat /run/secrets/e2e_redis_admin_password)" redis-cli --user default ping | grep -q PONG
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+
+  postgres-provision:
+    profiles:
+      - smoke
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    entrypoint:
+      - /workspace/deploy/scripts/provision-postgres.sh
+    environment:
+      POSTGRES_ADMIN_URL: postgresql://postgres@postgres:5432/postgres
+      POSTGRES_ADMIN_PASSWORD_FILE: /run/secrets/e2e_postgres_admin_password
+      CONTROL_DATABASE_PASSWORD_FILE: /run/secrets/control_db_password
+      CONTROL_DB_USER: codex_control
+      CONTROL_DB_NAME: codex_control
+      SUB2API_DB_NAME: sub2api
+    secrets:
+      - e2e_postgres_admin_password
+      - control_db_password
+    volumes:
+      - type: bind
+        source: ${E2E_ROOT}
+        target: /workspace
+        read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      sub2api-network: {}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  redis-provision:
+    profiles:
+      - smoke
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    entrypoint:
+      - /workspace/deploy/scripts/provision-redis-acl.sh
+    environment:
+      REDIS_ADMIN_URL: redis://redis:6379/0
+      REDIS_ADMIN_USER: default
+      REDIS_ADMIN_PASSWORD_FILE: /run/secrets/e2e_redis_admin_password
+      CONTROL_REDIS_PASSWORD_FILE: /run/secrets/control_redis_password
+      CONTROL_REDIS_USER: codex_control
+      CONTROL_REDIS_PREFIX: "codex-control:"
+    secrets:
+      - e2e_redis_admin_password
+      - control_redis_password
+    volumes:
+      - type: bind
+        source: ${E2E_ROOT}
+        target: /workspace
+        read_only: true
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      sub2api-network: {}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  sub2api:
+    image: python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df
+    command:
+      - python
+      - /app/mock_sub2api.py
+    volumes:
+      - type: bind
+        source: ${E2E_ROOT}/tests/e2e/mock_sub2api.py
+        target: /app/mock_sub2api.py
+        read_only: true
+    networks:
+      sub2api-network:
+        aliases:
+          - sub2api
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).read()
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  control-migrate:
+    environment:
+      CONTROL_ENVIRONMENT: test
+      CONTROL_ALLOWED_ORIGINS_CSV: ${CONTROL_PUBLIC_ORIGIN},https://smoke-edge:8443
+      CONTROL_COOKIE_NAME: codex_control
+      CONTROL_CSRF_COOKIE_NAME: codex_csrf
+      CONTROL_COOKIE_SECURE: "true"
+      CONTROL_APPROVAL_TTL_SECONDS: "5"
+      CONTROL_REDIS_USER: codex_control
+      CONTROL_SUB2API_VERIFY_TLS: "false"
+      CONTROL_SUB2API_CONTRACT_MARKER: 0.1.175/93c32fa
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      sub2api:
+        condition: service_healthy
+
+  control-api:
+    ports: !reset []
+    environment:
+      CONTROL_ENVIRONMENT: test
+      CONTROL_ALLOWED_ORIGINS_CSV: ${CONTROL_PUBLIC_ORIGIN},https://smoke-edge:8443
+      CONTROL_COOKIE_NAME: codex_control
+      CONTROL_CSRF_COOKIE_NAME: codex_csrf
+      CONTROL_COOKIE_SECURE: "true"
+      CONTROL_APPROVAL_TTL_SECONDS: "5"
+      CONTROL_REDIS_USER: codex_control
+      CONTROL_SUB2API_VERIFY_TLS: "false"
+      CONTROL_SUB2API_CONTRACT_MARKER: 0.1.175/93c32fa
+
+  control-api-replica:
+    ports: !reset []
+    environment:
+      CONTROL_ENVIRONMENT: test
+      CONTROL_ALLOWED_ORIGINS_CSV: ${CONTROL_PUBLIC_ORIGIN},https://smoke-edge:8443
+      CONTROL_COOKIE_NAME: codex_control
+      CONTROL_CSRF_COOKIE_NAME: codex_csrf
+      CONTROL_COOKIE_SECURE: "true"
+      CONTROL_APPROVAL_TTL_SECONDS: "5"
+      CONTROL_REDIS_USER: codex_control
+      CONTROL_SUB2API_VERIFY_TLS: "false"
+      CONTROL_SUB2API_CONTRACT_MARKER: 0.1.175/93c32fa
+
+  smoke-edge:
+    ports: !override
+      - name: smoke-edge-tls-loopback
+        target: 8443
+        published: ${CONTROL_SMOKE_EDGE_BIND_PORT:-18092}
+        host_ip: ${CONTROL_BIND_ADDRESS:-127.0.0.1}
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ${E2E_ROOT}/tests/e2e/nginx-tls.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+      - type: bind
+        source: ${E2E_TLS_CERT}
+        target: /run/e2e-tls/tls.crt
+        read_only: true
+      - type: bind
+        source: ${E2E_TLS_KEY}
+        target: /run/e2e-tls/tls.key
+        read_only: true
+    depends_on:
+      control-api-replica:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --no-check-certificate
+        - -q
+        - -O
+        - /dev/null
+        - https://127.0.0.1:8443/codex/
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  connector:
+    profiles:
+      - smoke
+    image: python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df
+    command:
+      - /e2e/sub2api-codex-connector
+      - -config
+      - /e2e/connector.json
+    environment:
+      CODEX_HOME: /codex-home
+      FAKE_CODEX_AUDIT_LOG: /audit/methods.log
+      FAKE_CODEX_APPROVAL_AUDIT_LOG: /audit/approvals.jsonl
+      FAKE_CODEX_STATE_FILE: /audit/thread-state.json
+      FAKE_SUB2API_PROVIDER_KEY_FILE: /audit/sub2api-provider-key-canary
+      HOME: /codex-home
+      SSL_CERT_FILE: /run/e2e-tls/tls.crt
+    volumes:
+      - type: bind
+        source: ${E2E_CONNECTOR_BINARY}
+        target: /e2e/sub2api-codex-connector
+        read_only: true
+      - type: bind
+        source: ${E2E_CONNECTOR_CONFIG}
+        target: /e2e/connector.json
+        read_only: true
+      - type: bind
+        source: ${E2E_FAKE_CODEX}
+        target: /e2e/codex
+        read_only: true
+      - type: volume
+        source: connector-state
+        target: /state
+      - type: bind
+        source: ${E2E_CONNECTOR_WORKSPACE}
+        target: /workspace
+      - type: bind
+        source: ${E2E_CONNECTOR_CODEX_HOME}
+        target: /codex-home
+      - type: bind
+        source: ${E2E_FAKE_CODEX_AUDIT_DIR}
+        target: /audit
+      - type: bind
+        source: ${E2E_TLS_CERT}
+        target: /run/e2e-tls/tls.crt
+        read_only: true
+    depends_on:
+      smoke-edge:
+        condition: service_healthy
+    networks:
+      sub2api-network: {}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    init: true
+    stop_grace_period: 15s
+    restart: "no"
+
+secrets:
+  e2e_postgres_admin_password:
+    file: ${E2E_POSTGRES_ADMIN_PASSWORD_SECRET_FILE}
+  e2e_redis_admin_password:
+    file: ${E2E_REDIS_ADMIN_PASSWORD_SECRET_FILE}
+
+volumes:
+  connector-state:
+
+networks:
+  pwa-network:
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+      com.docker.network.bridge.enable_icc: "true"

@@ -1,0 +1,49 @@
+/var/log/sub2api-codex-control/nginx-access.log {
+    daily
+    rotate 14
+    maxsize 10M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin
+        export PATH
+        LC_ALL=C
+        export LC_ALL
+        if command -v systemctl >/dev/null 2>&1; then
+            nginx_pid=$(systemctl show --property MainPID --value nginx.service) || exit 1
+            case "$nginx_pid" in
+                ''|0|*[!0-9]*) exit 1 ;;
+            esac
+            systemctl is-active --quiet nginx.service || exit 1
+            systemctl_kill_help=$(systemctl kill --help 2>/dev/null) || exit 1
+            case "$systemctl_kill_help" in
+                *--kill-whom=*) kill_selector=--kill-whom=main ;;
+                *--kill-who=*) kill_selector=--kill-who=main ;;
+                *) exit 1 ;;
+            esac
+            systemctl kill -s USR1 "$kill_selector" nginx.service || exit 1
+        elif [ -r /run/nginx.pid ]; then
+            nginx_pid=$(cat /run/nginx.pid) || exit 1
+            case "$nginx_pid" in
+                ''|0|*[!0-9]*) exit 1 ;;
+            esac
+            [ -r "/proc/$nginx_pid/cmdline" ] || exit 1
+            [ -L "/proc/$nginx_pid/exe" ] || exit 1
+            nginx_exe=$(readlink "/proc/$nginx_pid/exe") || exit 1
+            [ "${nginx_exe##*/}" = nginx ] || exit 1
+            nginx_cmdline=$(tr '\000' ' ' < "/proc/$nginx_pid/cmdline") || exit 1
+            case "$nginx_cmdline" in
+                *"nginx: master process"*) ;;
+                *) exit 1 ;;
+            esac
+            kill -0 "$nginx_pid" 2>/dev/null || exit 1
+            kill -USR1 "$nginx_pid" || exit 1
+        else
+            exit 1
+        fi
+    endscript
+}

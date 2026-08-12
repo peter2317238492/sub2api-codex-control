@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api-codex.invalid/schemas/source-bundle-v1.json",
+  "title": "Sub2API Codex Control source bundle attestation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format_version",
+    "release",
+    "source",
+    "source_date_epoch",
+    "file_count",
+    "total_bytes",
+    "manifest",
+    "archive"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://sub2api-codex.invalid/schemas/source-bundle-v1.json"
+    },
+    "format_version": { "const": 1 },
+    "release": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit"],
+      "properties": {
+        "repository": { "type": "string", "format": "uri" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      }
+    },
+    "source_date_epoch": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+    "file_count": { "type": "integer", "minimum": 1, "maximum": 10000 },
+    "total_bytes": { "type": "integer", "minimum": 0, "maximum": 251658240 },
+    "manifest": { "$ref": "#/$defs/asset" },
+    "archive": { "$ref": "#/$defs/asset" }
+  },
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size"],
+      "properties": {
+        "filename": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 268435456 }
+      }
+    }
+  }
+}

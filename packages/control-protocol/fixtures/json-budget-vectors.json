@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "encoding": "compact-ensure-ascii",
+  "string_content": [
+    {
+      "name": "ascii_at_text_limit",
+      "unit": "a",
+      "repeat": 200000,
+      "suffix": "",
+      "expected_bytes": 200000,
+      "allowed": true
+    },
+    {
+      "name": "ascii_over_text_limit",
+      "unit": "a",
+      "repeat": 200001,
+      "suffix": "",
+      "expected_bytes": 200001,
+      "allowed": false
+    },
+    {
+      "name": "cjk_at_text_limit",
+      "unit": "界",
+      "repeat": 33333,
+      "suffix": "aa",
+      "expected_bytes": 200000,
+      "allowed": true
+    },
+    {
+      "name": "cjk_over_text_limit",
+      "unit": "界",
+      "repeat": 33333,
+      "suffix": "aaa",
+      "expected_bytes": 200001,
+      "allowed": false
+    },
+    {
+      "name": "emoji_at_text_limit",
+      "unit": "😀",
+      "repeat": 16666,
+      "suffix": "aaaaaaaa",
+      "expected_bytes": 200000,
+      "allowed": true
+    },
+    {
+      "name": "emoji_over_text_limit",
+      "unit": "😀",
+      "repeat": 16666,
+      "suffix": "aaaaaaaaa",
+      "expected_bytes": 200001,
+      "allowed": false
+    }
+  ],
+  "escape_samples": [
+    {
+      "name": "nul_control",
+      "value": "\u0000",
+      "expected_bytes": 6
+    },
+    {
+      "name": "short_control",
+      "value": "\n",
+      "expected_bytes": 2
+    },
+    {
+      "name": "delete_control",
+      "value": "\u007f",
+      "expected_bytes": 6
+    },
+    {
+      "name": "quote",
+      "value": "\"",
+      "expected_bytes": 2
+    },
+    {
+      "name": "backslash",
+      "value": "\\",
+      "expected_bytes": 2
+    },
+    {
+      "name": "html_characters",
+      "value": "<>&",
+      "expected_bytes": 3
+    },
+    {
+      "name": "line_separator",
+      "value": "\u2028",
+      "expected_bytes": 6
+    }
+  ],
+  "json_documents": [
+    {
+      "name": "params_at_limit",
+      "key": "padding",
+      "unit": "a",
+      "repeat": 229362,
+      "suffix": "",
+      "expected_bytes": 229376,
+      "allowed": true
+    },
+    {
+      "name": "params_over_limit",
+      "key": "padding",
+      "unit": "a",
+      "repeat": 229363,
+      "suffix": "",
+      "expected_bytes": 229377,
+      "allowed": false
+    }
+  ]
+}

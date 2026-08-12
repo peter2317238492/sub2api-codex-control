@@ -1,0 +1,9 @@
+**
+!deploy/
+!deploy/nginx/
+!deploy/nginx/smoke-edge-nginx.conf
+!deploy/nginx/server-locations.conf
+!deploy/nginx/sub2api-logout-location.conf
+!deploy/nginx/browser-security-headers.conf
+!deploy/nginx/api-security-headers.conf
+!deploy/nginx/hide-upstream-security-headers.conf

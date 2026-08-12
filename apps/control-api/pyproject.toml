@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sub2api-codex-control-api"
+version = "0.1.0"
+description = "Same-origin control plane for user-owned Codex connectors"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [
+  { name = "Sub2API Codex Control contributors" },
+]
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.16,<2",
+  "asyncpg>=0.30,<1",
+  "cryptography>=45,<47",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "pydantic-settings>=2.10,<3",
+  "redis>=6.2,<7",
+  "sqlalchemy[asyncio]>=2.0.41,<3",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/peter2317238492/sub2api-codex-control#readme"
+Repository = "https://github.com/peter2317238492/sub2api-codex-control"
+Issues = "https://github.com/peter2317238492/sub2api-codex-control/issues"
+
+[project.optional-dependencies]
+dev = [
+  "aiosqlite>=0.21,<1",
+  "jsonschema>=4.23,<5",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.0,<2",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/control_api"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+pythonpath = ["src"]
+testpaths = ["tests"]
+filterwarnings = [
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

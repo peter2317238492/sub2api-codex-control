@@ -1,0 +1,431 @@
+groups:
+  - name: codex-control-external-recording
+    interval: 30s
+    rules:
+      - record: codex_control:connector_spool_utilization:ratio
+        expr: |
+          codex_control_connector_spool_bytes
+          /
+          clamp_min(codex_control_connector_spool_capacity_bytes, 1)
+
+      - record: codex_control:redis_memory_utilization:ratio
+        expr: |
+          codex_control_external_redis_memory_used_bytes
+          /
+          clamp_min(codex_control_external_redis_memory_max_bytes, 1)
+
+  - name: codex-control-external-contract
+    rules:
+      - alert: CodexControlSyntheticTelemetryMissing
+        expr: |
+          absent(codex_control_synthetic_probe_success{probe="live"})
+          or absent(codex_control_synthetic_probe_success{probe="ready"})
+          or absent(codex_control_synthetic_probe_success{probe="pwa"})
+          or absent(codex_control_synthetic_probe_success{probe="session_exchange"})
+        for: 5m
+        labels:
+          severity: critical
+          service: codex-control
+          component: synthetic
+          release_gate: observability
+        annotations:
+          summary: A required synthetic probe is not being collected
+          description: Synthetic probe {{ $labels.probe }} is absent from Prometheus.
+          runbook: docs/runbooks/observability.md#external-collector-contract
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlExternalDatastoreTelemetryMissing
+        expr: |
+          absent(codex_control_external_postgresql_up)
+          or absent(codex_control_external_redis_up)
+          or absent(codex_control_external_redis_evicted_keys_total)
+          or absent(codex_control_external_redis_memory_used_bytes)
+          or absent(codex_control_external_redis_memory_max_bytes)
+          or absent(codex_control_external_migration_revision_match)
+        for: 5m
+        labels:
+          severity: critical
+          service: codex-control
+          component: datastore
+          release_gate: observability
+        annotations:
+          summary: Required datastore telemetry is missing
+          description: One or more normalized PostgreSQL, Redis, or migration signals are absent.
+          runbook: docs/runbooks/observability.md#external-collector-contract
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlExternalRecoveryTelemetryMissing
+        expr: |
+          absent(codex_control_external_backup_last_success_timestamp_seconds)
+          or absent(codex_control_external_backup_checksum_ok)
+          or absent(codex_control_external_restore_rehearsal_last_success_timestamp_seconds)
+        for: 5m
+        labels:
+          severity: critical
+          service: codex-control
+          component: recovery
+          release_gate: observability
+        annotations:
+          summary: Required backup or restore telemetry is missing
+          description: Backup age, checksum, or restore-rehearsal age is absent from Prometheus.
+          runbook: docs/runbooks/observability.md#external-collector-contract
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlExternalPolicyTelemetryMissing
+        expr: |
+          absent(codex_control_external_policy_check_ok{check="postgres_role"})
+          or absent(codex_control_external_policy_check_ok{check="redis_acl"})
+          or absent(codex_control_external_policy_check_ok{check="redis_pubsub_fanout"})
+          or absent(codex_control_external_policy_check_ok{check="secret_file_mode"})
+        for: 5m
+        labels:
+          severity: critical
+          service: codex-control
+          component: policy
+          release_gate: observability
+        annotations:
+          summary: A required infrastructure policy check is not collected
+          description: Infrastructure policy check {{ $labels.check }} is absent from Prometheus.
+          runbook: docs/runbooks/observability.md#external-collector-contract
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlConnectorTelemetryMissing
+        expr: |
+          absent(up{job="codex-control-connector"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_up)
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_last_update_timestamp_seconds)
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_reconnects_total{reason="token"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_reconnects_total{reason="dial"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_reconnects_total{reason="handshake"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_reconnects_total{reason="connection_io"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_spool_bytes)
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_spool_capacity_bytes)
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_spool_events)
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_spool_oldest_unacknowledged_age_seconds)
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_app_server_restarts_total{reason="start_failure"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_app_server_restarts_total{reason="notification_failure"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_app_server_restarts_total{reason="child_exit"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_contract_failures_total{kind="version"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_contract_failures_total{kind="schema"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_contract_last_failure_timestamp_seconds{kind="version"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_contract_last_failure_timestamp_seconds{kind="schema"})
+          or (up{job="codex-control-connector"} == 1 unless on (job, instance) codex_control_connector_policy_denials_total{reason="command"})
+          or (count by (job, instance) (codex_control_connector_reconnects_total) != 4 and on (job, instance) up{job="codex-control-connector"} == 1)
+          or (count by (job, instance) (codex_control_connector_app_server_restarts_total) != 3 and on (job, instance) up{job="codex-control-connector"} == 1)
+          or (count by (job, instance) (codex_control_connector_contract_failures_total) != 2 and on (job, instance) up{job="codex-control-connector"} == 1)
+          or (count by (job, instance) (codex_control_connector_contract_last_failure_timestamp_seconds) != 2 and on (job, instance) up{job="codex-control-connector"} == 1)
+          or (count by (job, instance) (codex_control_connector_policy_denials_total) != 1 and on (job, instance) up{job="codex-control-connector"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+          service: codex-control
+          component: connector
+          release_gate: observability
+        annotations:
+          summary: Required Connector telemetry is missing
+          description: One or more Connector health, freshness, spool, or fixed-cardinality counter signals are absent or invalid.
+          runbook: docs/runbooks/observability.md#external-collector-contract
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+  - name: codex-control-external-service
+    rules:
+      - alert: CodexControlPublicSyntheticFailed
+        expr: codex_control_synthetic_probe_success{probe=~"live|ready|pwa"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: synthetic
+        annotations:
+          summary: A public Control surface is unavailable
+          description: Synthetic probe {{ $labels.probe }} has failed continuously for two minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlSessionExchangeSyntheticFailed
+        expr: max_over_time(codex_control_synthetic_probe_success{probe="session_exchange"}[3m]) == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: codex-control
+          component: synthetic
+        annotations:
+          summary: Authenticated session exchange synthetic is failing
+          description: Every session-exchange probe sample in the last three minutes failed.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlPostgreSQLUnavailable
+        expr: codex_control_external_postgresql_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: postgresql
+        annotations:
+          summary: Control PostgreSQL is unavailable
+          description: The dedicated Control database has been unreachable for two minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlRedisUnavailable
+        expr: codex_control_external_redis_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: redis
+        annotations:
+          summary: Control Redis is unavailable
+          description: The namespaced Control Redis dependency has been unreachable for two minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlRedisEvictionDetected
+        expr: increase(codex_control_external_redis_evicted_keys_total[5m]) > 0
+        labels:
+          severity: critical
+          service: codex-control
+          component: redis
+        annotations:
+          summary: Redis evicted one or more keys
+          description: Redis evictions can invalidate coordination, rate-limit, and Pub/Sub assumptions.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlRedisMemoryPressure
+        expr: |
+          codex_control:redis_memory_utilization:ratio > 0.9
+          and on (job, instance)
+          codex_control_external_redis_memory_max_bytes > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: codex-control
+          component: redis
+        annotations:
+          summary: Redis memory utilization is above 90 percent
+          description: The configured Redis memory ceiling has remained more than 90 percent utilized for ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlMigrationRevisionMismatch
+        expr: codex_control_external_migration_revision_match != 1
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: postgresql
+          release_gate: migration
+        annotations:
+          summary: Alembic current revision does not match packaged head
+          description: Deployment must stop until the database revision matches the admitted API artifact.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#release-review
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlBackupStale
+        expr: time() - codex_control_external_backup_last_success_timestamp_seconds > 28800
+        for: 5m
+        labels:
+          severity: critical
+          service: codex-control
+          component: recovery
+        annotations:
+          summary: Control PostgreSQL backup is older than eight hours
+          description: No verified successful backup has completed within the eight-hour alert window.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#release-review
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlBackupChecksumFailure
+        expr: codex_control_external_backup_checksum_ok != 1
+        labels:
+          severity: critical
+          service: codex-control
+          component: recovery
+        annotations:
+          summary: Latest Control PostgreSQL backup failed checksum verification
+          description: The latest backup artifact or manifest did not pass its integrity check.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#release-review
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlRestoreRehearsalOverdue
+        expr: time() - codex_control_external_restore_rehearsal_last_success_timestamp_seconds > 7776000
+        for: 1h
+        labels:
+          severity: warning
+          service: codex-control
+          component: recovery
+        annotations:
+          summary: Quarterly restore rehearsal is overdue
+          description: No successful isolated restore rehearsal has been recorded in the last 90 days.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#release-review
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlInfrastructurePolicyCheckFailed
+        expr: codex_control_external_policy_check_ok == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: policy
+        annotations:
+          summary: A Control infrastructure policy check failed
+          description: Policy check {{ $labels.check }} is not compliant with the admitted deployment.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#release-review
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlConnectorDown
+        expr: |
+          up{job="codex-control-connector"} == 0
+          or on (job, instance)
+          codex_control_connector_up == 0
+          or on (job, instance)
+          (abs(time() - codex_control_connector_last_update_timestamp_seconds) > 60)
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: connector
+          release_gate: observability
+        annotations:
+          summary: Connector telemetry reports the process down or stale
+          description: A monitored Connector reports down or its atomic textfile timestamp differs from Prometheus by more than 60 seconds.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlConnectorReconnectLoop
+        expr: |
+          sum by (job, instance, reason) (
+            increase(codex_control_connector_reconnects_total[10m])
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: codex-control
+          component: connector
+        annotations:
+          summary: Connector is repeatedly reconnecting
+          description: Connector reconnect reason {{ $labels.reason }} exceeded five attempts over ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlConnectorSpoolHigh
+        expr: codex_control:connector_spool_utilization:ratio > 0.7
+        for: 5m
+        labels:
+          severity: warning
+          service: codex-control
+          component: connector
+        annotations:
+          summary: Connector spool exceeds 70 percent capacity
+          description: Durable Connector spool bytes have remained above 70 percent of configured capacity.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlConnectorSpoolAckStalled
+        expr: |
+          codex_control_connector_spool_oldest_unacknowledged_age_seconds > 60
+          and on (job, instance)
+          codex_control_connector_spool_events > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: codex-control
+          component: connector
+        annotations:
+          summary: Connector spool acknowledgement is stalled
+          description: The oldest unacknowledged Connector spool event is more than 60 seconds old.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlConnectorAppServerCrashLoop
+        expr: |
+          sum by (job, instance, reason) (
+            increase(codex_control_connector_app_server_restarts_total[10m])
+          ) > 3
+        for: 5m
+        labels:
+          severity: critical
+          service: codex-control
+          component: connector
+        annotations:
+          summary: Connector app-server child is crash-looping
+          description: App-server restart reason {{ $labels.reason }} exceeded three restarts over ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlConnectorContractFailure
+        expr: |
+          codex_control_connector_contract_last_failure_timestamp_seconds > 0
+          and
+          time() - codex_control_connector_contract_last_failure_timestamp_seconds >= -60
+          and
+          time() - codex_control_connector_contract_last_failure_timestamp_seconds <= 600
+        labels:
+          severity: critical
+          service: codex-control
+          component: connector
+          release_gate: contract
+        annotations:
+          summary: Connector rejected a version or schema contract
+          description: Connector contract check {{ $labels.kind }} failed in the last ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#release-review
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlConnectorPolicyDenial
+        expr: increase(codex_control_connector_policy_denials_total[10m]) > 0
+        labels:
+          severity: warning
+          service: codex-control
+          component: connector
+        annotations:
+          summary: Connector denied an out-of-policy operation
+          description: Connector policy denial {{ $labels.reason }} occurred in the last ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"

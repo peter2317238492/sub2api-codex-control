@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api-codex.invalid/schemas/connector-release-manifest-v1.json",
+  "title": "Sub2API Codex Connector release manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format_version",
+    "release_mode",
+    "releasable",
+    "product",
+    "connector_version",
+    "control_protocol_version",
+    "codex_version",
+    "appserver_schema_sha256",
+    "server_api_release",
+    "source",
+    "build",
+    "signing",
+    "checksums_file",
+    "local_unsigned_marker",
+    "targets"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://sub2api-codex.invalid/schemas/connector-release-manifest-v1.json"
+    },
+    "format_version": { "const": 1 },
+    "release_mode": { "enum": ["release", "local-unsigned"] },
+    "releasable": { "type": "boolean" },
+    "product": { "const": "sub2api-codex-connector" },
+    "connector_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "control_protocol_version": { "const": 1 },
+    "codex_version": { "type": "string", "minLength": 1 },
+    "appserver_schema_sha256": { "$ref": "#/$defs/sha256" },
+    "server_api_release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "maximum"],
+      "properties": {
+        "minimum": { "type": "string" },
+        "maximum": { "type": "string" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit", "snapshot_sha256"],
+      "properties": {
+        "repository": { "type": "string" },
+        "commit": { "type": "string" },
+        "snapshot_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["go_version", "source_date_epoch", "created_at", "builder_id", "invocation_id", "started_at", "finished_at", "reproducibility_passes"],
+      "properties": {
+        "go_version": { "type": "string" },
+        "source_date_epoch": { "type": "integer", "minimum": 0 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "builder_id": { "type": "string" },
+        "invocation_id": { "type": "string" },
+        "started_at": { "type": "string", "format": "date-time" },
+        "finished_at": { "type": "string", "format": "date-time" },
+        "reproducibility_passes": { "const": 2 }
+      }
+    },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cosign_version", "certificate_oidc_issuer", "certificate_identity", "certificate_github_workflow_sha", "certificate_github_workflow_trigger", "manifest_bundle", "checksums_bundle"],
+      "properties": {
+        "cosign_version": { "type": "string" },
+        "certificate_oidc_issuer": { "type": ["string", "null"] },
+        "certificate_identity": { "type": ["string", "null"] },
+        "certificate_github_workflow_sha": {
+          "oneOf": [
+            { "$ref": "#/$defs/gitCommit" },
+            { "type": "null" }
+          ]
+        },
+        "certificate_github_workflow_trigger": {
+          "type": ["string", "null"],
+          "enum": ["push", null]
+        },
+        "manifest_bundle": { "$ref": "#/$defs/filename" },
+        "checksums_bundle": { "$ref": "#/$defs/filename" }
+      }
+    },
+    "checksums_file": { "const": "SHA256SUMS" },
+    "local_unsigned_marker": { "type": ["string", "null"] },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/target" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "filename": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "fileEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size", "signature_bundle"],
+      "properties": {
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "signature_bundle": { "$ref": "#/$defs/filename" }
+      }
+    },
+    "artifactEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size", "reproducible_candidate_sha256", "reproducible_candidate_size", "signature_bundle"],
+      "properties": {
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "reproducible_candidate_sha256": { "$ref": "#/$defs/sha256" },
+        "reproducible_candidate_size": { "type": "integer", "minimum": 1 },
+        "signature_bundle": { "$ref": "#/$defs/filename" }
+      }
+    },
+    "sbomEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "filename", "sha256", "size", "signature_bundle"],
+      "properties": {
+        "format": { "const": "SPDX-2.3-json" },
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "signature_bundle": { "$ref": "#/$defs/filename" }
+      }
+    },
+    "provenanceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate_type", "filename", "sha256", "size", "signature_bundle", "attestation_bundle"],
+      "properties": {
+        "predicate_type": { "const": "https://slsa.dev/provenance/v1" },
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "signature_bundle": { "$ref": "#/$defs/filename" },
+        "attestation_bundle": { "$ref": "#/$defs/filename" }
+      }
+    },
+    "nativeSignature": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "status"],
+          "properties": {
+            "policy": { "const": "none" },
+            "status": { "const": "not-required" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "status"],
+          "properties": {
+            "policy": { "const": "apple-developer-id-and-notarization" },
+            "status": { "const": "not-performed-local-unsigned" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "status", "team_identifier", "signing_identity", "evidence"],
+          "properties": {
+            "policy": { "const": "apple-developer-id-and-notarization" },
+            "status": { "const": "verified" },
+            "team_identifier": { "type": "string", "pattern": "^[A-Z0-9]{10}$" },
+            "signing_identity": {
+              "type": "string",
+              "pattern": "^Developer ID Application: .+ \\([A-Z0-9]{10}\\)$"
+            },
+            "evidence": { "$ref": "#/$defs/fileEvidence" }
+          }
+        }
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "os", "arch", "artifact", "sbom", "provenance", "native_signature"],
+      "properties": {
+        "id": { "enum": ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"] },
+        "os": { "enum": ["linux", "darwin"] },
+        "arch": { "enum": ["amd64", "arm64"] },
+        "artifact": { "$ref": "#/$defs/artifactEvidence" },
+        "sbom": { "$ref": "#/$defs/sbomEvidence" },
+        "provenance": { "$ref": "#/$defs/provenanceEvidence" },
+        "native_signature": { "$ref": "#/$defs/nativeSignature" }
+      }
+    }
+  }
+}

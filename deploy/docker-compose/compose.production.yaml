@@ -1,0 +1,51 @@
+# Production-only overlay. Always combine this with compose.yaml and run the
+# signed release verifier before rendering or starting services.
+services:
+  control-migrate:
+    image: ${CONTROL_API_IMAGE:?CONTROL_API_IMAGE must be a verified repository@sha256 digest}
+    build: !reset null
+    pull_policy: never
+    environment:
+      CONTROL_BUILD_VERSION: ${CONTROL_RELEASE:?CONTROL_RELEASE must come from the verified release lock}
+      CONTROL_BUILD_VCS_REF: ${CONTROL_VCS_REF:?CONTROL_VCS_REF must come from the verified release lock}
+    labels:
+      org.opencontainers.image.version: ${CONTROL_RELEASE:?CONTROL_RELEASE must come from the verified release lock}
+      org.opencontainers.image.revision: ${CONTROL_VCS_REF:?CONTROL_VCS_REF must come from the verified release lock}
+
+  control-api:
+    image: ${CONTROL_API_IMAGE:?CONTROL_API_IMAGE must be a verified repository@sha256 digest}
+    build: !reset null
+    pull_policy: never
+    environment:
+      CONTROL_BUILD_VERSION: ${CONTROL_RELEASE:?CONTROL_RELEASE must come from the verified release lock}
+      CONTROL_BUILD_VCS_REF: ${CONTROL_VCS_REF:?CONTROL_VCS_REF must come from the verified release lock}
+    labels:
+      org.opencontainers.image.version: ${CONTROL_RELEASE:?CONTROL_RELEASE must come from the verified release lock}
+      org.opencontainers.image.revision: ${CONTROL_VCS_REF:?CONTROL_VCS_REF must come from the verified release lock}
+
+  control-api-replica:
+    image: ${CONTROL_API_IMAGE:?CONTROL_API_IMAGE must be a verified repository@sha256 digest}
+    build: !reset null
+    pull_policy: never
+    environment:
+      CONTROL_BUILD_VERSION: ${CONTROL_RELEASE:?CONTROL_RELEASE must come from the verified release lock}
+      CONTROL_BUILD_VCS_REF: ${CONTROL_VCS_REF:?CONTROL_VCS_REF must come from the verified release lock}
+    labels:
+      org.opencontainers.image.version: ${CONTROL_RELEASE:?CONTROL_RELEASE must come from the verified release lock}
+      org.opencontainers.image.revision: ${CONTROL_VCS_REF:?CONTROL_VCS_REF must come from the verified release lock}
+
+  codex-pwa:
+    image: ${CONTROL_PWA_IMAGE:?CONTROL_PWA_IMAGE must be a verified repository@sha256 digest}
+    build: !reset null
+    pull_policy: never
+    labels:
+      org.opencontainers.image.version: ${CONTROL_RELEASE:?CONTROL_RELEASE must come from the verified release lock}
+      org.opencontainers.image.revision: ${CONTROL_VCS_REF:?CONTROL_VCS_REF must come from the verified release lock}
+
+  control-backup:
+    image: ${CONTROL_POSTGRES_TOOLS_IMAGE:?CONTROL_POSTGRES_TOOLS_IMAGE must be an immutable digest reference}
+    build: !reset null
+    pull_policy: never
+    labels:
+      org.opencontainers.image.version: ${CONTROL_RELEASE:?CONTROL_RELEASE must come from the verified release lock}
+      org.opencontainers.image.revision: ${CONTROL_VCS_REF:?CONTROL_VCS_REF must come from the verified release lock}

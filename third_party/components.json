@@ -1,0 +1,324 @@
+{
+  "format_version": 1,
+  "project": {
+    "license_expression": "Apache-2.0",
+    "license_file": {
+      "path": "LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    "notice_file": {
+      "path": "NOTICE",
+      "sha256": "d44daa549b7fa971542a850273c21d73637455c02f53061e0eba16c707514785"
+    }
+  },
+  "components": [
+    {
+      "id": "codex",
+      "name": "OpenAI Codex",
+      "version": "0.147.0",
+      "relationship": "generated-material",
+      "package": "pkg:github/openai/codex@rust-v0.147.0",
+      "repository": "https://github.com/openai/codex",
+      "source_ref": "rust-v0.147.0",
+      "version_evidence": {
+        "kind": "exact-file",
+        "path": "packages/appserver-schema/codex-version.txt"
+      },
+      "license_expression": "Apache-2.0",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/Codex-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/openai/codex/rust-v0.147.0/LICENSE",
+          "source_sha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
+          "file_sha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
+          "normalization": "none"
+        },
+        {
+          "kind": "notice",
+          "path": "third_party/licenses/Codex-NOTICE.txt",
+          "source_url": "https://raw.githubusercontent.com/openai/codex/rust-v0.147.0/NOTICE",
+          "source_sha256": "9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915",
+          "file_sha256": "9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915",
+          "normalization": "none"
+        }
+      ]
+    },
+    {
+      "id": "sub2api",
+      "name": "Sub2API",
+      "version": "0.1.175",
+      "relationship": "compatibility-reference",
+      "package": "pkg:github/Wei-Shaw/sub2api@v0.1.175",
+      "repository": "https://github.com/Wei-Shaw/sub2api",
+      "source_ref": "v0.1.175",
+      "version_evidence": {
+        "kind": "json-pointer",
+        "path": "versions.lock.json",
+        "keys": [
+          "sub2api",
+          "runtime_version"
+        ]
+      },
+      "license_expression": "LGPL-3.0-or-later",
+      "license_declaration": {
+        "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/93c32fa1a2450351561abc46156d2e28cb5f74ca/README.md",
+        "source_sha256": "9763f66acba04a47692219bc8fa5a9da1d6e487cdab647cd6a2c58c09b574b00",
+        "text": "GNU Lesser General Public License v3.0 (or later)"
+      },
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/Sub2API-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/v0.1.175/LICENSE",
+          "source_sha256": "a5681bf9b05db14d86776930017c647ad9e6e56ff6bbcfdf21e5848288dfaf1b",
+          "file_sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "normalization": "append-final-newline"
+        }
+      ]
+    },
+    {
+      "id": "alembic",
+      "name": "Alembic",
+      "version": "1.18.5",
+      "relationship": "runtime-dependency",
+      "package": "pkg:pypi/alembic@1.18.5",
+      "repository": "https://github.com/sqlalchemy/alembic",
+      "source_ref": "rel_1_18_5",
+      "version_evidence": {
+        "kind": "python-constraint",
+        "path": "deploy/constraints/control-api.txt",
+        "package": "alembic"
+      },
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/Alembic-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/sqlalchemy/alembic/rel_1_18_5/LICENSE",
+          "source_sha256": "6e68d94a03a0e3e327ddf3e86d1ebedc14eece3922022618fc246a36296fd0cc",
+          "file_sha256": "6e68d94a03a0e3e327ddf3e86d1ebedc14eece3922022618fc246a36296fd0cc",
+          "normalization": "none"
+        }
+      ]
+    },
+    {
+      "id": "vue",
+      "name": "Vue",
+      "version": "3.5.39",
+      "relationship": "runtime-dependency",
+      "package": "pkg:npm/vue@3.5.39",
+      "repository": "https://github.com/vuejs/core",
+      "source_ref": "v3.5.39",
+      "version_evidence": {
+        "kind": "pnpm-importer",
+        "path": "pnpm-lock.yaml",
+        "importer": "apps/pwa",
+        "package": "vue"
+      },
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/Vue-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/vuejs/core/v3.5.39/LICENSE",
+          "source_sha256": "49190d1f742dd61e47fe816df4963e5186a2a62100d9122f9883a60ea32973ac",
+          "file_sha256": "49190d1f742dd61e47fe816df4963e5186a2a62100d9122f9883a60ea32973ac",
+          "normalization": "none"
+        }
+      ]
+    },
+    {
+      "id": "pinia",
+      "name": "Pinia",
+      "version": "3.0.4",
+      "relationship": "runtime-dependency",
+      "package": "pkg:npm/pinia@3.0.4",
+      "repository": "https://github.com/vuejs/pinia",
+      "source_ref": "v3.0.4",
+      "version_evidence": {
+        "kind": "pnpm-importer",
+        "path": "pnpm-lock.yaml",
+        "importer": "apps/pwa",
+        "package": "pinia"
+      },
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/Pinia-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/vuejs/pinia/v3.0.4/LICENSE",
+          "source_sha256": "91a2845c4db44e7497b514b98634a674c737986ad0db81599307cf733bf850b2",
+          "file_sha256": "91a2845c4db44e7497b514b98634a674c737986ad0db81599307cf733bf850b2",
+          "normalization": "none"
+        }
+      ]
+    },
+    {
+      "id": "lucide",
+      "name": "Lucide",
+      "version": "1.24.0",
+      "relationship": "runtime-dependency",
+      "package": "pkg:npm/%40lucide/vue@1.24.0",
+      "repository": "https://github.com/lucide-icons/lucide",
+      "source_ref": "1.24.0",
+      "version_evidence": {
+        "kind": "pnpm-importer",
+        "path": "pnpm-lock.yaml",
+        "importer": "apps/pwa",
+        "package": "@lucide/vue"
+      },
+      "license_expression": "ISC AND MIT",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/Lucide-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/lucide-icons/lucide/1.24.0/LICENSE",
+          "source_sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57",
+          "file_sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57",
+          "normalization": "none"
+        }
+      ]
+    },
+    {
+      "id": "go",
+      "name": "Go standard library",
+      "version": "1.24.0",
+      "relationship": "build-runtime",
+      "package": "pkg:generic/go@1.24.0",
+      "repository": "https://github.com/golang/go",
+      "source_ref": "go1.24.0",
+      "version_evidence": {
+        "kind": "go-version",
+        "path": "connector/go.mod"
+      },
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/Go-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/golang/go/go1.24.0/LICENSE",
+          "source_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+          "file_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+          "normalization": "none"
+        },
+        {
+          "kind": "patent-grant",
+          "path": "third_party/licenses/Go-PATENTS.txt",
+          "source_url": "https://raw.githubusercontent.com/golang/go/go1.24.0/PATENTS",
+          "source_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc",
+          "file_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc",
+          "normalization": "none"
+        }
+      ]
+    },
+    {
+      "id": "coder-websocket",
+      "name": "coder/websocket",
+      "version": "1.8.14",
+      "relationship": "runtime-dependency",
+      "package": "pkg:golang/github.com/coder/websocket@v1.8.14",
+      "repository": "https://github.com/coder/websocket",
+      "source_ref": "v1.8.14",
+      "version_evidence": {
+        "kind": "go-require",
+        "path": "connector/go.mod",
+        "module": "github.com/coder/websocket"
+      },
+      "license_expression": "ISC",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/coder-websocket-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/coder/websocket/v1.8.14/LICENSE.txt",
+          "source_sha256": "cc0975a5f6305145bdd7b41ce9479632fdac3870e6ac4281f28017f18c767c4e",
+          "file_sha256": "cc0975a5f6305145bdd7b41ce9479632fdac3870e6ac4281f28017f18c767c4e",
+          "normalization": "none"
+        }
+      ]
+    },
+    {
+      "id": "jsonschema",
+      "name": "santhosh-tekuri/jsonschema",
+      "version": "6.0.2",
+      "relationship": "runtime-dependency",
+      "package": "pkg:golang/github.com/santhosh-tekuri/jsonschema/v6@v6.0.2",
+      "repository": "https://github.com/santhosh-tekuri/jsonschema",
+      "source_ref": "v6.0.2",
+      "version_evidence": {
+        "kind": "go-require",
+        "path": "connector/go.mod",
+        "module": "github.com/santhosh-tekuri/jsonschema/v6"
+      },
+      "license_expression": "Apache-2.0",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/jsonschema-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/santhosh-tekuri/jsonschema/v6.0.2/LICENSE",
+          "source_sha256": "c8858a5a76440bbca484e134cf7df46385d090dd18b2c58e650f939258802e5b",
+          "file_sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+          "normalization": "append-final-newline"
+        }
+      ]
+    },
+    {
+      "id": "regexp2",
+      "name": "dlclark/regexp2",
+      "version": "1.11.0",
+      "relationship": "test-only-transitive",
+      "package": "pkg:golang/github.com/dlclark/regexp2@v1.11.0",
+      "repository": "https://github.com/dlclark/regexp2",
+      "source_ref": "v1.11.0",
+      "version_evidence": {
+        "kind": "go-sum",
+        "path": "connector/go.sum",
+        "module": "github.com/dlclark/regexp2"
+      },
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/regexp2-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/dlclark/regexp2/v1.11.0/LICENSE",
+          "source_sha256": "9be5d04bb4d706914d5bf943710da4afeb42048f7c529902fb57c82762a991a9",
+          "file_sha256": "9be5d04bb4d706914d5bf943710da4afeb42048f7c529902fb57c82762a991a9",
+          "normalization": "none"
+        }
+      ]
+    },
+    {
+      "id": "x-text",
+      "name": "golang.org/x/text",
+      "version": "0.14.0",
+      "relationship": "transitive-runtime-dependency",
+      "package": "pkg:golang/golang.org/x/text@v0.14.0",
+      "repository": "https://go.googlesource.com/text",
+      "source_ref": "v0.14.0",
+      "version_evidence": {
+        "kind": "go-require",
+        "path": "connector/go.mod",
+        "module": "golang.org/x/text"
+      },
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/x-text-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/golang/text/v0.14.0/LICENSE",
+          "source_sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+          "file_sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+          "normalization": "none"
+        },
+        {
+          "kind": "patent-grant",
+          "path": "third_party/licenses/x-text-PATENTS.txt",
+          "source_url": "https://raw.githubusercontent.com/golang/text/v0.14.0/PATENTS",
+          "source_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc",
+          "file_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc",
+          "normalization": "none"
+        }
+      ]
+    }
+  ]
+}

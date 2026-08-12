@@ -1,0 +1,525 @@
+groups:
+  - name: codex-control-native-recording
+    interval: 30s
+    rules:
+      - record: codex_control:http_5xx_ratio:rate5m
+        expr: |
+          sum by (job) (rate(codex_control_http_requests_total{status_class="5xx"}[5m]))
+          /
+          clamp_min(sum by (job) (rate(codex_control_http_requests_total[5m])), 0.001)
+
+      - record: codex_control:http_request_duration_seconds:p99_5m
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (job, route, le) (
+              rate(codex_control_http_request_duration_seconds_bucket[5m])
+            )
+          )
+        labels:
+          quantile: "0.99"
+
+      - record: codex_control:command_duration_seconds:p95_10m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (job, outcome, le) (
+              rate(codex_control_command_duration_seconds_bucket[10m])
+            )
+          )
+        labels:
+          quantile: "0.95"
+
+      - record: codex_control:maintenance_duration_seconds:p95_10m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (job, phase, le) (
+              rate(codex_control_maintenance_duration_seconds_bucket[10m])
+            )
+          )
+        labels:
+          quantile: "0.95"
+
+      - record: codex_control:reconciliation_duration_seconds:p95_10m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (job, phase, le) (
+              rate(codex_control_reconciliation_duration_seconds_bucket[10m])
+            )
+          )
+        labels:
+          quantile: "0.95"
+
+      - record: codex_control:dependency_check_duration_seconds:p95_5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (job, dependency, le) (
+              rate(codex_control_dependency_check_duration_seconds_bucket[5m])
+            )
+          )
+        labels:
+          quantile: "0.95"
+
+      - record: codex_control:database_pool_utilization:ratio
+        expr: |
+          sum by (job, instance) (
+            codex_control_database_pool_connections{state="checked_out"}
+          )
+          /
+          clamp_min(
+            sum by (job, instance) (
+              codex_control_database_pool_connections{state="capacity"}
+            ),
+            1
+          )
+
+  - name: codex-control-native-contract
+    rules:
+      - alert: CodexControlMetricsTargetDown
+        expr: up{job="codex-control-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: control-api
+          release_gate: observability
+        annotations:
+          summary: Control API metrics target is down
+          description: Prometheus has failed to scrape a Control API metrics target for two minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlMetricsSnapshotStale
+        expr: time() - codex_control_metrics_generated_timestamp_seconds > 120
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: control-api
+          release_gate: observability
+        annotations:
+          summary: Control API metrics snapshot is stale
+          description: The database-backed metrics snapshot has not advanced for more than two minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlReleaseIdentityInvalid
+        expr: codex_control_build_info{vcs_ref=~"^(unknown|unborn|dirty)$"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          service: codex-control
+          component: control-api
+          release_gate: provenance
+        annotations:
+          summary: Control API release identity is not immutable
+          description: The running API reports an unknown, unborn, or dirty source revision.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#release-review
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlNativeStateTelemetryMissing
+        expr: |
+          absent(codex_control_websocket_connections_active{kind="browser"})
+          or absent(codex_control_websocket_connections_active{kind="device"})
+          or absent(codex_control_device_heartbeat_age_seconds_max)
+          or absent(codex_control_maintenance_batch_saturated{phase="command_expiry"})
+          or absent(codex_control_maintenance_last_success_timestamp_seconds{phase="command_expiry"})
+          or absent(codex_control_dependency_ready{dependency="database"})
+          or absent(codex_control_dependency_ready{dependency="database_migrations"})
+          or absent(codex_control_dependency_ready{dependency="redis"})
+          or absent(codex_control_database_pool_connections{state="capacity"})
+        for: 5m
+        labels:
+          severity: critical
+          service: codex-control
+          component: control-api
+          release_gate: observability
+        annotations:
+          summary: Required native state telemetry is missing
+          description: One or more initialized realtime, maintenance, dependency, or database-pool gauges are absent.
+          runbook: docs/runbooks/observability.md#native-metric-contract
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+  - name: codex-control-native-service
+    rules:
+      - alert: CodexControlHighHttp5xxRate
+        expr: |
+          codex_control:http_5xx_ratio:rate5m > 0.05
+          and on (job)
+          sum by (job) (rate(codex_control_http_requests_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: codex-control
+          component: control-api
+        annotations:
+          summary: Control API HTTP 5xx ratio is above five percent
+          description: The five-minute 5xx ratio is above 5 percent with at least 0.1 requests per second.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlSessionExchangeAuthFailureSurge
+        expr: |
+          sum by (job) (
+            increase(codex_control_session_exchange_total{outcome=~"missing_token|invalid_token|disabled_user|conflicting_token"}[10m])
+          ) > 10
+          and on (job)
+          (
+            sum by (job) (
+              increase(codex_control_session_exchange_total{outcome=~"missing_token|invalid_token|disabled_user|conflicting_token"}[10m])
+            )
+            /
+            clamp_min(
+              sum by (job) (increase(codex_control_session_exchange_total[10m])),
+              1
+            )
+          ) > 0.25
+        for: 5m
+        labels:
+          severity: warning
+          service: codex-control
+          component: auth
+        annotations:
+          summary: Session exchange authentication failures are elevated
+          description: More than 10 failures and a failure ratio above 25 percent were observed over ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlPairingRejectionSurge
+        expr: |
+          sum by (job, operation) (
+            increase(codex_control_pairing_operations_total{outcome=~"rate_limited|capacity_exceeded|unauthorized"}[10m])
+          ) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: codex-control
+          component: pairing
+        annotations:
+          summary: Pairing rejections are elevated
+          description: A pairing operation recorded more than 10 rate-limit, capacity, or denial outcomes over ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlBrowserWebSocketAdmissionFailureSurge
+        expr: |
+          sum by (job, kind, reason) (
+            increase(codex_control_websocket_events_total{
+              kind="browser",
+              event=~"closed|rejected",
+              reason=~"missing_auth|invalid_auth|origin_denied|invalid_cursor|capacity_exceeded"
+            }[10m])
+          ) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: codex-control
+          component: realtime
+        annotations:
+          summary: Browser WebSocket admission or recovery failures are elevated
+          description: Browser WebSocket close reason {{ $labels.reason }} exceeded 10 events over ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlBrowserWebSocketDependencyFailure
+        expr: |
+          sum by (job, kind, reason) (
+            increase(codex_control_websocket_events_total{
+              kind="browser",
+              event=~"closed|rejected",
+              reason="dependency_unavailable"
+            }[5m])
+          ) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: realtime
+        annotations:
+          summary: Browser WebSocket dependency failure detected
+          description: One or more dependency_unavailable outcomes indicate temporary Redis, PostgreSQL, or lease-admission failure.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlDeviceHeartbeatStale
+        expr: codex_control_device_heartbeat_age_seconds_max > 60
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: realtime
+        annotations:
+          summary: A connected device heartbeat is stale
+          description: At least one persistent connected-device record has not received a heartbeat for more than 60 seconds.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlDeviceOutboxAckStalled
+        expr: |
+          codex_control_device_outbox_oldest_age_seconds > 60
+          and on (job, instance)
+          codex_control_device_outbox_frames > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: codex-control
+          component: realtime
+        annotations:
+          summary: Durable device outbox acknowledgements are stalled
+          description: An unacknowledged Control-to-Connector frame has remained in the durable outbox for more than 60 seconds.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlCommandTerminalFailureSurge
+        expr: |
+          sum by (job, to_status) (
+            increase(codex_control_command_transitions_total{to_status=~"failed|expired|denied"}[10m])
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: codex-control
+          component: commands
+        annotations:
+          summary: Command terminal failures are elevated
+          description: More than five commands transitioned to {{ $labels.to_status }} over ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlCommandIdempotencyConflict
+        expr: |
+          sum by (job) (
+            increase(codex_control_command_idempotency_total{outcome="conflict"}[10m])
+          ) > 0
+        labels:
+          severity: warning
+          service: codex-control
+          component: commands
+        annotations:
+          summary: A command idempotency conflict was rejected
+          description: The same idempotency key was reused with a non-equivalent command projection.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlApprovalDefaultDenySurge
+        expr: |
+          sum by (job, reason) (
+            increase(codex_control_approval_outcomes_total{
+              outcome="denied",
+              reason=~".*_default_deny"
+            }[10m])
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: codex-control
+          component: approvals
+        annotations:
+          summary: Approval default-deny outcomes are elevated
+          description: Approval reason {{ $labels.reason }} exceeded five outcomes over ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlApprovalStaleEpoch
+        expr: |
+          sum by (job) (
+            increase(codex_control_approval_outcomes_total{
+              outcome="denied",
+              reason="stale_epoch_default_deny"
+            }[10m])
+          ) > 0
+        labels:
+          severity: critical
+          service: codex-control
+          component: approvals
+        annotations:
+          summary: A stale-epoch approval was denied
+          description: At least one approval reached the stale-epoch fail-closed path in the last ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlProhibitedRpcAccepted
+        expr: |
+          sum by (job) (
+            increase(codex_control_rpc_policy_total{
+              method_class="prohibited",
+              outcome="accepted"
+            }[5m])
+          ) > 0
+        labels:
+          severity: critical
+          service: codex-control
+          component: policy
+          release_gate: security
+        annotations:
+          summary: A prohibited RPC passed the Control API allowlist
+          description: A prohibited RPC was reported as accepted; stop admission and investigate immediately.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlProhibitedRpcAttempt
+        expr: |
+          sum by (job) (
+            increase(codex_control_rpc_policy_total{
+              method_class="prohibited",
+              outcome="denied"
+            }[10m])
+          ) > 0
+        labels:
+          severity: warning
+          service: codex-control
+          component: policy
+        annotations:
+          summary: The Control API denied a prohibited RPC
+          description: At least one prohibited RPC attempt was rejected during the last ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlMaintenanceFailure
+        expr: |
+          sum by (job, phase) (
+            increase(codex_control_maintenance_runs_total{outcome="failed"}[10m])
+          ) > 0
+        labels:
+          severity: critical
+          service: codex-control
+          component: maintenance
+        annotations:
+          summary: A Control API maintenance phase failed
+          description: Maintenance phase {{ $labels.phase }} failed during the last ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlMaintenanceBatchSaturated
+        expr: codex_control_maintenance_batch_saturated == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: codex-control
+          component: maintenance
+        annotations:
+          summary: A maintenance phase repeatedly reaches its batch limit
+          description: Maintenance phase {{ $labels.phase }} has reported a saturated latest batch for five minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlMaintenanceStale
+        expr: time() - codex_control_maintenance_last_success_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+          service: codex-control
+          component: maintenance
+        annotations:
+          summary: A Control API maintenance phase is stale
+          description: Maintenance phase {{ $labels.phase }} has not completed successfully for more than five minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlDependencyCheckFailure
+        expr: |
+          sum by (job, dependency) (
+            increase(codex_control_dependency_checks_total{outcome="failed"}[5m])
+          ) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: dependency
+        annotations:
+          summary: A Control API dependency check is failing
+          description: Dependency {{ $labels.dependency }} failed in the last five minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlDependencyNotReady
+        expr: codex_control_dependency_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: codex-control
+          component: dependency
+        annotations:
+          summary: A Control API dependency is not ready
+          description: Dependency {{ $labels.dependency }} has reported not-ready for two minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlReconciliationFailure
+        expr: |
+          sum by (job, phase) (
+            increase(codex_control_reconciliation_runs_total{outcome="failed"}[10m])
+          ) > 0
+        labels:
+          severity: critical
+          service: codex-control
+          component: reconciliation
+        annotations:
+          summary: A stale-epoch reconciliation phase failed
+          description: Reconciliation phase {{ $labels.phase }} failed during the last ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"
+
+      - alert: CodexControlDatabasePoolSaturation
+        expr: codex_control:database_pool_utilization:ratio > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          service: codex-control
+          component: postgresql
+        annotations:
+          summary: Control API database pool is saturated
+          description: More than 90 percent of the observed SQLAlchemy pool has been checked out for ten minutes.
+          runbook: docs/runbooks/observability.md#alert-catalog
+          release_matrix: docs/runbooks/version-matrix.md#feature-admission
+          deploy_event: '{{ $externalLabels.deploy_event_url }}'
+          correlation: "{{ $externalLabels.log_search_url }}"

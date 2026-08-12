@@ -1,0 +1,34 @@
+import { mount } from "@vue/test-utils";
+import { describe, expect, it } from "vitest";
+
+import PairDeviceDialog from "@/components/PairDeviceDialog.vue";
+
+describe("PairDeviceDialog", () => {
+  it("formats and submits the exact canonical 16-symbol pairing code", async () => {
+    const wrapper = mount(PairDeviceDialog, {
+      props: { open: true, loading: false, error: null },
+    });
+    const input = wrapper.get("input");
+
+    await input.setValue("23456789abcdefgh");
+
+    expect(input.element.value).toBe("2345-6789-ABCD-EFGH");
+    expect(wrapper.get('button[type="submit"]').attributes("disabled")).toBeUndefined();
+    await wrapper.get("form").trigger("submit");
+    expect(wrapper.emitted("claim")).toEqual([["2345-6789-ABCD-EFGH"]]);
+  });
+
+  it("does not submit an incomplete or ambiguous pairing code", async () => {
+    const wrapper = mount(PairDeviceDialog, {
+      props: { open: true, loading: false, error: null },
+    });
+    const input = wrapper.get("input");
+
+    await input.setValue("2345-6789-I0O1");
+
+    expect(input.element.value).toBe("2345-6789");
+    expect(wrapper.get('button[type="submit"]').attributes("disabled")).toBeDefined();
+    await wrapper.get("form").trigger("submit");
+    expect(wrapper.emitted("claim")).toBeUndefined();
+  });
+});

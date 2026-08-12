@@ -1,0 +1,18 @@
+{
+  "pairing_id": "11111111-1111-4111-8111-111111111111",
+  "created_at": "2026-07-30T12:34:56Z",
+  "audience": "https://control.example/codex-api/v1/device-pairings/start",
+  "public_key": "1McdYLhDzafIr0q5R7tXW6U9HaBVhIKjkjJtIXolu0I",
+  "code_commitment": "cd4d628262189c7e06214895a6956a31173d1ffe3d8f7533d753af4329704f61",
+  "poll_token_commitment": "107f966684ead4ddfba4de404f470c22636eb45d5f961fb4b3b22ceabdbb192d",
+  "refresh_credential_commitment": "a358617ed0a78a99172678d4fd80d4bf77f558e16e7e2ebd0290be668ec928bc",
+  "display_name": "Contract Mac",
+  "connector_version": "0.1.0",
+  "codex_version": "0.147.0",
+  "workspace_roots": [
+    "/Users/example/Projects",
+    "/Volumes/Work"
+  ],
+  "proof_sha256": "44b2c37e0f17a00a0aa3d062df8c004272025eb1f1df55e5c8486a8e57ad88b0",
+  "signature": "iYS72RX_PnMJbAeUsVQSKIsd-StJXH7WkP-xBbn1a9BCHWguvj93YexPQwB77k4Xi2KyJG5BeJX9P_FzZwttDw"
+}

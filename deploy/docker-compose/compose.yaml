@@ -1,0 +1,300 @@
+name: sub2api-codex-control
+
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
+x-control-api-base: &control-api-base
+  image: ${CONTROL_API_IMAGE:-sub2api-codex-control-api:local}
+  build:
+    context: ../..
+    dockerfile: deploy/dockerfiles/control-api.Dockerfile
+    args:
+      CONTROL_RELEASE: ${CONTROL_RELEASE:-0.1.0}
+      VCS_REF: ${CONTROL_VCS_REF:-unknown}
+  environment:
+    CONTROL_ENVIRONMENT: production
+    CONTROL_API_PREFIX: /v1
+    CONTROL_EXTERNAL_API_BASE_PATH: /codex-api
+    CONTROL_BUILD_VERSION: ${CONTROL_RELEASE:-0.1.0}
+    CONTROL_BUILD_VCS_REF: ${CONTROL_VCS_REF:-unknown}
+    CONTROL_ALLOWED_ORIGINS_CSV: ${CONTROL_PUBLIC_ORIGIN:?CONTROL_PUBLIC_ORIGIN must be set to the HTTPS origin}
+    CONTROL_DATABASE_PASSWORD_FILE: /run/secrets/control_db_password
+    CONTROL_DB_HOST: ${CONTROL_DB_HOST:-postgres}
+    CONTROL_DB_PORT: ${CONTROL_DB_PORT:-5432}
+    CONTROL_DB_USER: ${CONTROL_DB_USER:-codex_control}
+    CONTROL_DB_NAME: ${CONTROL_DB_NAME:-codex_control}
+    CONTROL_DB_QUERY: ${CONTROL_DB_QUERY:-}
+    CONTROL_DATABASE_POOL_SIZE: ${CONTROL_DATABASE_POOL_SIZE:-10}
+    CONTROL_DATABASE_MAX_OVERFLOW: ${CONTROL_DATABASE_MAX_OVERFLOW:-10}
+    CONTROL_DATABASE_POOL_TIMEOUT_SECONDS: ${CONTROL_DATABASE_POOL_TIMEOUT_SECONDS:-3}
+    CONTROL_DATABASE_CONNECT_TIMEOUT_SECONDS: ${CONTROL_DATABASE_CONNECT_TIMEOUT_SECONDS:-5}
+    CONTROL_DATABASE_COMMAND_TIMEOUT_SECONDS: ${CONTROL_DATABASE_COMMAND_TIMEOUT_SECONDS:-10}
+    CONTROL_REDIS_PASSWORD_FILE: /run/secrets/control_redis_password
+    CONTROL_REDIS_AUTH_MODE: ${CONTROL_REDIS_AUTH_MODE:-password}
+    CONTROL_REDIS_SCHEME: ${CONTROL_REDIS_SCHEME:-redis}
+    CONTROL_REDIS_HOST: ${CONTROL_REDIS_HOST:-redis}
+    CONTROL_REDIS_PORT: ${CONTROL_REDIS_PORT:-6379}
+    CONTROL_REDIS_USER: ${CONTROL_REDIS_USER:-codex_control}
+    CONTROL_REDIS_DATABASE: ${CONTROL_REDIS_DATABASE:-0}
+    CONTROL_REDIS_QUERY: ${CONTROL_REDIS_QUERY:-}
+    CONTROL_REDIS_PREFIX: ${CONTROL_REDIS_PREFIX:-codex-control:}
+    CONTROL_REDIS_CONNECT_TIMEOUT_SECONDS: ${CONTROL_REDIS_CONNECT_TIMEOUT_SECONDS:-3}
+    CONTROL_REDIS_COMMAND_TIMEOUT_SECONDS: ${CONTROL_REDIS_COMMAND_TIMEOUT_SECONDS:-3}
+    CONTROL_SESSION_HMAC_SECRET_FILE: /run/secrets/control_session_hmac_secret
+    CONTROL_SESSION_TTL_SECONDS: ${CONTROL_SESSION_TTL_SECONDS:-600}
+    CONTROL_RECENT_AUTH_MAX_AGE_SECONDS: ${CONTROL_RECENT_AUTH_MAX_AGE_SECONDS:-300}
+    CONTROL_OWNER_MAX_ACTIVE_SESSIONS: ${CONTROL_OWNER_MAX_ACTIVE_SESSIONS:-32}
+    CONTROL_OWNER_MAX_SESSION_RECORDS: ${CONTROL_OWNER_MAX_SESSION_RECORDS:-10000}
+    CONTROL_COOKIE_NAME: __Host-codex_control
+    CONTROL_CSRF_COOKIE_NAME: ${CONTROL_CSRF_COOKIE_NAME:-codex_csrf}
+    CONTROL_CSRF_HEADER_NAME: x-csrf-token
+    CONTROL_COOKIE_SECURE: "true"
+    CONTROL_COOKIE_SAMESITE: strict
+    CONTROL_SUB2API_BASE_URL: http://sub2api:8080
+    CONTROL_SUB2API_AUTH_ME_PATH: /api/v1/auth/me
+    CONTROL_SUB2API_TIMEOUT_SECONDS: ${CONTROL_SUB2API_TIMEOUT_SECONDS:-5}
+    CONTROL_SUB2API_VERIFY_TLS: ${CONTROL_SUB2API_VERIFY_TLS:-true}
+    CONTROL_SUB2API_EXPECTED_VERSION: ${CONTROL_SUB2API_EXPECTED_VERSION:-0.1.175}
+    CONTROL_SUB2API_EXPECTED_COMMIT: ${CONTROL_SUB2API_EXPECTED_COMMIT:-93c32fa}
+    CONTROL_SUB2API_CONTRACT_MARKER: ${CONTROL_SUB2API_CONTRACT_MARKER:-UNVERIFIED}
+    CONTROL_TRUST_FORWARDED_FOR: "true"
+    CONTROL_DEVICE_MAX_APPROVAL_RECORDS: ${CONTROL_DEVICE_MAX_APPROVAL_RECORDS:-4096}
+    CONTROL_DEVICE_MAX_COMMAND_RECORDS: ${CONTROL_DEVICE_MAX_COMMAND_RECORDS:-10000}
+    CONTROL_OWNER_MAX_COMMAND_RECORDS: ${CONTROL_OWNER_MAX_COMMAND_RECORDS:-100000}
+    CONTROL_DEVICE_MAX_CONNECTION_RECORDS: ${CONTROL_DEVICE_MAX_CONNECTION_RECORDS:-4096}
+    CONTROL_OWNER_MAX_THREAD_RECORDS: ${CONTROL_OWNER_MAX_THREAD_RECORDS:-1000}
+    CONTROL_OWNER_MAX_APPROVAL_RECORDS: ${CONTROL_OWNER_MAX_APPROVAL_RECORDS:-10000}
+    CONTROL_BROWSER_EVENT_CATCHUP_MAX_BYTES: ${CONTROL_BROWSER_EVENT_CATCHUP_MAX_BYTES:-1048576}
+    CONTROL_BROWSER_MAX_CONNECTIONS_PER_SESSION: ${CONTROL_BROWSER_MAX_CONNECTIONS_PER_SESSION:-4}
+    CONTROL_BROWSER_MAX_CONNECTIONS_PER_USER: ${CONTROL_BROWSER_MAX_CONNECTIONS_PER_USER:-8}
+    CONTROL_BROWSER_CONNECTION_LEASE_TTL_SECONDS: ${CONTROL_BROWSER_CONNECTION_LEASE_TTL_SECONDS:-60}
+    CONTROL_API_WORKERS: ${CONTROL_API_WORKERS:-1}
+  secrets:
+    - control_db_password
+    - control_redis_password
+    - control_session_hmac_secret
+  networks:
+    sub2api-network: {}
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 256
+  mem_limit: 512m
+  cpus: 1.5
+  ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+  init: true
+  stop_grace_period: 30s
+  logging: *json-logging
+  labels:
+    org.opencontainers.image.version: ${CONTROL_RELEASE:-0.1.0}
+    com.sub2api-codex.component: control-api
+
+services:
+  control-migrate:
+    <<: *control-api-base
+    command:
+      - migrate
+    restart: "no"
+    healthcheck:
+      disable: true
+    mem_limit: 384m
+    cpus: 1.0
+    labels:
+      org.opencontainers.image.version: ${CONTROL_RELEASE:-0.1.0}
+      com.sub2api-codex.component: control-migrate
+
+  control-api:
+    <<: *control-api-base
+    command:
+      - api
+    depends_on:
+      control-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    ports:
+      - name: control-api-loopback
+        target: 8090
+        published: ${CONTROL_API_BIND_PORT:-18090}
+        host_ip: ${CONTROL_BIND_ADDRESS:-127.0.0.1}
+        protocol: tcp
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/v1/health/ready', timeout=3).read()
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  control-api-replica:
+    <<: *control-api-base
+    profiles:
+      - multi-instance
+    command:
+      - api
+    depends_on:
+      control-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    ports:
+      - name: control-api-replica-loopback
+        target: 8090
+        published: ${CONTROL_API_REPLICA_BIND_PORT:-18093}
+        host_ip: ${CONTROL_BIND_ADDRESS:-127.0.0.1}
+        protocol: tcp
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/v1/health/ready', timeout=3).read()
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    labels:
+      org.opencontainers.image.version: ${CONTROL_RELEASE:-0.1.0}
+      com.sub2api-codex.component: control-api-replica
+
+  codex-pwa:
+    image: ${CONTROL_PWA_IMAGE:-sub2api-codex-control-pwa:local}
+    build:
+      context: ../..
+      dockerfile: deploy/dockerfiles/pwa.Dockerfile
+      args:
+        CONTROL_RELEASE: ${CONTROL_RELEASE:-0.1.0}
+        VCS_REF: ${CONTROL_VCS_REF:-unknown}
+        VITE_CONTROL_CSRF_COOKIE_NAME: ${CONTROL_CSRF_COOKIE_NAME:-codex_csrf}
+    restart: unless-stopped
+    ports:
+      - name: pwa-loopback
+        target: 8080
+        published: ${CONTROL_PWA_BIND_PORT:-18091}
+        host_ip: ${CONTROL_BIND_ADDRESS:-127.0.0.1}
+        protocol: tcp
+    networks:
+      pwa-network: {}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    init: true
+    stop_grace_period: 15s
+    logging: *json-logging
+    labels:
+      org.opencontainers.image.version: ${CONTROL_RELEASE:-0.1.0}
+      com.sub2api-codex.component: pwa
+
+  smoke-edge:
+    profiles:
+      - smoke
+    image: ${CONTROL_SMOKE_EDGE_IMAGE:-sub2api-codex-control-smoke-edge:local}
+    build:
+      context: ../..
+      dockerfile: deploy/dockerfiles/smoke-edge.Dockerfile
+    depends_on:
+      control-api:
+        condition: service_healthy
+      codex-pwa:
+        condition: service_healthy
+    restart: "no"
+    ports:
+      - name: smoke-edge-loopback
+        target: 8080
+        published: ${CONTROL_SMOKE_EDGE_BIND_PORT:-18092}
+        host_ip: ${CONTROL_BIND_ADDRESS:-127.0.0.1}
+        protocol: tcp
+    networks:
+      sub2api-network: {}
+      pwa-network: {}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    init: true
+    logging: *json-logging
+    labels:
+      com.sub2api-codex.component: smoke-edge
+
+  control-backup:
+    profiles:
+      - ops
+    image: ${CONTROL_POSTGRES_TOOLS_IMAGE:-sub2api-codex-postgres-tools:local}
+    build:
+      context: ../..
+      dockerfile: deploy/dockerfiles/postgres-tools.Dockerfile
+    user: ${CONTROL_BACKUP_UID_GID:-70:70}
+    environment:
+      BACKUP_DIR: /backups
+      CONTROL_DATABASE_PASSWORD_FILE: /run/secrets/control_db_password
+      CONTROL_DB_HOST: ${CONTROL_DB_HOST:-postgres}
+      CONTROL_DB_PORT: ${CONTROL_DB_PORT:-5432}
+      CONTROL_DB_USER: ${CONTROL_DB_USER:-codex_control}
+      CONTROL_DB_NAME: ${CONTROL_DB_NAME:-codex_control}
+    secrets:
+      - control_db_password
+    volumes:
+      - type: bind
+        source: ${CONTROL_BACKUP_DIR:-./backups}
+        target: /backups
+    networks:
+      sub2api-network: {}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 1.0
+    restart: "no"
+    logging: *json-logging
+    labels:
+      org.opencontainers.image.version: ${CONTROL_RELEASE:-0.1.0}
+      com.sub2api-codex.component: control-backup
+
+secrets:
+  control_db_password:
+    file: ${CONTROL_DATABASE_PASSWORD_SECRET_FILE:-./secrets/control_db_password}
+  control_redis_password:
+    file: ${CONTROL_REDIS_PASSWORD_SECRET_FILE:-./secrets/control_redis_password}
+  control_session_hmac_secret:
+    file: ${CONTROL_SESSION_HMAC_SECRET_FILE:-./secrets/control_session_hmac_secret}
+
+networks:
+  pwa-network:
+    driver: bridge
+    internal: false
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+      com.docker.network.bridge.enable_icc: "false"
+  sub2api-network:
+    name: ${SUB2API_NETWORK_NAME:-sub2api-network}
+    external: true

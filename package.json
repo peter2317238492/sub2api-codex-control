@@ -1,0 +1,30 @@
+{
+  "name": "sub2api-codex-control",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Same-origin remote control for user-owned Codex installations",
+  "license": "Apache-2.0",
+  "author": "Sub2API Codex Control contributors",
+  "homepage": "https://github.com/peter2317238492/sub2api-codex-control#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/peter2317238492/sub2api-codex-control.git"
+  },
+  "bugs": {
+    "url": "https://github.com/peter2317238492/sub2api-codex-control/issues"
+  },
+  "packageManager": "pnpm@11.7.0+sha512.19cc852c120c7125760f2443ee6be0ca5b40f9f50598de1a09a1f177503e010e57c23c77646e01e761de59bf874fb22a3398c33ab9691fc13eb946b6f0f4d620",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "check": "pnpm licenses:check && pnpm -r --if-present check",
+    "contracts:check": "node scripts/verify-contracts.mjs",
+    "dev": "pnpm --filter @sub2api-codex/pwa dev",
+    "licenses:check": "python3 scripts/check-licenses.py",
+    "test": "pnpm test:licenses && pnpm -r --if-present test",
+    "test:licenses": "python3 -m unittest tests/test_license_compliance.py",
+    "typecheck": "pnpm -r --if-present typecheck"
+  }
+}

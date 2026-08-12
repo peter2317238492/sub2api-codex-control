@@ -1,0 +1,521 @@
+name: Control images protected release
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: control-images-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_DIR: dist/control-images
+  PYTHONDONTWRITEBYTECODE: "1"
+  COSIGN_EXPERIMENTAL: "1"
+
+jobs:
+  source-only-guard:
+    name: Binary release disabled in the source-only publication
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail closed until binary license evidence is complete
+        run: |
+          echo "Binary image publication is disabled for the source-only release." >&2
+          exit 1
+
+  validate:
+    name: Validate exact source and run release gates
+    needs: source-only-guard
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the immutable tag candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install the pinned Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            apps/control-api/pyproject.toml
+            deploy/constraints/control-api.txt
+
+      - name: Install the pinned Node runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.22.0"
+
+      - name: Validate the annotated tag and digest-pinned Dockerfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=${GITHUB_REF_NAME#control-v}
+          python3 deploy/release/control_images.py validate-source \
+            --release "$release" \
+            --ref "$GITHUB_REF" \
+            --commit "$GITHUB_SHA"
+
+      - name: Test the release verifier and its fail-closed cases
+        run: |
+          python3 -m unittest discover -s deploy/release/tests -v
+          python3 scripts/check-public-tree.py
+
+      - name: Verify runtime constraints, then test and lint the Control API
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .release-venv
+          .release-venv/bin/pip install \
+            --constraint deploy/constraints/control-api.txt \
+            --editable apps/control-api
+          .release-venv/bin/python deploy/scripts/verify-python-constraints.py \
+            deploy/constraints/control-api.txt
+          .release-venv/bin/pip install \
+            --constraint deploy/constraints/control-api.txt \
+            --editable 'apps/control-api[dev]'
+          .release-venv/bin/python -m ruff check apps/control-api migrations deploy/release
+          .release-venv/bin/python -m pytest apps/control-api/tests
+          .release-venv/bin/python -m pytest tests/e2e/test_smoke_secret.py
+
+      - name: Test, type-check, and build the PWA and protocol
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@11.7.0+sha512.19cc852c120c7125760f2443ee6be0ca5b40f9f50598de1a09a1f177503e010e57c23c77646e01e761de59bf874fb22a3398c33ab9691fc13eb946b6f0f4d620 --activate
+          pnpm install --frozen-lockfile
+          npm install --global @openai/codex@0.147.0
+          pnpm contracts:check
+          pnpm test
+          pnpm check
+          pnpm build
+
+  build:
+    name: Build the immutable image set and evidence
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      api_repository: ${{ steps.names.outputs.api_repository }}
+      api_digest: ${{ steps.api.outputs.digest }}
+      pwa_repository: ${{ steps.names.outputs.pwa_repository }}
+      pwa_digest: ${{ steps.pwa.outputs.digest }}
+      postgres_tools_repository: ${{ steps.names.outputs.postgres_tools_repository }}
+      postgres_tools_digest: ${{ steps.postgres_tools.outputs.digest }}
+    steps:
+      - name: Check out the exact release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Revalidate the source before registry write access is used
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=${GITHUB_REF_NAME#control-v}
+          python3 deploy/release/control_images.py validate-source \
+            --release "$release" \
+            --ref "$GITHUB_REF" \
+            --commit "$GITHUB_SHA"
+
+      - name: Build and verify the deterministic source bundle before registry access
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=${GITHUB_REF_NAME#control-v}
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")
+          install -d -m 0700 "$RELEASE_DIR"
+          python3 deploy/release/source_bundle.py build \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --output-dir "$GITHUB_WORKSPACE/$RELEASE_DIR" \
+            --release "$release" \
+            --source-repository "$source_repository" \
+            --source-commit "$GITHUB_SHA" \
+            --source-date-epoch "$source_date_epoch"
+          digest() {
+            python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$1"
+          }
+          attestation_sha256=$(digest "$RELEASE_DIR/source-attestation.json")
+          manifest_sha256=$(digest "$RELEASE_DIR/source-files.manifest")
+          archive_sha256=$(digest "$RELEASE_DIR/source.tar")
+          python3 deploy/release/source_bundle.py verify \
+            --bundle-dir "$GITHUB_WORKSPACE/$RELEASE_DIR" \
+            --release "$release" \
+            --source-repository "$source_repository" \
+            --source-commit "$GITHUB_SHA" \
+            --attestation-sha256 "$attestation_sha256" \
+            --manifest-sha256 "$manifest_sha256" \
+            --archive-sha256 "$archive_sha256"
+
+      - name: Resolve fixed lowercase registry repositories
+        id: names
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          printf 'release=%s\n' "${GITHUB_REF_NAME#control-v}" >> "$GITHUB_OUTPUT"
+          printf 'api_repository=ghcr.io/%s/sub2api-codex-control-api\n' "$owner" >> "$GITHUB_OUTPUT"
+          printf 'pwa_repository=ghcr.io/%s/sub2api-codex-control-pwa\n' "$owner" >> "$GITHUB_OUTPUT"
+          printf 'postgres_tools_repository=ghcr.io/%s/sub2api-codex-postgres-tools\n' "$owner" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to the release registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up the pinned Buildx action
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and push the Control API once
+        id: api
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: deploy/dockerfiles/control-api.Dockerfile
+          platforms: linux/amd64
+          pull: true
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.names.outputs.api_repository }}:${{ github.ref_name }}
+          build-args: |
+            CONTROL_RELEASE=${{ steps.names.outputs.release }}
+            VCS_REF=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.names.outputs.release }}
+
+      - name: Build and push the PWA once
+        id: pwa
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: deploy/dockerfiles/pwa.Dockerfile
+          platforms: linux/amd64
+          pull: true
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.names.outputs.pwa_repository }}:${{ github.ref_name }}
+          build-args: |
+            CONTROL_RELEASE=${{ steps.names.outputs.release }}
+            VCS_REF=${{ github.sha }}
+            VITE_CONTROL_CSRF_COOKIE_NAME=codex_csrf
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.names.outputs.release }}
+
+      - name: Build and push the PostgreSQL tools once
+        id: postgres_tools
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: deploy/dockerfiles/postgres-tools.Dockerfile
+          platforms: linux/amd64
+          pull: true
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.names.outputs.postgres_tools_repository }}:${{ github.ref_name }}
+          build-args: |
+            CONTROL_RELEASE=${{ steps.names.outputs.release }}
+            VCS_REF=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.names.outputs.release }}
+
+      - name: Generate the Control API SPDX SBOM from the pushed digest
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ steps.names.outputs.api_repository }}@${{ steps.api.outputs.digest }}
+          output-file: dist/control-images/control-api.spdx.json
+          format: spdx-json
+          syft-version: v1.44.0
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate the PWA SPDX SBOM from the pushed digest
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ steps.names.outputs.pwa_repository }}@${{ steps.pwa.outputs.digest }}
+          output-file: dist/control-images/pwa.spdx.json
+          format: spdx-json
+          syft-version: v1.44.0
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate the PostgreSQL tools SPDX SBOM from the pushed digest
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ steps.names.outputs.postgres_tools_repository }}@${{ steps.postgres_tools.outputs.digest }}
+          output-file: dist/control-images/postgres-tools.spdx.json
+          format: spdx-json
+          syft-version: v1.44.0
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate the atomic image-set lock and SLSA v1 predicates
+        shell: bash
+        env:
+          API_REPOSITORY: ${{ steps.names.outputs.api_repository }}
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+          PWA_REPOSITORY: ${{ steps.names.outputs.pwa_repository }}
+          PWA_DIGEST: ${{ steps.pwa.outputs.digest }}
+          POSTGRES_TOOLS_REPOSITORY: ${{ steps.names.outputs.postgres_tools_repository }}
+          POSTGRES_TOOLS_DIGEST: ${{ steps.postgres_tools.outputs.digest }}
+        run: |
+          set -euo pipefail
+          release=${GITHUB_REF_NAME#control-v}
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
+          invocation_id="${source_repository}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
+          common=(
+            --release "$release"
+            --release-tag "$GITHUB_REF_NAME"
+            --source-repository "$source_repository"
+            --source-commit "$GITHUB_SHA"
+            --workflow-identity "$identity"
+            --workflow-sha "$GITHUB_SHA"
+            --workflow-trigger push
+            --invocation-id "$invocation_id"
+          )
+          python3 deploy/release/control_images.py create-provenance \
+            "${common[@]}" \
+            --component control-api \
+            --repository "$API_REPOSITORY" \
+            --digest "$API_DIGEST" \
+            --output "$RELEASE_DIR/control-api.provenance.json"
+          python3 deploy/release/control_images.py create-provenance \
+            "${common[@]}" \
+            --component pwa \
+            --repository "$PWA_REPOSITORY" \
+            --digest "$PWA_DIGEST" \
+            --output "$RELEASE_DIR/pwa.provenance.json"
+          python3 deploy/release/control_images.py create-provenance \
+            "${common[@]}" \
+            --component postgres-tools \
+            --repository "$POSTGRES_TOOLS_REPOSITORY" \
+            --digest "$POSTGRES_TOOLS_DIGEST" \
+            --output "$RELEASE_DIR/postgres-tools.provenance.json"
+          python3 deploy/release/control_images.py create-lock \
+            "${common[@]}" \
+            --output-dir "$RELEASE_DIR" \
+            --source-archive "$RELEASE_DIR/source.tar" \
+            --source-manifest "$RELEASE_DIR/source-files.manifest" \
+            --source-attestation "$RELEASE_DIR/source-attestation.json" \
+            --control-api-repository "$API_REPOSITORY" \
+            --control-api-digest "$API_DIGEST" \
+            --control-api-sbom "$RELEASE_DIR/control-api.spdx.json" \
+            --control-api-provenance "$RELEASE_DIR/control-api.provenance.json" \
+            --pwa-repository "$PWA_REPOSITORY" \
+            --pwa-digest "$PWA_DIGEST" \
+            --pwa-sbom "$RELEASE_DIR/pwa.spdx.json" \
+            --pwa-provenance "$RELEASE_DIR/pwa.provenance.json" \
+            --postgres-tools-repository "$POSTGRES_TOOLS_REPOSITORY" \
+            --postgres-tools-digest "$POSTGRES_TOOLS_DIGEST" \
+            --postgres-tools-sbom "$RELEASE_DIR/postgres-tools.spdx.json" \
+            --postgres-tools-provenance "$RELEASE_DIR/postgres-tools.provenance.json"
+          python3 deploy/release/control_images.py validate-release \
+            --release-dir "$RELEASE_DIR"
+
+      - name: Transfer the unsigned, digest-bound release evidence
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: control-images-unsigned-${{ github.run_attempt }}
+          path: dist/control-images
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  attest:
+    name: Keylessly sign and independently verify the image set
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: control-images-release-sigstore
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Check out the exact reviewed release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Revalidate source before requesting a signing identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=${GITHUB_REF_NAME#control-v}
+          python3 deploy/release/control_images.py validate-source \
+            --release "$release" \
+            --ref "$GITHUB_REF" \
+            --commit "$GITHUB_SHA"
+
+      - name: Receive the unsigned evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-images-unsigned-${{ github.run_attempt }}
+          path: dist/control-images
+
+      - name: Validate the complete unsigned inventory
+        run: python3 deploy/release/control_images.py validate-release --release-dir "$RELEASE_DIR"
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Log in for OCI signature and attestation uploads
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Sign all digests and attach signed SBOM and SLSA v1 evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_ref="${{ needs.build.outputs.api_repository }}@${{ needs.build.outputs.api_digest }}"
+          pwa_ref="${{ needs.build.outputs.pwa_repository }}@${{ needs.build.outputs.pwa_digest }}"
+          postgres_tools_ref="${{ needs.build.outputs.postgres_tools_repository }}@${{ needs.build.outputs.postgres_tools_digest }}"
+          for component in control-api pwa postgres-tools; do
+            case "$component" in
+              control-api) image_ref=$api_ref ;;
+              pwa) image_ref=$pwa_ref ;;
+              postgres-tools) image_ref=$postgres_tools_ref ;;
+              *) exit 1 ;;
+            esac
+            annotations=(
+              -a "component=$component"
+              -a "release_tag=$GITHUB_REF_NAME"
+              -a "source_commit=$GITHUB_SHA"
+            )
+            cosign sign --yes "${annotations[@]}" "$image_ref"
+            cosign attest --yes \
+              --type spdxjson \
+              --predicate "$RELEASE_DIR/$component.spdx.json" \
+              "${annotations[@]}" \
+              "$image_ref"
+            cosign attest --yes \
+              --type slsaprovenance1 \
+              --predicate "$RELEASE_DIR/$component.provenance.json" \
+              "${annotations[@]}" \
+              "$image_ref"
+          done
+          cosign sign-blob --yes \
+            --bundle "$RELEASE_DIR/control-images.lock.sigstore.json" \
+            "$RELEASE_DIR/control-images.lock.json"
+
+      - name: Verify exact issuer, workflow, commit, ref, subjects, and predicates
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
+          deploy/release/verify-control-images.sh \
+            --release-dir "$RELEASE_DIR" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" \
+            --expected-source-repository "$source_repository" \
+            --expected-source-commit "$GITHUB_SHA" \
+            --expected-release-tag "$GITHUB_REF_NAME" \
+            --expected-api-repository "${{ needs.build.outputs.api_repository }}" \
+            --expected-pwa-repository "${{ needs.build.outputs.pwa_repository }}" \
+            --expected-postgres-tools-repository "${{ needs.build.outputs.postgres_tools_repository }}"
+
+      - name: Transfer the signed and verified atomic release
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: control-images-signed-${{ github.run_attempt }}
+          path: dist/control-images
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    name: Publish immutable release evidence
+    needs: attest
+    runs-on: ubuntu-24.04
+    environment: control-images-release-publish
+    permissions:
+      contents: write
+    steps:
+      - name: Receive only the evidence verified by the OIDC job
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-images-signed-${{ github.run_attempt }}
+          path: dist/control-images
+
+      - name: Require the remote tag and immutable-release controls to remain fixed
+        env:
+          GH_TOKEN: ${{ secrets.IMMUTABLE_RELEASES_READ_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_object=$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}")
+          object_type=$(printf '%s' "$tag_object" | jq -r .object.type)
+          object_sha=$(printf '%s' "$tag_object" | jq -r .object.sha)
+          while [ "$object_type" = tag ]; do
+            tag_object=$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")
+            object_type=$(printf '%s' "$tag_object" | jq -r .object.type)
+            object_sha=$(printf '%s' "$tag_object" | jq -r .object.sha)
+          done
+          test "$object_type" = commit
+          test "$object_sha" = "$GITHUB_SHA"
+          enabled=$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/immutable-releases" \
+            --jq .enabled)
+          test "$enabled" = true
+
+      - name: Publish the evidence through an immutable draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" "$RELEASE_DIR"/* \
+            --draft \
+            --verify-tag \
+            --latest=false \
+            --title "Control images ${GITHUB_REF_NAME#control-v}" \
+            --notes "Atomic Control API/PWA/PostgreSQL-tools digest lock with exact-workflow Sigstore signatures, SPDX SBOMs, and SLSA v1 provenance. Use independently fixed trust inputs and deploy/release/verify-control-images.sh before deployment."
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false
+          immutable=$(gh release view "$GITHUB_REF_NAME" --json isImmutable --jq .isImmutable)
+          if [ "$immutable" != true ]; then
+            echo '::error::Published release is mutable; its images and evidence are not admitted.'
+            exit 1
+          fi

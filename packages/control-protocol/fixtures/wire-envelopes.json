@@ -1,0 +1,446 @@
+{
+  "protocol_version": 1,
+  "limits": {
+    "max_sequence": "9223372036854775807",
+    "max_epoch_code_points": 128,
+    "max_workspace_root_utf8_bytes": 4096
+  },
+  "valid": [
+    {
+      "name": "hello",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000001",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 0,
+        "ack": 0,
+        "type": "hello",
+        "sent_at": "2026-07-13T00:00:00Z",
+        "payload": {
+          "connector_version": "0.1.0",
+          "codex_version": "0.147.0",
+          "schema_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "capabilities": [
+            "model/list",
+            "thread/start",
+            "thread/list",
+            "thread/read",
+            "thread/resume",
+            "turn/start",
+            "turn/steer",
+            "turn/interrupt"
+          ],
+          "workspace_roots": ["/workspace/project"],
+          "resumed_from_seq": 0
+        }
+      }
+    },
+    {
+      "name": "hello_ack",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000002",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 0,
+        "ack": 0,
+        "type": "hello_ack",
+        "sent_at": "2026-07-13T00:00:01Z",
+        "payload": {
+          "connection_id": "22222222-2222-4222-8222-222222222222",
+          "protocol_version": 1,
+          "device_id": "11111111-1111-4111-8111-111111111111",
+          "epoch": "epoch-0123456789abcdef",
+          "schema_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "received_seq": 0,
+          "heartbeat_timeout_seconds": 60
+        }
+      }
+    },
+    {
+      "name": "heartbeat",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000003",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 1,
+        "ack": 0,
+        "type": "heartbeat",
+        "sent_at": "2026-07-13T00:00:02Z",
+        "payload": { "status": "ok" }
+      }
+    },
+    {
+      "name": "heartbeat_ack",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000004",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 2,
+        "ack": 1,
+        "type": "heartbeat_ack",
+        "sent_at": "2026-07-13T00:00:03Z",
+        "payload": { "received_seq": 1 }
+      }
+    },
+    {
+      "name": "command",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000005",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 3,
+        "ack": 2,
+        "type": "command",
+        "sent_at": "2026-07-13T00:00:04Z",
+        "payload": {
+          "command_id": "33333333-3333-4333-8333-333333333333",
+          "idempotency_key": "fixture-command-1",
+          "method": "thread/read",
+          "params": { "threadId": "managed-thread-1", "includeTurns": false },
+          "deadline_at": "2026-07-13T00:01:04Z"
+        }
+      }
+    },
+    {
+      "name": "command_ack",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000006",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 4,
+        "ack": 3,
+        "type": "command_ack",
+        "sent_at": "2026-07-13T00:00:05Z",
+        "payload": {
+          "command_id": "33333333-3333-4333-8333-333333333333",
+          "state": "completed",
+          "result": { "thread": { "id": "managed-thread-1" } }
+        }
+      }
+    },
+    {
+      "name": "event",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000007",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 5,
+        "ack": 3,
+        "type": "event",
+        "sent_at": "2026-07-13T00:00:06Z",
+        "payload": {
+          "method": "turn/completed",
+          "params": { "threadId": "managed-thread-1", "turnId": "turn-1" }
+        }
+      }
+    },
+    {
+      "name": "approval_request",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000008",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 6,
+        "ack": 3,
+        "type": "approval_request",
+        "sent_at": "2026-07-13T00:00:07Z",
+        "payload": {
+          "approval_id": "44444444-4444-4444-8444-444444444444",
+          "command_id": "appserver:turn-1",
+          "kind": "command",
+          "summary": "Run a managed command",
+          "details": { "command": ["git", "status"] },
+          "expires_at": "2026-07-13T00:02:07Z"
+        }
+      }
+    },
+    {
+      "name": "approval_decision",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000009",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 7,
+        "ack": 6,
+        "type": "approval_decision",
+        "sent_at": "2026-07-13T00:00:08Z",
+        "payload": {
+          "approval_id": "44444444-4444-4444-8444-444444444444",
+          "decision": "approve",
+          "decided_at": "2026-07-13T00:00:08Z"
+        }
+      }
+    },
+    {
+      "name": "token_refresh",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000010",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 8,
+        "ack": 7,
+        "type": "token_refresh",
+        "sent_at": "2026-07-13T00:00:09Z",
+        "payload": {}
+      }
+    },
+    {
+      "name": "error",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000011",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 9,
+        "ack": 8,
+        "type": "error",
+        "sent_at": "2026-07-13T00:00:10Z",
+        "payload": {
+          "code": "invalid_upstream",
+          "message": "Codex returned data outside the projected contract",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "name": "command_ack_indeterminate",
+      "envelope": {
+        "version": 1,
+        "id": "00000000-0000-4000-8000-000000000012",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 10,
+        "ack": 8,
+        "type": "command_ack",
+        "sent_at": "2026-07-13T00:00:11Z",
+        "payload": {
+          "command_id": "55555555-5555-4555-8555-555555555555",
+          "state": "failed",
+          "error": {
+            "code": "indeterminate",
+            "message": "The mutation may have completed and will not be replayed",
+            "retryable": false
+          }
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "hello_ack_missing_connection_id",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000001",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 0,
+        "type": "hello_ack",
+        "sent_at": "2026-07-13T00:01:00Z",
+        "payload": {
+          "protocol_version": 1,
+          "device_id": "11111111-1111-4111-8111-111111111111",
+          "epoch": "epoch-0123456789abcdef",
+          "schema_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "received_seq": 0,
+          "heartbeat_timeout_seconds": 60
+        }
+      }
+    },
+    {
+      "name": "hello_ack_missing_heartbeat_timeout_seconds",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000002",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 0,
+        "type": "hello_ack",
+        "sent_at": "2026-07-13T00:01:01Z",
+        "payload": {
+          "connection_id": "22222222-2222-4222-8222-222222222222",
+          "protocol_version": 1,
+          "device_id": "11111111-1111-4111-8111-111111111111",
+          "epoch": "epoch-0123456789abcdef",
+          "schema_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "received_seq": 0
+        }
+      }
+    },
+    {
+      "name": "command_ack_unknown_state",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000003",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 1,
+        "type": "command_ack",
+        "sent_at": "2026-07-13T00:01:02Z",
+        "payload": {
+          "command_id": "33333333-3333-4333-8333-333333333333",
+          "state": "succeeded"
+        }
+      }
+    },
+    {
+      "name": "command_ack_unknown_error_code",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000004",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 2,
+        "type": "command_ack",
+        "sent_at": "2026-07-13T00:01:03Z",
+        "payload": {
+          "command_id": "33333333-3333-4333-8333-333333333333",
+          "state": "failed",
+          "error": { "code": "mystery", "message": "Unknown failure", "retryable": false }
+        }
+      }
+    },
+    {
+      "name": "error_unknown_code",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000005",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 3,
+        "type": "error",
+        "sent_at": "2026-07-13T00:01:04Z",
+        "payload": { "code": "mystery", "message": "Unknown failure", "retryable": false }
+      }
+    },
+    {
+      "name": "error_extra_field",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000006",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 4,
+        "type": "error",
+        "sent_at": "2026-07-13T00:01:05Z",
+        "payload": {
+          "code": "internal_error",
+          "message": "Internal failure",
+          "retryable": false,
+          "debug": "must not cross the wire"
+        }
+      }
+    },
+    {
+      "name": "command_ack_completed_without_result",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000007",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 5,
+        "type": "command_ack",
+        "sent_at": "2026-07-13T00:01:06Z",
+        "payload": {
+          "command_id": "33333333-3333-4333-8333-333333333333",
+          "state": "completed"
+        }
+      }
+    },
+    {
+      "name": "command_ack_failed_without_error",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000008",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 6,
+        "type": "command_ack",
+        "sent_at": "2026-07-13T00:01:07Z",
+        "payload": {
+          "command_id": "33333333-3333-4333-8333-333333333333",
+          "state": "failed"
+        }
+      }
+    },
+    {
+      "name": "command_ack_running_with_result",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000009",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 7,
+        "type": "command_ack",
+        "sent_at": "2026-07-13T00:01:08Z",
+        "payload": {
+          "command_id": "33333333-3333-4333-8333-333333333333",
+          "state": "running",
+          "result": {}
+        }
+      }
+    },
+    {
+      "name": "envelope_epoch_too_long",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000010",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "seq": 8,
+        "type": "heartbeat",
+        "sent_at": "2026-07-13T00:01:09Z",
+        "payload": { "status": "ok" }
+      }
+    },
+    {
+      "name": "error_blank_message",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000011",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 9,
+        "type": "error",
+        "sent_at": "2026-07-13T00:01:10Z",
+        "payload": { "code": "internal_error", "message": "   ", "retryable": false }
+      }
+    },
+    {
+      "name": "envelope_compact_uuid",
+      "envelope": {
+        "version": 1,
+        "id": "10000000000040008000000000000012",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 10,
+        "type": "heartbeat",
+        "sent_at": "2026-07-13T00:01:11Z",
+        "payload": { "status": "ok" }
+      }
+    },
+    {
+      "name": "envelope_numeric_sent_at",
+      "envelope": {
+        "version": 1,
+        "id": "10000000-0000-4000-8000-000000000013",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": "epoch-0123456789abcdef",
+        "seq": 11,
+        "type": "heartbeat",
+        "sent_at": 1,
+        "payload": { "status": "ok" }
+      }
+    }
+  ]
+}

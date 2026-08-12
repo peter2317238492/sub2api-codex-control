@@ -1,0 +1,50 @@
+{
+  "format_version": 1,
+  "product": "sub2api-codex-connector",
+  "connector_version": "0.1.0",
+  "control_protocol_version": 1,
+  "codex_version": "0.147.0",
+  "appserver_schema_sha256": "511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b",
+  "server_api_release": {
+    "minimum": "0.1.0",
+    "maximum": "0.1.0"
+  },
+  "go_version": "go1.26.5",
+  "go_build_environment": {
+    "CGO_ENABLED": "0",
+    "GOAMD64": "v1",
+    "GOARM64": "v8.0",
+    "GOENV": "off",
+    "GOEXPERIMENT": "",
+    "GOFIPS140": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "cosign_version": "v3.0.6",
+  "source_workflow": ".github/workflows/connector-release.yml",
+  "targets": [
+    {
+      "id": "linux-amd64",
+      "goos": "linux",
+      "goarch": "amd64",
+      "native_signature": "none"
+    },
+    {
+      "id": "linux-arm64",
+      "goos": "linux",
+      "goarch": "arm64",
+      "native_signature": "none"
+    },
+    {
+      "id": "darwin-amd64",
+      "goos": "darwin",
+      "goarch": "amd64",
+      "native_signature": "apple-developer-id-and-notarization"
+    },
+    {
+      "id": "darwin-arm64",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "native_signature": "apple-developer-id-and-notarization"
+    }
+  ]
+}

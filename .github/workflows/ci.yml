@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  public-source:
+    name: Public source policy and release tooling
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Verify public tree and licensing
+        run: |
+          python3 scripts/check-public-tree.py
+          python3 scripts/check-licenses.py
+          python3 -m unittest tests/test_public_tree.py tests/test_license_compliance.py
+
+      - name: Test deterministic source and release verification
+        run: python3 -m unittest discover -s deploy/release/tests -v
+
+      - name: Compile deployment tools
+        run: |
+          python3 -m compileall -q deploy/scripts deploy/release tests/e2e
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+
+  control-api:
+    name: Control API
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: deploy/constraints/control-api.txt
+
+      - name: Install and test
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --constraint deploy/constraints/control-api.txt --editable 'apps/control-api[dev]'
+          .venv/bin/python deploy/scripts/verify-python-constraints.py deploy/constraints/control-api.txt
+          .venv/bin/python -m ruff check apps/control-api migrations deploy/release
+          .venv/bin/python -m pytest apps/control-api/tests tests/e2e/test_smoke_secret.py
+
+  web:
+    name: PWA and contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.22.0"
+
+      - name: Test and build
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.7.0+sha512.19cc852c120c7125760f2443ee6be0ca5b40f9f50598de1a09a1f177503e010e57c23c77646e01e761de59bf874fb22a3398c33ab9691fc13eb946b6f0f4d620 --activate
+          pnpm install --frozen-lockfile
+          npm install --global @openai/codex@0.147.0
+          pnpm contracts:check
+          pnpm test
+          pnpm check
+          pnpm build
+
+  connector:
+    name: Connector
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: connector/go.sum
+
+      - name: Test and vet
+        working-directory: connector
+        run: |
+          go test -race -count=1 ./...
+          go vet ./...

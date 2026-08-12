@@ -1,0 +1,576 @@
+rule_files:
+  - ../native-alerts.yml
+  - ../external-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: retained Connector up value is unhealthy when its textfile heartbeat is stale
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'up{job="codex-control-connector",instance="stale-host"}'
+        values: '1+0x6'
+      - series: 'codex_control_connector_up{job="codex-control-connector",instance="stale-host"}'
+        values: '1+0x6'
+      - series: 'codex_control_connector_last_update_timestamp_seconds{job="codex-control-connector",instance="stale-host"}'
+        values: '0+0x6'
+      - series: 'up{job="codex-control-connector",instance="fresh-host"}'
+        values: '1+0x6'
+      - series: 'codex_control_connector_up{job="codex-control-connector",instance="fresh-host"}'
+        values: '1+0x6'
+      - series: 'codex_control_connector_last_update_timestamp_seconds{job="codex-control-connector",instance="fresh-host"}'
+        values: '0+60x6'
+      - series: 'up{job="codex-control-connector",instance="future-host"}'
+        values: '1+0x6'
+      - series: 'codex_control_connector_up{job="codex-control-connector",instance="future-host"}'
+        values: '1+0x6'
+      - series: 'codex_control_connector_last_update_timestamp_seconds{job="codex-control-connector",instance="future-host"}'
+        values: '600+60x6'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CodexControlConnectorDown
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlConnectorDown
+              component: connector
+              instance: stale-host
+              job: codex-control-connector
+              release_gate: observability
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: Connector telemetry reports the process down or stale
+              description: A monitored Connector reports down or its atomic textfile timestamp differs from Prometheus by more than 60 seconds.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+          - exp_labels:
+              alertname: CodexControlConnectorDown
+              component: connector
+              instance: future-host
+              job: codex-control-connector
+              release_gate: observability
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: Connector telemetry reports the process down or stale
+              description: A monitored Connector reports down or its atomic textfile timestamp differs from Prometheus by more than 60 seconds.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+
+  - name: Connector fixed enumerations require every expected member
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'up{job="codex-control-connector",instance="host-a"}'
+        values: '1+0x6'
+      - series: 'codex_control_connector_up{job="codex-control-connector",instance="host-a"}'
+        values: '1+0x6'
+      - series: 'codex_control_connector_last_update_timestamp_seconds{job="codex-control-connector",instance="host-a"}'
+        values: '0+60x6'
+      - series: 'codex_control_connector_reconnects_total{job="codex-control-connector",instance="host-a",reason="token"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_reconnects_total{job="codex-control-connector",instance="host-a",reason="dial"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_reconnects_total{job="codex-control-connector",instance="host-a",reason="connection_io"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_reconnects_total{job="codex-control-connector",instance="host-a",reason="unexpected"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_spool_bytes{job="codex-control-connector",instance="host-a"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_spool_capacity_bytes{job="codex-control-connector",instance="host-a"}'
+        values: '67108864+0x6'
+      - series: 'codex_control_connector_spool_events{job="codex-control-connector",instance="host-a"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_spool_oldest_unacknowledged_age_seconds{job="codex-control-connector",instance="host-a"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_app_server_restarts_total{job="codex-control-connector",instance="host-a",reason="start_failure"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_app_server_restarts_total{job="codex-control-connector",instance="host-a",reason="notification_failure"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_app_server_restarts_total{job="codex-control-connector",instance="host-a",reason="child_exit"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_contract_failures_total{job="codex-control-connector",instance="host-a",kind="version"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_contract_failures_total{job="codex-control-connector",instance="host-a",kind="schema"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_contract_last_failure_timestamp_seconds{job="codex-control-connector",instance="host-a",kind="version"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_contract_last_failure_timestamp_seconds{job="codex-control-connector",instance="host-a",kind="schema"}'
+        values: '0+0x6'
+      - series: 'codex_control_connector_policy_denials_total{job="codex-control-connector",instance="host-a",reason="command"}'
+        values: '0+0x6'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CodexControlConnectorTelemetryMissing
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlConnectorTelemetryMissing
+              component: connector
+              instance: host-a
+              job: codex-control-connector
+              release_gate: observability
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: Required Connector telemetry is missing
+              description: One or more Connector health, freshness, spool, or fixed-cardinality counter signals are absent or invalid.
+              runbook: docs/runbooks/observability.md#external-collector-contract
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+
+  - name: first observed nonzero Connector contract counter is actionable
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_connector_contract_failures_total{job="codex-control-connector",instance="host-a",kind="version"}'
+        values: '1+0x12'
+      - series: 'codex_control_connector_contract_last_failure_timestamp_seconds{job="codex-control-connector",instance="host-a",kind="version"}'
+        values: '60+0x12'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CodexControlConnectorContractFailure
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlConnectorContractFailure
+              component: connector
+              instance: host-a
+              job: codex-control-connector
+              kind: version
+              release_gate: contract
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: Connector rejected a version or schema contract
+              description: Connector contract check version failed in the last ten minutes.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#release-review
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+      - eval_time: 12m
+        alertname: CodexControlConnectorContractFailure
+        exp_alerts: []
+
+  - name: metrics target down respects the two-minute hold
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'up{job="codex-control-api",instance="api-1"}'
+        values: '0+0x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CodexControlMetricsTargetDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: CodexControlMetricsTargetDown
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlMetricsTargetDown
+              component: control-api
+              instance: api-1
+              job: codex-control-api
+              release_gate: observability
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: Control API metrics target is down
+              description: Prometheus has failed to scrape a Control API metrics target for two minutes.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+
+  - name: five-percent HTTP alert has a traffic floor and hold
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_http_requests_total{job="codex-control-api",method="GET",route="/v1/health/ready",status_class="2xx"}'
+        values: '0+60x15'
+      - series: 'codex_control_http_requests_total{job="codex-control-api",method="GET",route="/v1/health/ready",status_class="5xx"}'
+        values: '0+10x15'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CodexControlHighHttp5xxRate
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: CodexControlHighHttp5xxRate
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlHighHttp5xxRate
+              component: control-api
+              job: codex-control-api
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: Control API HTTP 5xx ratio is above five percent
+              description: The five-minute 5xx ratio is above 5 percent with at least 0.1 requests per second.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+    promql_expr_test:
+      - expr: codex_control:http_5xx_ratio:rate5m
+        eval_time: 10m
+        exp_samples:
+          - labels: 'codex_control:http_5xx_ratio:rate5m{job="codex-control-api"}'
+            value: 0.14285714285714285
+
+  - name: authentication failure alert requires both count and ratio
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_session_exchange_total{job="codex-control-api",outcome="invalid_token"}'
+        values: '0+2x20'
+      - series: 'codex_control_session_exchange_total{job="codex-control-api",outcome="succeeded"}'
+        values: '0+4x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CodexControlSessionExchangeAuthFailureSurge
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: CodexControlSessionExchangeAuthFailureSurge
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlSessionExchangeAuthFailureSurge
+              component: auth
+              job: codex-control-api
+              service: codex-control
+              severity: warning
+            exp_annotations:
+              summary: Session exchange authentication failures are elevated
+              description: More than 10 failures and a failure ratio above 25 percent were observed over ten minutes.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+
+  - name: browser dependency close code pages after two minutes
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_websocket_events_total{job="codex-control-api",kind="browser",event="closed",reason="dependency_unavailable"}'
+        values: '0+1x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CodexControlBrowserWebSocketDependencyFailure
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: CodexControlBrowserWebSocketDependencyFailure
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlBrowserWebSocketDependencyFailure
+              component: realtime
+              job: codex-control-api
+              kind: browser
+              reason: dependency_unavailable
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: Browser WebSocket dependency failure detected
+              description: One or more dependency_unavailable outcomes indicate temporary Redis, PostgreSQL, or lease-admission failure.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+
+  - name: stale heartbeat holds for two minutes
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_device_heartbeat_age_seconds_max{job="codex-control-api",instance="api-1"}'
+        values: '120+0x6'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CodexControlDeviceHeartbeatStale
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: CodexControlDeviceHeartbeatStale
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlDeviceHeartbeatStale
+              component: realtime
+              instance: api-1
+              job: codex-control-api
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: A connected device heartbeat is stale
+              description: At least one persistent connected-device record has not received a heartbeat for more than 60 seconds.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+
+  - name: idempotency conflict alerts without a hold
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_command_idempotency_total{job="codex-control-api",outcome="conflict"}'
+        values: '0 1+0x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CodexControlCommandIdempotencyConflict
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlCommandIdempotencyConflict
+              component: commands
+              job: codex-control-api
+              service: codex-control
+              severity: warning
+            exp_annotations:
+              summary: A command idempotency conflict was rejected
+              description: The same idempotency key was reused with a non-equivalent command projection.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+
+  - name: approval stale epoch and prohibited RPC acceptance page immediately
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_approval_outcomes_total{job="codex-control-api",outcome="denied",reason="stale_epoch_default_deny"}'
+        values: '0 1+0x5'
+      - series: 'codex_control_rpc_policy_total{job="codex-control-api",method_class="prohibited",outcome="accepted"}'
+        values: '0 1+0x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CodexControlApprovalStaleEpoch
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlApprovalStaleEpoch
+              component: approvals
+              job: codex-control-api
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: A stale-epoch approval was denied
+              description: At least one approval reached the stale-epoch fail-closed path in the last ten minutes.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+      - eval_time: 2m
+        alertname: CodexControlProhibitedRpcAccepted
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlProhibitedRpcAccepted
+              component: policy
+              job: codex-control-api
+              release_gate: security
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: A prohibited RPC passed the Control API allowlist
+              description: A prohibited RPC was reported as accepted; stop admission and investigate immediately.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+
+  - name: maintenance timestamp pages when a phase stops succeeding
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_maintenance_last_success_timestamp_seconds{job="codex-control-api",instance="api-1",phase="retention"}'
+        values: '0+0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CodexControlMaintenanceStale
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: CodexControlMaintenanceStale
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlMaintenanceStale
+              component: maintenance
+              instance: api-1
+              job: codex-control-api
+              phase: retention
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: A Control API maintenance phase is stale
+              description: Maintenance phase retention has not completed successfully for more than five minutes.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+
+  - name: sustained database pool saturation warns
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_database_pool_connections{job="codex-control-api",instance="api-1",state="checked_out"}'
+        values: '10+0x15'
+      - series: 'codex_control_database_pool_connections{job="codex-control-api",instance="api-1",state="capacity"}'
+        values: '10+0x15'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: CodexControlDatabasePoolSaturation
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: CodexControlDatabasePoolSaturation
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlDatabasePoolSaturation
+              component: postgresql
+              instance: api-1
+              job: codex-control-api
+              service: codex-control
+              severity: warning
+            exp_annotations:
+              summary: Control API database pool is saturated
+              description: More than 90 percent of the observed SQLAlchemy pool has been checked out for ten minutes.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+    promql_expr_test:
+      - expr: codex_control:database_pool_utilization:ratio
+        eval_time: 11m
+        exp_samples:
+          - labels: 'codex_control:database_pool_utilization:ratio{instance="api-1",job="codex-control-api"}'
+            value: 1
+
+  - name: missing synthetic is an explicit release gate
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_synthetic_probe_success{job="codex-control-synthetic",probe="live"}'
+        values: '1+0x8'
+      - series: 'codex_control_synthetic_probe_success{job="codex-control-synthetic",probe="ready"}'
+        values: '1+0x8'
+      - series: 'codex_control_synthetic_probe_success{job="codex-control-synthetic",probe="pwa"}'
+        values: '1+0x8'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CodexControlSyntheticTelemetryMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: CodexControlSyntheticTelemetryMissing
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlSyntheticTelemetryMissing
+              component: synthetic
+              probe: session_exchange
+              release_gate: observability
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: A required synthetic probe is not being collected
+              description: Synthetic probe session_exchange is absent from Prometheus.
+              runbook: docs/runbooks/observability.md#external-collector-contract
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+
+  - name: stale backup and Connector spool produce actionable alerts
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_external_backup_last_success_timestamp_seconds{job="codex-control-ops",instance="backup"}'
+        values: '0+0x610'
+      - series: 'codex_control_connector_spool_bytes{job="codex-control-connector",instance="host-a"}'
+        values: '80+0x610'
+      - series: 'codex_control_connector_spool_capacity_bytes{job="codex-control-connector",instance="host-a"}'
+        values: '100+0x610'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CodexControlConnectorSpoolHigh
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlConnectorSpoolHigh
+              component: connector
+              instance: host-a
+              job: codex-control-connector
+              service: codex-control
+              severity: warning
+            exp_annotations:
+              summary: Connector spool exceeds 70 percent capacity
+              description: Durable Connector spool bytes have remained above 70 percent of configured capacity.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+      - eval_time: 9h
+        alertname: CodexControlBackupStale
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlBackupStale
+              component: recovery
+              instance: backup
+              job: codex-control-ops
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: Control PostgreSQL backup is older than eight hours
+              description: No verified successful backup has completed within the eight-hour alert window.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#release-review
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control
+
+  - name: migration mismatch remains a release gate
+    interval: 1m
+    external_labels:
+      deploy_event_url: https://deployments.example.test/42
+      log_search_url: https://logs.example.test/codex-control
+    input_series:
+      - series: 'codex_control_external_migration_revision_match{job="codex-control-ops",instance="database"}'
+        values: '0+0x6'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CodexControlMigrationRevisionMismatch
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: CodexControlMigrationRevisionMismatch
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlMigrationRevisionMismatch
+              component: postgresql
+              instance: database
+              job: codex-control-ops
+              release_gate: migration
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: Alembic current revision does not match packaged head
+              description: Deployment must stop until the database revision matches the admitted API artifact.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#release-review
+              deploy_event: https://deployments.example.test/42
+              correlation: https://logs.example.test/codex-control

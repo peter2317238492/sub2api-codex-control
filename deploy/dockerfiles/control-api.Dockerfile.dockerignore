@@ -1,0 +1,16 @@
+**
+!apps/
+!apps/control-api/
+!apps/control-api/pyproject.toml
+!apps/control-api/README.md
+!apps/control-api/src/
+!apps/control-api/src/**
+!migrations/
+!migrations/**
+!deploy/
+!deploy/scripts/
+!deploy/scripts/control-api-entrypoint.sh
+!deploy/scripts/probe-sub2api-auth-contract.py
+!deploy/scripts/verify-python-constraints.py
+!deploy/constraints/
+!deploy/constraints/control-api.txt

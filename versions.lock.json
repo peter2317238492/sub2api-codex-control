@@ -1,0 +1,47 @@
+{
+  "format_version": 1,
+  "codex": {
+    "cli_version": "0.147.0",
+    "schema_file": "packages/appserver-schema/generated/json-schema/codex_app_server_protocol.v2.schemas.json",
+    "schema_sha256": "511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b"
+  },
+  "control_protocol": {
+    "version": 1,
+    "schema_file": "packages/control-protocol/schema/control-envelope.schema.json",
+    "schema_sha256": "f2101681f77248426e2ca898541cf8e9ab179749a211aec91d7084236a58d252",
+    "wire_fixture_file": "packages/control-protocol/fixtures/wire-envelopes.json",
+    "wire_fixture_sha256": "0c9a4c54b548bd9e3e10bc0c14f55eb104570fe86522d835e975edbf2add3cb1",
+    "policy_file": "packages/control-protocol/fixtures/rpc-policy.json",
+    "policy_sha256": "a4d7647aebc0d96fe4d0ce66b5146469e069e5557e5d83f2b90a753c67273d16",
+    "budget_vectors_file": "packages/control-protocol/fixtures/json-budget-vectors.json",
+    "budget_vectors_sha256": "8c6333fa8746ff7c68ab00b35a1b84e08ded19cac3a41a1d17e71a4f9213e716"
+  },
+  "sub2api": {
+    "release_url": "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.175",
+    "release_published_at": "2026-08-12T11:07:29Z",
+    "release_tag_object": "b898c60c422d1de059968c56aca22f6643f1fed4",
+    "release_linux_amd64_archive_sha256": "690b99607b6e318bc667ccf3593cc7059ccc9f91cd27706e52e8bfb83004fd4e",
+    "runtime_version": "0.1.175",
+    "runtime_commit": "93c32fa1a2450351561abc46156d2e28cb5f74ca",
+    "runtime_built_at": "2026-08-12T10:57:38Z",
+    "runtime_binary_sha256": "14b2e5b2a7b98be51226d1a9fe12c561780bf9fe257ff5a5ba13a5861daca44c",
+    "runtime_binary_size": 117682338,
+    "container_image_index_digest": "sha256:2fc3e1cf3c1dd133283d69db5e8142cf3b11d1b16a8343f140b90674bb719c88",
+    "container_image": "weishaw/sub2api@sha256:0346b957327330e659a4cd4411daebe4113c2558086baf67c5fb7d65c4b18711",
+    "container_image_id": "sha256:f1910b20130a3339e631efae727738c7c30c5f1a0a8576bcbb07a9a36620b4d8",
+    "image_created": "2026-08-12T11:06:26.758894187Z",
+    "image_label_version": "0.1.175",
+    "image_label_commit": "93c32fa1a2450351561abc46156d2e28cb5f74ca",
+    "image_label_source": "https://github.com/Wei-Shaw/sub2api",
+    "image_label_description": "Sub2API - AI API Gateway Platform",
+    "image_label_maintainer": "Wei-Shaw <github.com/Wei-Shaw>",
+    "auth_contract_file": "docs/contracts/sub2api-auth.v0.1.175.json",
+    "auth_contract_sha256": "591949fd6cd2577a1f2c641b32dcae8dc554f5a229e0db5a86e47b4ebc88d404",
+    "frontend_access_token_key": "auth_token",
+    "frontend_refresh_token_key": "refresh_token",
+    "frontend_token_expires_at_key": "token_expires_at",
+    "auth_me_path": "/api/v1/auth/me",
+    "auth_refresh_path": "/api/v1/auth/refresh",
+    "auth_logout_path": "/api/v1/auth/logout"
+  }
+}
