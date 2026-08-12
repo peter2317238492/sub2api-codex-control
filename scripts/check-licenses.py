@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Validate repository licensing and third-party attribution metadata."""
 
 from __future__ import annotations
@@ -7,10 +6,10 @@ import hashlib
 import json
 import re
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any
 
+import tomllib
 
 EXPECTED_COMPONENT_IDS = {
     "alembic",
@@ -25,7 +24,9 @@ EXPECTED_COMPONENT_IDS = {
     "vue",
     "x-text",
 }
-EXPECTED_MANIFEST_SHA256 = "19907c3925b3cfeccbf83e341aa7366ec3958531c0d505de31a578e3c4dd48d3"
+EXPECTED_MANIFEST_SHA256 = (
+    "19907c3925b3cfeccbf83e341aa7366ec3958531c0d505de31a578e3c4dd48d3"
+)
 EXPECTED_THIRD_PARTY_NOTICES_SHA256 = (
     "cb41479837c0d05efafceb24840e46bea727a3be359d1857ebce9ef6ee1f3a23"
 )
@@ -40,7 +41,7 @@ PACKAGE_JSON_PATHS = (
 )
 EXPECTED_WORKFLOW_SHA256 = {
     Path(".github/workflows/ci.yml"): (
-        "409b4998089d8f771a7471742959f94a4687ff9e0e5691cdeea2e175a3c9edd6"
+        "140bc0b38f27f664404ed190706e77b3b3a5e001d4342560c598d826e7f37e0d"
     ),
     Path(".github/workflows/connector-release.yml"): (
         "bee948d3bf531e40f934e517090d83f96bbf6a3810765cc69d2aac787039acae"
@@ -50,12 +51,8 @@ EXPECTED_WORKFLOW_SHA256 = {
     ),
 }
 SOURCE_ONLY_RELEASE_WORKFLOWS = {
-    Path(".github/workflows/connector-release.yml"): (
-        "build",
-    ),
-    Path(".github/workflows/control-images-release.yml"): (
-        "validate",
-    ),
+    Path(".github/workflows/connector-release.yml"): ("build",),
+    Path(".github/workflows/control-images-release.yml"): ("validate",),
 }
 NOTICE_RELATIONSHIPS = {
     "codex": ("generated-material", "Generated protocol material"),
@@ -124,7 +121,9 @@ def check_digest_file(
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         errors.append(f"invalid recorded SHA-256 for {relative}")
     elif actual != expected:
-        errors.append(f"SHA-256 mismatch for {relative}: expected {expected}, got {actual}")
+        errors.append(
+            f"SHA-256 mismatch for {relative}: expected {expected}, got {actual}"
+        )
 
     if not allow_source_normalization:
         return
@@ -172,12 +171,16 @@ def check_version_evidence(
             return
         for key in evidence.get("keys", []):
             if not isinstance(observed, dict) or key not in observed:
-                errors.append(f"component {component_id} evidence key is missing: {key!r}")
+                errors.append(
+                    f"component {component_id} evidence key is missing: {key!r}"
+                )
                 return
             observed = observed[key]
     elif kind == "python-constraint":
         package = re.escape(str(evidence.get("package", "")))
-        match = re.search(rf"(?im)^{package}==([^\s#]+)\s*$", path.read_text(encoding="utf-8"))
+        match = re.search(
+            rf"(?im)^{package}==([^\s#]+)\s*$", path.read_text(encoding="utf-8")
+        )
         observed = match.group(1) if match else None
     elif kind == "pnpm-importer":
         package = str(evidence.get("package", ""))
@@ -199,7 +202,9 @@ def check_version_evidence(
         )
         observed = match.group(1) if match else None
     else:
-        errors.append(f"component {component_id} has unsupported evidence kind {kind!r}")
+        errors.append(
+            f"component {component_id} has unsupported evidence kind {kind!r}"
+        )
         return
     if observed != version:
         errors.append(
@@ -220,7 +225,10 @@ def check_package_metadata(root: Path, errors: list[str]) -> None:
         if data.get("author") != "Sub2API Codex Control contributors":
             errors.append(f"{relative} must use the neutral contributors author")
         repository = data.get("repository")
-        if not isinstance(repository, dict) or repository.get("url") != expected_repo_url:
+        if (
+            not isinstance(repository, dict)
+            or repository.get("url") != expected_repo_url
+        ):
             errors.append(f"{relative} has an unexpected repository URL")
         if data.get("homepage") != expected_homepage:
             errors.append(f"{relative} has an unexpected homepage")
@@ -237,11 +245,18 @@ def check_package_metadata(root: Path, errors: list[str]) -> None:
     if project.get("license") != "Apache-2.0":
         errors.append("apps/control-api/pyproject.toml must declare Apache-2.0")
     if project.get("authors") != [{"name": "Sub2API Codex Control contributors"}]:
-        errors.append("apps/control-api/pyproject.toml must use the neutral contributors author")
+        errors.append(
+            "apps/control-api/pyproject.toml must use the neutral contributors author"
+        )
     urls = project.get("urls", {})
     if urls.get("Repository") != EXPECTED_REPOSITORY:
-        errors.append("apps/control-api/pyproject.toml has an unexpected repository URL")
-    if urls.get("Homepage") != expected_homepage or urls.get("Issues") != expected_issues:
+        errors.append(
+            "apps/control-api/pyproject.toml has an unexpected repository URL"
+        )
+    if (
+        urls.get("Homepage") != expected_homepage
+        or urls.get("Issues") != expected_issues
+    ):
         errors.append("apps/control-api/pyproject.toml has unexpected project URLs")
 
 
@@ -252,7 +267,9 @@ def check_go_module(root: Path, errors: list[str]) -> None:
     for path in (root / "connector").rglob("*.go"):
         text = path.read_text(encoding="utf-8")
         if OLD_GO_MODULE in text:
-            errors.append(f"legacy private Go module import remains in {path.relative_to(root)}")
+            errors.append(
+                f"legacy private Go module import remains in {path.relative_to(root)}"
+            )
 
 
 def yaml_block(text: str, header: str, indent: int) -> str | None:
@@ -278,9 +295,7 @@ def yaml_block(text: str, header: str, indent: int) -> str | None:
 def check_source_only_release_workflows(root: Path, errors: list[str]) -> None:
     workflows_root = root / ".github/workflows"
     try:
-        actual_workflows = {
-            path.relative_to(root) for path in workflows_root.iterdir()
-        }
+        actual_workflows = {path.relative_to(root) for path in workflows_root.iterdir()}
     except OSError as error:
         errors.append(f"cannot inspect workflow directory: {error}")
         return
@@ -294,7 +309,6 @@ def check_source_only_release_workflows(root: Path, errors: list[str]) -> None:
 
     workflow_text: dict[Path, str] = {}
     for relative, expected_sha256 in EXPECTED_WORKFLOW_SHA256.items():
-        path = root / relative
         try:
             checked_path = repo_file(root, relative.as_posix(), errors)
             if checked_path is None:
@@ -332,7 +346,9 @@ def check_source_only_release_workflows(root: Path, errors: list[str]) -> None:
             errors.append(f"{relative} lacks the source-only-guard job")
         else:
             if not re.search(r"(?m)^\s+exit 1\s*$", guard_block):
-                errors.append(f"{relative} source-only-guard must terminate with exit 1")
+                errors.append(
+                    f"{relative} source-only-guard must terminate with exit 1"
+                )
             if re.search(r"(?m)^\s*(?:continue-on-error|if):", guard_block):
                 errors.append(
                     f"{relative} source-only-guard must be unconditional and fail closed"
@@ -342,9 +358,7 @@ def check_source_only_release_workflows(root: Path, errors: list[str]) -> None:
         if entry_block is None:
             errors.append(f"{relative} lacks guarded release entry job {guarded_job}")
         else:
-            if not re.search(
-                r"(?m)^\s{4}needs:\s*source-only-guard\s*$", entry_block
-            ):
+            if not re.search(r"(?m)^\s{4}needs:\s*source-only-guard\s*$", entry_block):
                 errors.append(
                     f"{relative} release entry job {guarded_job} must need source-only-guard"
                 )
@@ -381,14 +395,18 @@ def check_third_party_notices(
         rows: list[tuple[str, str, str, str]] = []
     else:
         if start + 1 >= len(lines) or lines[start + 1] != separator:
-            errors.append("THIRD_PARTY_NOTICES.md has an invalid component table separator")
+            errors.append(
+                "THIRD_PARTY_NOTICES.md has an invalid component table separator"
+            )
         rows = []
         for line in lines[start + 2 :]:
             if not line.startswith("|"):
                 break
             cells = tuple(cell.strip() for cell in line.strip().strip("|").split("|"))
             if len(cells) != 4:
-                errors.append(f"THIRD_PARTY_NOTICES.md has an invalid component row: {line}")
+                errors.append(
+                    f"THIRD_PARTY_NOTICES.md has an invalid component row: {line}"
+                )
                 continue
             rows.append(cells)
 
@@ -399,7 +417,9 @@ def check_third_party_notices(
         component_id = component.get("id")
         relation = NOTICE_RELATIONSHIPS.get(component_id)
         if relation is None:
-            errors.append(f"component {component_id!r} lacks a NOTICE relationship mapping")
+            errors.append(
+                f"component {component_id!r} lacks a NOTICE relationship mapping"
+            )
             continue
         manifest_relationship, notice_relationship = relation
         if component.get("relationship") != manifest_relationship:
@@ -428,7 +448,9 @@ def check_third_party_notices(
         "No prebuilt asset may be published before then",
     ):
         if required not in notices:
-            errors.append(f"THIRD_PARTY_NOTICES.md lacks release policy text: {required}")
+            errors.append(
+                f"THIRD_PARTY_NOTICES.md lacks release policy text: {required}"
+            )
 
 
 def validate(root: Path) -> list[str]:
@@ -452,13 +474,18 @@ def validate(root: Path) -> list[str]:
     if manifest.get("format_version") != 1:
         errors.append("third_party/components.json format_version must be 1")
     project = manifest.get("project")
-    if not isinstance(project, dict) or project.get("license_expression") != "Apache-2.0":
+    if (
+        not isinstance(project, dict)
+        or project.get("license_expression") != "Apache-2.0"
+    ):
         errors.append("project license expression must be Apache-2.0")
     else:
         for key in ("license_file", "notice_file"):
             record = project.get(key)
             if isinstance(record, dict):
-                check_digest_file(root, record, errors, allow_source_normalization=False)
+                check_digest_file(
+                    root, record, errors, allow_source_normalization=False
+                )
             else:
                 errors.append(f"project {key} record is missing")
 
@@ -466,7 +493,9 @@ def validate(root: Path) -> list[str]:
     if not isinstance(components, list):
         errors.append("third_party components must be an array")
         return errors
-    ids = [component.get("id") for component in components if isinstance(component, dict)]
+    ids = [
+        component.get("id") for component in components if isinstance(component, dict)
+    ]
     if len(ids) != len(set(ids)):
         errors.append("third_party component IDs must be unique")
     if set(ids) != EXPECTED_COMPONENT_IDS:
@@ -493,7 +522,9 @@ def validate(root: Path) -> list[str]:
                     declared_license_paths.add(relative)
                 check_digest_file(root, record, errors, allow_source_normalization=True)
             else:
-                errors.append(f"component {component.get('id')} has an invalid license record")
+                errors.append(
+                    f"component {component.get('id')} has an invalid license record"
+                )
 
     license_root = root / "third_party/licenses"
     actual_license_paths = {
@@ -508,10 +539,17 @@ def validate(root: Path) -> list[str]:
         )
 
     sub2api = next(
-        (component for component in components if isinstance(component, dict) and component.get("id") == "sub2api"),
+        (
+            component
+            for component in components
+            if isinstance(component, dict) and component.get("id") == "sub2api"
+        ),
         None,
     )
-    if not isinstance(sub2api, dict) or sub2api.get("license_expression") != "LGPL-3.0-or-later":
+    if (
+        not isinstance(sub2api, dict)
+        or sub2api.get("license_expression") != "LGPL-3.0-or-later"
+    ):
         errors.append("Sub2API must be identified as LGPL-3.0-or-later")
     elif sub2api.get("license_declaration") != {
         "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/93c32fa1a2450351561abc46156d2e28cb5f74ca/README.md",
@@ -525,7 +563,9 @@ def validate(root: Path) -> list[str]:
     check_source_only_release_workflows(root, errors)
     check_third_party_notices(root, components, errors)
 
-    schema_readme = (root / "packages/appserver-schema/README.md").read_text(encoding="utf-8")
+    schema_readme = (root / "packages/appserver-schema/README.md").read_text(
+        encoding="utf-8"
+    )
     for required in (
         "https://github.com/openai/codex/tree/rust-v0.147.0",
         "third_party/licenses/Codex-LICENSE.txt",
@@ -533,7 +573,9 @@ def validate(root: Path) -> list[str]:
         "not affiliated with, endorsed by, or sponsored by",
     ):
         if required not in schema_readme:
-            errors.append(f"appserver schema README lacks required attribution: {required}")
+            errors.append(
+                f"appserver schema README lacks required attribution: {required}"
+            )
 
     return errors
 

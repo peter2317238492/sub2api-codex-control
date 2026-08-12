@@ -60,7 +60,9 @@ def test_token_file_rejects_noncanonical_symlink_ancestor_and_hardlink(
     with pytest.raises(ValueError, match="symlink ancestor"):
         read_private_opaque_file(alias / "token", "access token")
     with pytest.raises(ValueError, match="canonical and absolute"):
-        read_private_opaque_file(str(private / ".." / "private" / "token"), "access token")
+        read_private_opaque_file(
+            str(private / ".." / "private" / "token"), "access token"
+        )
     with pytest.raises(ValueError, match="canonical and absolute"):
         read_private_opaque_file("relative-token", "access token")
     with pytest.raises(ValueError, match="canonical and absolute"):

@@ -241,8 +241,7 @@ class NginxAccessLogPolicyTests(unittest.TestCase):
                         "FAKE_KILL_HELP": "--kill-whom=WHOM --kill-who=WHO",
                         "FAKE_MAIN_PID": main_pid,
                     },
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                     text=True,
                 )
                 self.assertNotEqual(result.returncode, 0, (main_pid, active))
@@ -287,8 +286,7 @@ class NginxAccessLogPolicyTests(unittest.TestCase):
                         "FAKE_SYSTEMCTL_CALLS": str(calls),
                         "PATH": f"{root}:/bin:/usr/bin",
                     },
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                     text=True,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -310,8 +308,7 @@ class NginxAccessLogPolicyTests(unittest.TestCase):
                     "FAKE_SYSTEMCTL_CALLS": str(calls),
                     "PATH": f"{root}:/bin:/usr/bin",
                 },
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
             )
             self.assertNotEqual(result.returncode, 0)
@@ -335,8 +332,7 @@ class NginxAccessLogPolicyTests(unittest.TestCase):
                 ("/bin/sh", "-eu", "-c", postrotate),
                 check=False,
                 env={**os.environ, "PATH": str(root)},
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
             )
             self.assertFalse(marker.exists())

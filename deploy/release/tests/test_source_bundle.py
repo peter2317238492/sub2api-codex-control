@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -10,7 +10,6 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TOOL_PATH = REPO_ROOT / "deploy/release/source_bundle.py"
@@ -168,9 +167,7 @@ class SourceBundleTests(unittest.TestCase):
             .splitlines()
         }
         self.assertTrue(source_bundle.REQUIRED_SOURCE_PATHS <= manifest_paths)
-        self.assertIn(
-            "third_party/licenses/Example-LICENSE.txt", manifest_paths
-        )
+        self.assertIn("third_party/licenses/Example-LICENSE.txt", manifest_paths)
         verified = self._verify()
         self.assertEqual(verified["file_count"], 9)
         self.assertEqual(first, second)
@@ -212,7 +209,9 @@ class SourceBundleTests(unittest.TestCase):
         self.assertEqual((extracted / "README.md").stat().st_mode & 0o777, 0o444)
         self.assertEqual((extracted / "scripts/check.py").stat().st_mode & 0o777, 0o555)
         self.assertEqual(extracted.stat().st_mode & 0o777, 0o555)
-        with self.assertRaisesRegex(source_bundle.SourceBundleError, "must not already"):
+        with self.assertRaisesRegex(
+            source_bundle.SourceBundleError, "must not already"
+        ):
             source_bundle.extract_verified_bundle(
                 self.first,
                 extracted,
@@ -234,7 +233,9 @@ class SourceBundleTests(unittest.TestCase):
             self._git("status", "--porcelain=v1", "--untracked-files=no").stdout,
             "",
         )
-        with self.assertRaisesRegex(source_bundle.SourceBundleError, "committed Git object"):
+        with self.assertRaisesRegex(
+            source_bundle.SourceBundleError, "committed Git object"
+        ):
             self._build()
 
     def test_replace_ref_and_assume_unchanged_cannot_replace_commit_blob(self) -> None:
@@ -253,31 +254,45 @@ class SourceBundleTests(unittest.TestCase):
             self._git("status", "--porcelain=v1", "--untracked-files=no").stdout,
             "",
         )
-        with self.assertRaisesRegex(source_bundle.SourceBundleError, "committed Git object"):
+        with self.assertRaisesRegex(
+            source_bundle.SourceBundleError, "committed Git object"
+        ):
             self._build()
 
     def test_required_license_closure_is_enforced_from_commit_tree(self) -> None:
         self._git("rm", "-q", "NOTICE")
         self._git("commit", "-qm", "remove required notice")
         self.commit = self._git("rev-parse", "HEAD").stdout.strip()
-        with self.assertRaisesRegex(source_bundle.SourceBundleError, "required release"):
+        with self.assertRaisesRegex(
+            source_bundle.SourceBundleError, "required release"
+        ):
             self._build()
 
     def test_declared_third_party_license_must_be_in_commit_tree(self) -> None:
         self._git("rm", "-q", "third_party/licenses/Example-LICENSE.txt")
         self._git("commit", "-qm", "remove declared license")
         self.commit = self._git("rev-parse", "HEAD").stdout.strip()
-        with self.assertRaisesRegex(source_bundle.SourceBundleError, "declared third-party"):
+        with self.assertRaisesRegex(
+            source_bundle.SourceBundleError, "declared third-party"
+        ):
             self._build()
 
-    def test_verifier_rejects_self_consistent_bundle_without_required_file(self) -> None:
+    def test_verifier_rejects_self_consistent_bundle_without_required_file(
+        self,
+    ) -> None:
         self._rewrite_without("NOTICE")
-        with self.assertRaisesRegex(source_bundle.SourceBundleError, "required release"):
+        with self.assertRaisesRegex(
+            source_bundle.SourceBundleError, "required release"
+        ):
             self._verify()
 
-    def test_verifier_rejects_self_consistent_bundle_without_declared_license(self) -> None:
+    def test_verifier_rejects_self_consistent_bundle_without_declared_license(
+        self,
+    ) -> None:
         self._rewrite_without("third_party/licenses/Example-LICENSE.txt")
-        with self.assertRaisesRegex(source_bundle.SourceBundleError, "declared third-party"):
+        with self.assertRaisesRegex(
+            source_bundle.SourceBundleError, "declared third-party"
+        ):
             self._verify()
 
     def test_git_symlink_and_forbidden_tracked_path_are_rejected(self) -> None:
@@ -285,7 +300,9 @@ class SourceBundleTests(unittest.TestCase):
         self._git("add", "link")
         self._git("commit", "-qm", "link")
         self.commit = self._git("rev-parse", "HEAD").stdout.strip()
-        with self.assertRaisesRegex(source_bundle.SourceBundleError, "unsupported mode"):
+        with self.assertRaisesRegex(
+            source_bundle.SourceBundleError, "unsupported mode"
+        ):
             self._build()
 
         self._git("rm", "-q", "link")
@@ -396,7 +413,9 @@ class SourceBundleTests(unittest.TestCase):
                             info.mode = 0o777
                         tar.addfile(info, io.BytesIO(content_by_path[record["path"]]))
                         if kind == "duplicate" and index == 0:
-                            tar.addfile(info, io.BytesIO(content_by_path[record["path"]]))
+                            tar.addfile(
+                                info, io.BytesIO(content_by_path[record["path"]])
+                            )
             return raw_path.read_bytes()
 
         for kind, message in (
@@ -406,8 +425,9 @@ class SourceBundleTests(unittest.TestCase):
             ("duplicate", "order|repeats"),
             ("mode", "metadata"),
         ):
-            with self.subTest(kind=kind), self.assertRaisesRegex(
-                source_bundle.SourceBundleError, message
+            with (
+                self.subTest(kind=kind),
+                self.assertRaisesRegex(source_bundle.SourceBundleError, message),
             ):
                 source_bundle.validate_archive(archive_bytes(kind), records, EPOCH)
 
@@ -432,9 +452,12 @@ class SourceBundleTests(unittest.TestCase):
         variants["header-drift"] = bytes(changed_header)
 
         for kind, candidate in variants.items():
-            with self.subTest(kind=kind), self.assertRaisesRegex(
-                source_bundle.SourceBundleError,
-                "canonical deterministic|metadata differs",
+            with (
+                self.subTest(kind=kind),
+                self.assertRaisesRegex(
+                    source_bundle.SourceBundleError,
+                    "canonical deterministic|metadata differs",
+                ),
             ):
                 source_bundle.validate_archive(candidate, records, EPOCH)
 

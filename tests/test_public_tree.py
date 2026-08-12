@@ -8,7 +8,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "check_public_tree", ROOT / "scripts/check-public-tree.py"
@@ -50,7 +49,10 @@ class PublicTreeTests(unittest.TestCase):
             failures = MODULE.scan(root)
             self.assertEqual(sum("hard-linked" in item for item in failures), 2)
             self.assertTrue(
-                any("forbidden private or generated file name" in item for item in failures)
+                any(
+                    "forbidden private or generated file name" in item
+                    for item in failures
+                )
             )
 
     def test_external_literal_file_is_private_and_values_are_not_reported(self) -> None:
@@ -78,9 +80,7 @@ class PublicTreeTests(unittest.TestCase):
     def test_scanner_rejects_oversized_text_without_skipping_content(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "oversized.txt").write_bytes(
-                b"x" * (MODULE.TEXT_BYTES_LIMIT + 1)
-            )
+            (root / "oversized.txt").write_bytes(b"x" * (MODULE.TEXT_BYTES_LIMIT + 1))
             failures = MODULE.scan(root)
             self.assertEqual(
                 failures,
@@ -143,7 +143,9 @@ class PublicTreeTests(unittest.TestCase):
             root = Path(temporary)
 
             def walk_with_error(*_args: object, **kwargs: object):
-                kwargs["onerror"](PermissionError(13, "Permission denied", "/private/path"))
+                kwargs["onerror"](
+                    PermissionError(13, "Permission denied", "/private/path")
+                )
                 return iter(())
 
             with mock.patch.object(MODULE.os, "walk", side_effect=walk_with_error):
@@ -153,13 +155,22 @@ class PublicTreeTests(unittest.TestCase):
                 ["directory traversal failed: Permission denied"],
             )
 
-    def test_git_index_and_head_blobs_are_scanned_independently_of_worktree(self) -> None:
+    def test_git_index_and_head_blobs_are_scanned_independently_of_worktree(
+        self,
+    ) -> None:
         literal = "synthetic-private-value"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
             subprocess.run(
-                ["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "config",
+                    "user.email",
+                    "test@example.invalid",
+                ],
                 check=True,
             )
             subprocess.run(
@@ -169,25 +180,37 @@ class PublicTreeTests(unittest.TestCase):
             source = root / "tracked.txt"
             source.write_text("safe\n", encoding="utf-8")
             subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
-            subprocess.run(["git", "-C", str(root), "commit", "-qm", "safe"], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-qm", "safe"], check=True
+            )
             source.write_text(f"{literal}\n", encoding="utf-8")
             subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
             source.write_text("safe again\n", encoding="utf-8")
             failures = MODULE.scan(root, (literal,))
             self.assertTrue(
-                any("Git index tracked.txt" in item and "externally denied" in item for item in failures)
+                any(
+                    "Git index tracked.txt" in item and "externally denied" in item
+                    for item in failures
+                )
             )
             self.assertTrue(all(literal not in item for item in failures))
 
-            subprocess.run(["git", "-C", str(root), "checkout", "--", "tracked.txt"], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "checkout", "--", "tracked.txt"], check=True
+            )
             source.write_text(f"{literal}\n", encoding="utf-8")
             subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
-            subprocess.run(["git", "-C", str(root), "commit", "-qm", "private"], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-qm", "private"], check=True
+            )
             source.write_text("safe worktree\n", encoding="utf-8")
             subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
             failures = MODULE.scan(root, (literal,))
             self.assertTrue(
-                any("Git HEAD tracked.txt" in item and "externally denied" in item for item in failures)
+                any(
+                    "Git HEAD tracked.txt" in item and "externally denied" in item
+                    for item in failures
+                )
             )
             self.assertTrue(all(literal not in item for item in failures))
 

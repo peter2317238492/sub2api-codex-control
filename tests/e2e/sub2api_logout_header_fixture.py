@@ -57,7 +57,11 @@ class Handler(BaseHTTPRequestHandler):
             or self.headers.get_content_type() != "application/json"
             or payload != {"refresh_token": REFRESH_TOKEN}
         ):
-            self._reply(401, b"authenticated JSON request required\n", include_large_header=False)
+            self._reply(
+                401,
+                b"authenticated JSON request required\n",
+                include_large_header=False,
+            )
             return
         response = json.dumps(
             {"code": 0, "data": {"revoked": True}, "marker": RESPONSE_MARKER},
@@ -142,10 +146,14 @@ def probe() -> None:
         headers=request_headers,
     )
     if fixed.status != 200:
-        raise SystemExit(f"buffer snippet did not preserve upstream 200: {fixed.status}")
+        raise SystemExit(
+            f"buffer snippet did not preserve upstream 200: {fixed.status}"
+        )
     cookies = fixed.header_values("Set-Cookie")
     if cookies != expected_cookie_headers():
-        raise SystemExit(f"Set-Cookie list changed: received {len(cookies)} of {COOKIE_COUNT}")
+        raise SystemExit(
+            f"Set-Cookie list changed: received {len(cookies)} of {COOKIE_COUNT}"
+        )
     csp = fixed.header_values("Content-Security-Policy")
     if csp != [f"default-src 'none'; report-uri /{RESPONSE_MARKER}"]:
         raise SystemExit("CSP marker is missing or changed")
@@ -153,12 +161,17 @@ def probe() -> None:
         raise SystemExit("response marker header is missing or changed")
     if RESPONSE_MARKER.encode("ascii") not in fixed.body:
         raise SystemExit("response marker body is missing or changed")
-    header_bytes = sum(
-        len(name.encode("latin-1")) + len(value.encode("latin-1")) + 4
-        for name, value in fixed.headers
-    ) + 2
+    header_bytes = (
+        sum(
+            len(name.encode("latin-1")) + len(value.encode("latin-1")) + 4
+            for name, value in fixed.headers
+        )
+        + 2
+    )
     if not 4_096 < header_bytes < 16_384:
-        raise SystemExit(f"fixture response headers are outside (4k, 16k): {header_bytes}")
+        raise SystemExit(
+            f"fixture response headers are outside (4k, 16k): {header_bytes}"
+        )
     print(
         "authenticated logout header reproduction passed: "
         f"default=502 fixed=200 cookies={len(cookies)} headers={header_bytes}"

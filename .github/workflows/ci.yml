@@ -65,8 +65,9 @@ jobs:
       - name: Install and test
         run: |
           python3 -m venv .venv
-          .venv/bin/pip install --constraint deploy/constraints/control-api.txt --editable 'apps/control-api[dev]'
+          .venv/bin/pip install --constraint deploy/constraints/control-api.txt --editable apps/control-api
           .venv/bin/python deploy/scripts/verify-python-constraints.py deploy/constraints/control-api.txt
+          .venv/bin/pip install --constraint deploy/constraints/control-api.txt --editable 'apps/control-api[dev]'
           .venv/bin/python -m ruff check apps/control-api migrations deploy/release
           .venv/bin/python -m pytest apps/control-api/tests tests/e2e/test_smoke_secret.py
 

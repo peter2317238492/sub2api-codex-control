@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 from collections.abc import Sequence
+from types import TracebackType
 from typing import Self
 
 MAX_POLICY_BYTES = 1024 * 1024
@@ -20,6 +21,9 @@ DIRECTORY_WRITE_MASK = stat.S_IWGRP | stat.S_IWOTH
 OPEN_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 OPEN_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 OPEN_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+# Rollback must also run for process-control exceptions and any custom direct
+# BaseException subclass; the alias preserves the original catch domain exactly.
+ROLLBACK_FAILURES = BaseException
 
 
 class ProvisionError(RuntimeError):
@@ -461,7 +465,7 @@ class SecureDirectory:
         self,
         _exc_type: type[BaseException] | None = None,
         exc: BaseException | None = None,
-        _traceback: object | None = None,
+        _traceback: TracebackType | None = None,
     ) -> None:
         self._cleanup(
             rollback=self.create and not self.committed and self.fd >= 0,
@@ -478,7 +482,7 @@ class SecureDirectory:
         if rollback:
             try:
                 self._rollback_directory()
-            except BaseException as error:
+            except ROLLBACK_FAILURES as error:
                 cleanup_errors.append(error)
         if self.trusted_chain:
             descriptors = [item[0] for item in self.trusted_chain]
@@ -501,14 +505,14 @@ class SecureDirectory:
             self.parent = None
             try:
                 parent.__exit__()
-            except BaseException as error:
+            except ROLLBACK_FAILURES as error:
                 cleanup_errors.append(error)
         if self.parent_anchor is not None:
             parent_anchor = self.parent_anchor
             self.parent_anchor = None
             try:
                 parent_anchor.__exit__()
-            except BaseException as error:
+            except ROLLBACK_FAILURES as error:
                 cleanup_errors.append(error)
         if cleanup_errors:
             details = "; ".join(
@@ -1000,7 +1004,7 @@ def provision_log_file(
                     os.fchown(descriptor, original.st_uid, original.st_gid)
                     os.fchmod(descriptor, stat.S_IMODE(original.st_mode))
                     os.fsync(descriptor)
-            except BaseException as cleanup_error:
+            except ROLLBACK_FAILURES as cleanup_error:
                 raise ProvisionError(
                     "dedicated Nginx access log provisioning failed: "
                     f"{error}; rollback also failed: {cleanup_error}"

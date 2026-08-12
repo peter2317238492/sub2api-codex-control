@@ -601,6 +601,7 @@ class BackupReceiptTests(unittest.TestCase):
             success=False,
         )
 
+
 class ControlBackupTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()

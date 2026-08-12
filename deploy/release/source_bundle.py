@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Build and verify deterministic, signed-lock-bound source bundles."""
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
-
 
 ARCHIVE_FILENAME = "source.tar"
 MANIFEST_FILENAME = "source-files.manifest"
@@ -155,7 +153,10 @@ def require_sha256(value: str, label: str) -> str:
 
 
 def validate_repository(value: str) -> str:
-    if re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) is None:
+    if (
+        re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value)
+        is None
+    ):
         fail("source repository must be one canonical HTTPS GitHub repository")
     return value
 
@@ -176,8 +177,10 @@ def validate_path(value: str) -> str:
     ):
         fail("source path is not portable ASCII")
     path = PurePosixPath(value)
-    if path.is_absolute() or value != path.as_posix() or any(
-        component in {"", ".", ".."} for component in path.parts
+    if (
+        path.is_absolute()
+        or value != path.as_posix()
+        or any(component in {"", ".", ".."} for component in path.parts)
     ):
         fail("source path is not canonical and relative")
     if path.parts[0] not in ALLOWED_TOP_LEVEL:
@@ -205,9 +208,7 @@ def require_owned_directory(path: Path, label: str) -> None:
 
 def run_git(repo: Path, *arguments: str) -> bytes:
     environment = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith("GIT_")
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
     }
     environment.update(
         {
@@ -231,12 +232,12 @@ def run_git(repo: Path, *arguments: str) -> bytes:
     return result.stdout
 
 
-def validate_source_closure(
-    paths: set[str], component_manifest_raw: bytes
-) -> None:
+def validate_source_closure(paths: set[str], component_manifest_raw: bytes) -> None:
     missing_required = REQUIRED_SOURCE_PATHS - paths
     if missing_required:
-        fail(f"source inventory lacks required release files: {sorted(missing_required)}")
+        fail(
+            f"source inventory lacks required release files: {sorted(missing_required)}"
+        )
     component_manifest = strict_json(
         component_manifest_raw,
         "third-party component manifest",
@@ -258,17 +259,23 @@ def validate_source_closure(
                 fail("third-party component manifest has an invalid license path")
             license_path = validate_path(license_record["path"])
             if not license_path.startswith("third_party/licenses/"):
-                fail("third-party component license path is outside the license directory")
+                fail(
+                    "third-party component license path is outside the license directory"
+                )
             declared_license_paths.add(license_path)
     missing_licenses = declared_license_paths - paths
     if missing_licenses:
-        fail(f"source inventory lacks declared third-party licenses: {sorted(missing_licenses)}")
+        fail(
+            f"source inventory lacks declared third-party licenses: {sorted(missing_licenses)}"
+        )
 
 
 def git_source_records(
     repo: Path, expected_commit: str
 ) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
-    root = Path(run_git(repo, "rev-parse", "--show-toplevel").decode().strip()).resolve()
+    root = Path(
+        run_git(repo, "rev-parse", "--show-toplevel").decode().strip()
+    ).resolve()
     if root != repo.resolve():
         fail("source root is not the Git worktree root")
     commit = run_git(repo, "rev-parse", "HEAD").decode().strip()
@@ -292,7 +299,9 @@ def git_source_records(
         except (ValueError, UnicodeDecodeError):
             fail("committed source tree is malformed or non-ASCII")
         if object_type != b"blob" or mode_raw not in {b"100644", b"100755"}:
-            fail(f"source inventory contains a link, submodule, or unsupported mode: {path_text}")
+            fail(
+                f"source inventory contains a link, submodule, or unsupported mode: {path_text}"
+            )
         path_text = validate_path(path_text)
         if path_text in seen:
             fail(f"source inventory repeats {path_text}")
@@ -577,7 +586,12 @@ def parse_manifest(raw: bytes) -> list[dict[str, Any]]:
     seen: set[str] = set()
     for line in raw.splitlines():
         value = strict_json(line, "source manifest entry")
-        if not isinstance(value, dict) or set(value) != {"mode", "path", "sha256", "size"}:
+        if not isinstance(value, dict) or set(value) != {
+            "mode",
+            "path",
+            "sha256",
+            "size",
+        }:
             fail("source manifest entry has an unexpected schema")
         path = validate_path(value["path"])
         if path in seen:
@@ -586,7 +600,10 @@ def parse_manifest(raw: bytes) -> list[dict[str, Any]]:
         if value["mode"] not in {"0444", "0555"}:
             fail(f"source manifest mode is invalid: {path}")
         require_sha256(value["sha256"], f"source manifest digest for {path}")
-        if type(value["size"]) is not int or not 0 <= value["size"] <= MAX_SOURCE_FILE_BYTES:
+        if (
+            type(value["size"]) is not int
+            or not 0 <= value["size"] <= MAX_SOURCE_FILE_BYTES
+        ):
             fail(f"source manifest size is invalid: {path}")
         if canonical_json(value).rstrip(b"\n") != line:
             fail("source manifest entry is not canonical JSON")
@@ -631,16 +648,26 @@ def validate_attestation(
         or not 0 < value["source_date_epoch"] <= MAX_SOURCE_DATE_EPOCH
     ):
         fail("source attestation epoch is invalid")
-    if type(value["file_count"]) is not int or not 0 < value["file_count"] <= MAX_SOURCE_FILES:
+    if (
+        type(value["file_count"]) is not int
+        or not 0 < value["file_count"] <= MAX_SOURCE_FILES
+    ):
         fail("source attestation file count is invalid")
-    if type(value["total_bytes"]) is not int or not 0 <= value["total_bytes"] <= MAX_SOURCE_BYTES:
+    if (
+        type(value["total_bytes"]) is not int
+        or not 0 <= value["total_bytes"] <= MAX_SOURCE_BYTES
+    ):
         fail("source attestation byte count is invalid")
     for name, filename, maximum in (
         ("manifest", MANIFEST_FILENAME, MAX_MANIFEST_BYTES),
         ("archive", ARCHIVE_FILENAME, MAX_ARCHIVE_BYTES),
     ):
         record = value[name]
-        if not isinstance(record, dict) or set(record) != {"filename", "sha256", "size"}:
+        if not isinstance(record, dict) or set(record) != {
+            "filename",
+            "sha256",
+            "size",
+        }:
             fail(f"source attestation {name} record is invalid")
         if record["filename"] != filename:
             fail(f"source attestation {name} filename is invalid")
@@ -655,11 +682,16 @@ def validate_archive(raw: bytes, records: list[dict[str, Any]], epoch: int) -> b
     seen: set[str] = set()
     content_by_path: dict[str, bytes] = {}
     component_manifest_raw: bytes | None = None
-    try:
-        archive = tarfile.open(fileobj=io.BytesIO(raw), mode="r:")
-    except (OSError, tarfile.TarError) as error:
-        raise SourceBundleError("source archive is not a valid USTAR archive") from error
-    with archive:
+
+    def open_archive() -> tarfile.TarFile:
+        try:
+            return tarfile.open(fileobj=io.BytesIO(raw), mode="r:")
+        except (OSError, tarfile.TarError) as error:
+            raise SourceBundleError(
+                "source archive is not a valid USTAR archive"
+            ) from error
+
+    with open_archive() as archive:
         for index, member in enumerate(archive):
             path = validate_path(member.name)
             if index >= len(records) or path != records[index]["path"]:
@@ -730,8 +762,12 @@ def verify_bundle(
     attestation_raw = require_release_file(
         attestation_path, "source attestation", MAX_ATTESTATION_BYTES
     )
-    manifest_raw = require_release_file(manifest_path, "source manifest", MAX_MANIFEST_BYTES)
-    archive_raw = require_release_file(archive_path, "source archive", MAX_ARCHIVE_BYTES)
+    manifest_raw = require_release_file(
+        manifest_path, "source manifest", MAX_MANIFEST_BYTES
+    )
+    archive_raw = require_release_file(
+        archive_path, "source archive", MAX_ARCHIVE_BYTES
+    )
     if sha256_bytes(attestation_raw) != require_sha256(
         attestation_sha256, "expected source attestation digest"
     ):
@@ -897,7 +933,9 @@ def extract_verified_bundle(
                 try:
                     member = archive.next()
                 except (OSError, tarfile.TarError) as error:
-                    raise SourceBundleError("source archive changed during extraction") from error
+                    raise SourceBundleError(
+                        "source archive changed during extraction"
+                    ) from error
                 if (
                     member is None
                     or member.name != record["path"]
@@ -909,7 +947,9 @@ def extract_verified_bundle(
                 relative_parent = Path()
                 try:
                     for component in parts[:-1]:
-                        next_fd = _open_directory_at(directory_fd, component, create=True)
+                        next_fd = _open_directory_at(
+                            directory_fd, component, create=True
+                        )
                         os.close(directory_fd)
                         directory_fd = next_fd
                         relative_parent /= component
@@ -926,7 +966,9 @@ def extract_verified_bundle(
                     try:
                         source = archive.extractfile(member)
                         if source is None:
-                            fail("source archive member cannot be read during extraction")
+                            fail(
+                                "source archive member cannot be read during extraction"
+                            )
                         digest = hashlib.sha256()
                         total = 0
                         while block := source.read(1024 * 1024):
@@ -940,7 +982,10 @@ def extract_verified_bundle(
                                 if written <= 0:
                                     fail("short write during source extraction")
                                 view = view[written:]
-                        if total != record["size"] or digest.hexdigest() != record["sha256"]:
+                        if (
+                            total != record["size"]
+                            or digest.hexdigest() != record["sha256"]
+                        ):
                             fail("source archive member changed during extraction")
                         os.fchmod(output_fd, int(record["mode"], 8))
                         os.fsync(output_fd)
@@ -1024,7 +1069,11 @@ def main(argv: list[str] | None = None) -> int:
                 source_date_epoch=args.source_date_epoch,
             )
         else:
-            verifier = extract_verified_bundle if args.extract_to is not None else verify_bundle
+            verifier = (
+                extract_verified_bundle
+                if args.extract_to is not None
+                else verify_bundle
+            )
             keywords = {
                 "release": args.release,
                 "repository": args.source_repository,

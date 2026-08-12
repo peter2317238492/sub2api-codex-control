@@ -6,7 +6,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "check_licenses", ROOT / "scripts/check-licenses.py"
@@ -55,9 +54,16 @@ class LicenseComplianceTests(unittest.TestCase):
 
     def test_modified_license_text_fails_closed(self) -> None:
         path = self.root / "third_party/licenses/Vue-LICENSE.txt"
-        path.write_text(path.read_text(encoding="utf-8") + "modified\n", encoding="utf-8")
+        path.write_text(
+            path.read_text(encoding="utf-8") + "modified\n", encoding="utf-8"
+        )
         errors = CHECK_LICENSES.validate(self.root)
-        self.assertTrue(any("SHA-256 mismatch" in error and "Vue-LICENSE" in error for error in errors))
+        self.assertTrue(
+            any(
+                "SHA-256 mismatch" in error and "Vue-LICENSE" in error
+                for error in errors
+            )
+        )
 
     def test_self_consistent_manifest_and_license_tampering_fails_closed(self) -> None:
         license_path = self.root / "third_party/licenses/Vue-LICENSE.txt"
@@ -66,12 +72,20 @@ class LicenseComplianceTests(unittest.TestCase):
         digest = hashlib.sha256(tampered).hexdigest()
         manifest_path = self.root / "third_party/components.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        vue = next(component for component in manifest["components"] if component["id"] == "vue")
+        vue = next(
+            component
+            for component in manifest["components"]
+            if component["id"] == "vue"
+        )
         vue["license_files"][0]["file_sha256"] = digest
         vue["license_files"][0]["source_sha256"] = digest
-        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
         errors = CHECK_LICENSES.validate(self.root)
-        self.assertTrue(any("components.json SHA-256 mismatch" in error for error in errors))
+        self.assertTrue(
+            any("components.json SHA-256 mismatch" in error for error in errors)
+        )
 
     def test_legacy_go_module_import_fails_closed(self) -> None:
         path = next((self.root / "connector").rglob("*.go"))
@@ -81,7 +95,9 @@ class LicenseComplianceTests(unittest.TestCase):
             encoding="utf-8",
         )
         errors = CHECK_LICENSES.validate(self.root)
-        self.assertTrue(any("legacy private Go module import" in error for error in errors))
+        self.assertTrue(
+            any("legacy private Go module import" in error for error in errors)
+        )
 
     def test_node_package_author_drift_fails_closed(self) -> None:
         path = self.root / "apps/pwa/package.json"
@@ -103,14 +119,23 @@ class LicenseComplianceTests(unittest.TestCase):
             encoding="utf-8",
         )
         errors = CHECK_LICENSES.validate(self.root)
-        self.assertTrue(any("must expose only workflow_dispatch" in error for error in errors))
+        self.assertTrue(
+            any("must expose only workflow_dispatch" in error for error in errors)
+        )
 
     def test_release_guard_bypass_fails_closed(self) -> None:
         path = self.root / ".github/workflows/control-images-release.yml"
         text = path.read_text(encoding="utf-8")
-        path.write_text(text.replace("          exit 1", "          exit 0", 1), encoding="utf-8")
+        path.write_text(
+            text.replace("          exit 1", "          exit 0", 1), encoding="utf-8"
+        )
         errors = CHECK_LICENSES.validate(self.root)
-        self.assertTrue(any("source-only-guard must terminate with exit 1" in error for error in errors))
+        self.assertTrue(
+            any(
+                "source-only-guard must terminate with exit 1" in error
+                for error in errors
+            )
+        )
 
     def test_conditional_release_guard_exit_fails_closed(self) -> None:
         path = self.root / ".github/workflows/connector-release.yml"
@@ -141,7 +166,10 @@ class LicenseComplianceTests(unittest.TestCase):
             )
         errors = CHECK_LICENSES.validate(self.root)
         self.assertTrue(
-            any("control-images-release.yml SHA-256 mismatch" in error for error in errors)
+            any(
+                "control-images-release.yml SHA-256 mismatch" in error
+                for error in errors
+            )
         )
 
     def test_additional_workflow_fails_closed(self) -> None:
@@ -174,8 +202,12 @@ class LicenseComplianceTests(unittest.TestCase):
             encoding="utf-8",
         )
         errors = CHECK_LICENSES.validate(self.root)
-        self.assertTrue(any("THIRD_PARTY_NOTICES.md SHA-256 mismatch" in error for error in errors))
-        self.assertTrue(any("component table does not match" in error for error in errors))
+        self.assertTrue(
+            any("THIRD_PARTY_NOTICES.md SHA-256 mismatch" in error for error in errors)
+        )
+        self.assertTrue(
+            any("component table does not match" in error for error in errors)
+        )
 
 
 if __name__ == "__main__":

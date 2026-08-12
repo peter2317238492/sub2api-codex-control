@@ -670,7 +670,9 @@ def source_asset_record(path: Path, expected_filename: str) -> dict[str, Any]:
     require_regular_file(path, f"source asset {expected_filename}")
     metadata = path.stat()
     if metadata.st_nlink != 1 or stat.S_IMODE(metadata.st_mode) & 0o022:
-        fail(f"source asset is hard-linked or writable by another user: {expected_filename}")
+        fail(
+            f"source asset is hard-linked or writable by another user: {expected_filename}"
+        )
     return {
         "filename": expected_filename,
         "sha256": sha256_file(path),
@@ -678,9 +680,7 @@ def source_asset_record(path: Path, expected_filename: str) -> dict[str, Any]:
     }
 
 
-def verify_source_bundle(
-    directory: Path, lock: dict[str, Any]
-) -> dict[str, Any]:
+def verify_source_bundle(directory: Path, lock: dict[str, Any]) -> dict[str, Any]:
     assets = lock["source_bundle"]
     try:
         return source_bundle_tool.verify_bundle(
@@ -713,8 +713,12 @@ def command_create_lock(args: argparse.Namespace) -> None:
         "manifest": source_bundle_tool.MANIFEST_FILENAME,
         "attestation": source_bundle_tool.ATTESTATION_FILENAME,
     }
-    if any(path.parent.resolve() != output_dir.resolve() for path in source_paths.values()):
-        fail("all source assets must be direct children of the release output directory")
+    if any(
+        path.parent.resolve() != output_dir.resolve() for path in source_paths.values()
+    ):
+        fail(
+            "all source assets must be direct children of the release output directory"
+        )
     source_assets = {
         name: source_asset_record(source_paths[name], expected_source_names[name])
         for name in ("archive", "manifest", "attestation")
@@ -865,7 +869,9 @@ def validate_lock(lock: dict[str, Any]) -> None:
         asset = source_assets[name]
         if not isinstance(asset, dict):
             fail(f"source bundle {name} record must be an object")
-        require_exact_keys(asset, {"filename", "sha256", "size"}, f"source bundle {name}")
+        require_exact_keys(
+            asset, {"filename", "sha256", "size"}, f"source bundle {name}"
+        )
         if asset["filename"] != expected_source_names[name]:
             fail(f"source bundle {name} filename is invalid")
         if not isinstance(asset["sha256"], str) or not re.fullmatch(
@@ -1288,7 +1294,9 @@ def verify_release_snapshot(
         "CONTROL_RELEASE_LOCK_SHA256": evidence_sha256s[LOCK_FILENAME],
         "CONTROL_SOURCE_REPOSITORY": lock["source"]["repository"],
         "CONTROL_SOURCE_ARCHIVE_SHA256": lock["source_bundle"]["archive"]["sha256"],
-        "CONTROL_SOURCE_ATTESTATION_SHA256": lock["source_bundle"]["attestation"]["sha256"],
+        "CONTROL_SOURCE_ATTESTATION_SHA256": lock["source_bundle"]["attestation"][
+            "sha256"
+        ],
         "CONTROL_SOURCE_MANIFEST_SHA256": lock["source_bundle"]["manifest"]["sha256"],
         "CONTROL_SUB2API_AUTH_CONTRACT_PATH": auth_contract_path,
         "CONTROL_SUB2API_AUTH_CONTRACT_SHA256": release_inputs[auth_contract_path],

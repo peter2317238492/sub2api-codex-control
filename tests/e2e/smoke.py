@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from email.message import Message
 from pathlib import Path
 
+
 @dataclass
 class Result:
     status: int
@@ -96,7 +97,10 @@ def read_private_bytes(path: Path | str, label: str, maximum: int) -> bytes:
             named_metadata.st_mtime_ns,
             named_metadata.st_ctime_ns,
         )
-        if not stat.S_ISREG(opened_metadata.st_mode) or opened_signature != named_signature:
+        if (
+            not stat.S_ISREG(opened_metadata.st_mode)
+            or opened_signature != named_signature
+        ):
             raise ValueError(f"{label} changed while it was opened")
         if opened_metadata.st_uid != os.geteuid():
             raise ValueError(f"{label} must be owned by the deployment user")
@@ -143,7 +147,10 @@ def read_private_bytes(path: Path | str, label: str, maximum: int) -> bytes:
             final_named.st_mtime_ns,
             final_named.st_ctime_ns,
         )
-        if final_signature != opened_signature or final_named_signature != opened_signature:
+        if (
+            final_signature != opened_signature
+            or final_named_signature != opened_signature
+        ):
             raise ValueError(f"{label} changed while it was read")
     finally:
         os.close(descriptor)

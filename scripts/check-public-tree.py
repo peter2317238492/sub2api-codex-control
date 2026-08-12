@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Fail closed when the public source tree contains private or generated data."""
 
 from __future__ import annotations
@@ -11,7 +10,6 @@ import stat
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
-
 
 FORBIDDEN_NAMES = {
     ".appledouble",
@@ -150,11 +148,17 @@ def path_policy_failures(value: str, *, is_directory: bool) -> list[str]:
     name = parts[-1]
     for directory, admitted_names in PLACEHOLDER_DIRECTORIES.items():
         if folded == directory:
-            return [] if is_directory else ["reserved placeholder path has the wrong type"]
+            return (
+                [] if is_directory else ["reserved placeholder path has the wrong type"]
+            )
         prefix = f"{directory}/"
         if folded.startswith(prefix):
             remainder = folded[len(prefix) :]
-            if "/" not in remainder and remainder in admitted_names and not is_directory:
+            if (
+                "/" not in remainder
+                and remainder in admitted_names
+                and not is_directory
+            ):
                 return []
             return ["runtime-private placeholder directory contains an unadmitted path"]
 
@@ -212,10 +216,14 @@ def scan_bytes(
     ]
     if denied_path:
         failures.append(
-            _finding(scope, display, "relative path contains an externally denied literal")
+            _finding(
+                scope, display, "relative path contains an externally denied literal"
+            )
         )
     if len(raw) > TEXT_BYTES_LIMIT:
-        failures.append(_finding(scope, display, "file exceeds the public text size limit"))
+        failures.append(
+            _finding(scope, display, "file exceeds the public text size limit")
+        )
         return failures
     try:
         text = raw.decode("utf-8")
@@ -226,7 +234,9 @@ def scan_bytes(
             or hashlib.sha256(raw).hexdigest() != expected_binary_digest
         ):
             failures.append(
-                _finding(scope, display, "non-UTF-8 file is not an admitted binary asset")
+                _finding(
+                    scope, display, "non-UTF-8 file is not an admitted binary asset"
+                )
             )
         return failures
     for label, pattern in FORBIDDEN_TEXT.items():
@@ -234,7 +244,9 @@ def scan_bytes(
             failures.append(_finding(scope, display, f"contains {label}"))
     folded_text = text.casefold()
     if any(literal.casefold() in folded_text for literal in deny_literals):
-        failures.append(_finding(scope, display, "contains an externally denied literal"))
+        failures.append(
+            _finding(scope, display, "contains an externally denied literal")
+        )
     return failures
 
 
@@ -258,7 +270,9 @@ def run_git(root: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
             env=environment,
         )
     except OSError as error:
-        raise RuntimeError("Git cannot be executed for tracked-source scanning") from error
+        raise RuntimeError(
+            "Git cannot be executed for tracked-source scanning"
+        ) from error
 
 
 def _scan_git_entry(
@@ -281,10 +295,17 @@ def _scan_git_entry(
     ]
     if denied_path:
         failures.append(
-            _finding(scope, display, "relative path contains an externally denied literal")
+            _finding(
+                scope, display, "relative path contains an externally denied literal"
+            )
         )
-    if mode not in {b"100644", b"100755"} or re.fullmatch(r"[0-9a-f]{40,64}", oid) is None:
-        failures.append(_finding(scope, display, "tracked entry is not a regular source file"))
+    if (
+        mode not in {b"100644", b"100755"}
+        or re.fullmatch(r"[0-9a-f]{40,64}", oid) is None
+    ):
+        failures.append(
+            _finding(scope, display, "tracked entry is not a regular source file")
+        )
         return failures
     size_result = run_git(root, "cat-file", "-s", oid)
     try:
@@ -295,11 +316,15 @@ def _scan_git_entry(
         failures.append(_finding(scope, display, "tracked blob cannot be inspected"))
         return failures
     if size > TEXT_BYTES_LIMIT:
-        failures.append(_finding(scope, display, "file exceeds the public text size limit"))
+        failures.append(
+            _finding(scope, display, "file exceeds the public text size limit")
+        )
         return failures
     blob_result = run_git(root, "cat-file", "blob", oid)
     if blob_result.returncode != 0 or len(blob_result.stdout) != size:
-        failures.append(_finding(scope, display, "tracked blob cannot be read completely"))
+        failures.append(
+            _finding(scope, display, "tracked blob cannot be read completely")
+        )
         return failures
     failures.extend(
         scan_bytes(
@@ -356,7 +381,9 @@ def scan_git_sources(root: Path, deny_literals: tuple[str, ...]) -> list[str]:
         failures.append("Git HEAD cannot be resolved")
     elif head.returncode == 0:
         commit = head.stdout.strip()
-        tree = run_git(root, "ls-tree", "-r", "-z", "--full-tree", commit.decode("ascii"))
+        tree = run_git(
+            root, "ls-tree", "-r", "-z", "--full-tree", commit.decode("ascii")
+        )
         if tree.returncode != 0:
             failures.append("Git HEAD tree cannot be enumerated")
         else:
@@ -407,8 +434,12 @@ def scan(root: Path, deny_literals: tuple[str, ...] = ()) -> list[str]:
                 except OSError:
                     failures.append("Git metadata cannot be inspected")
                 else:
-                    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-                        failures.append("Git metadata must be a real directory or worktree file")
+                    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(
+                        metadata.st_mode
+                    ):
+                        failures.append(
+                            "Git metadata must be a real directory or worktree file"
+                        )
                 continue
             try:
                 metadata = path.lstat()
@@ -435,7 +466,11 @@ def scan(root: Path, deny_literals: tuple[str, ...] = ()) -> list[str]:
             failures.extend(_finding("", display, message) for message in path_failures)
             if denied_path:
                 failures.append(
-                    _finding("", display, "relative path contains an externally denied literal")
+                    _finding(
+                        "",
+                        display,
+                        "relative path contains an externally denied literal",
+                    )
                 )
             if path_failures or denied_path:
                 continue
@@ -452,8 +487,12 @@ def scan(root: Path, deny_literals: tuple[str, ...] = ()) -> list[str]:
                 except OSError:
                     failures.append("Git metadata cannot be inspected")
                 else:
-                    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-                        failures.append("Git metadata must be a real directory or worktree file")
+                    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(
+                        metadata.st_mode
+                    ):
+                        failures.append(
+                            "Git metadata must be a real directory or worktree file"
+                        )
                 continue
             try:
                 metadata = path.lstat()

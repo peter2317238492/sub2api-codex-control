@@ -8,6 +8,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -664,7 +665,7 @@ class NginxAccessLogProvisionerTests(unittest.TestCase):
                 ):
                     self.run_provision()
                 os._exit(0)
-            except BaseException:
+            except PROVISIONER.ROLLBACK_FAILURES:
                 os._exit(97)
 
         os.close(ready_write)
@@ -718,21 +719,26 @@ class NginxAccessLogProvisionerTests(unittest.TestCase):
                 fired = {"value": False}
 
                 def chmod_then_interrupt(
-                    descriptor: int, mode: int, *args: object, **kwargs: object
+                    descriptor: int,
+                    mode: int,
+                    *args: object,
+                    _original: Callable[..., object] = original,
+                    _fired: dict[str, bool] = fired,
+                    **kwargs: object,
                 ) -> object:
-                    result = original(descriptor, mode, *args, **kwargs)
+                    result = _original(descriptor, mode, *args, **kwargs)
                     try:
                         opened = os.fstat(descriptor)
                         named = os.lstat(self.paths.log_path)
                     except (FileNotFoundError, OSError):
                         return result
                     if (
-                        not fired["value"]
+                        not _fired["value"]
                         and mode == 0o640
                         and (opened.st_dev, opened.st_ino)
                         == (named.st_dev, named.st_ino)
                     ):
-                        fired["value"] = True
+                        _fired["value"] = True
                         raise KeyboardInterrupt("injected after log chmod")
                     return result
 

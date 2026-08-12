@@ -463,7 +463,9 @@ else:
         self.assertNotIn("\ninspect ", f"\n{commands}")
 
     def test_public_lock_has_only_portable_immutable_metadata(self) -> None:
-        lock = json.loads((REPO_ROOT / "versions.lock.json").read_text(encoding="utf-8"))
+        lock = json.loads(
+            (REPO_ROOT / "versions.lock.json").read_text(encoding="utf-8")
+        )
         self.assertNotIn("captured_at", lock)
         self.assertTrue(
             RUNTIME_MODULE.PROHIBITED_LEGACY_LOCK_FIELDS.isdisjoint(lock["sub2api"])

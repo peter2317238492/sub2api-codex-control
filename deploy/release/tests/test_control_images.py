@@ -75,10 +75,12 @@ class ControlImageReleaseTests(unittest.TestCase):
                 **self.common,
                 output_dir=str(self.release_dir),
                 source_archive=str(
-                    self.release_dir / control_images.source_bundle_tool.ARCHIVE_FILENAME
+                    self.release_dir
+                    / control_images.source_bundle_tool.ARCHIVE_FILENAME
                 ),
                 source_manifest=str(
-                    self.release_dir / control_images.source_bundle_tool.MANIFEST_FILENAME
+                    self.release_dir
+                    / control_images.source_bundle_tool.MANIFEST_FILENAME
                 ),
                 source_attestation=str(
                     self.release_dir
@@ -536,7 +538,9 @@ class ControlImageReleaseTests(unittest.TestCase):
                 path = self.release_dir / filename
                 original = path.read_bytes()
                 path.write_bytes(original + b"x")
-                with self.assertRaisesRegex(control_images.ReleaseError, "source bundle"):
+                with self.assertRaisesRegex(
+                    control_images.ReleaseError, "source bundle"
+                ):
                     control_images.validate_release_directory(
                         self.release_dir, expect_bundle=True
                     )
@@ -645,7 +649,8 @@ class ControlImageReleaseTests(unittest.TestCase):
                 self.release_dir / control_images.source_bundle_tool.MANIFEST_FILENAME
             ),
             source_attestation=str(
-                self.release_dir / control_images.source_bundle_tool.ATTESTATION_FILENAME
+                self.release_dir
+                / control_images.source_bundle_tool.ATTESTATION_FILENAME
             ),
             control_api_repository=API_REPOSITORY,
             control_api_digest=API_DIGEST,
@@ -757,20 +762,23 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
         self.assertLess(push, lock)
         self.assertIn("source_bundle.py build", workflow[source:login])
         self.assertIn("source_bundle.py verify", workflow[source:login])
-        self.assertIn('archive_sha256=$(digest "$RELEASE_DIR/source.tar")', workflow[source:login])
+        self.assertIn(
+            'archive_sha256=$(digest "$RELEASE_DIR/source.tar")', workflow[source:login]
+        )
         self.assertNotIn("source.tar.gz", workflow)
         self.assertIn('--source-archive "$RELEASE_DIR/source.tar"', workflow[lock:])
         self.assertIn(
             '--source-manifest "$RELEASE_DIR/source-files.manifest"', workflow[lock:]
         )
         self.assertIn(
-            '--source-attestation "$RELEASE_DIR/source-attestation.json"', workflow[lock:]
+            '--source-attestation "$RELEASE_DIR/source-attestation.json"',
+            workflow[lock:],
         )
 
-    def test_connector_release_checks_public_source_before_build_or_upload(self) -> None:
-        workflow = (
-            REPO_ROOT / ".github/workflows/connector-release.yml"
-        ).read_text()
+    def test_connector_release_checks_public_source_before_build_or_upload(
+        self,
+    ) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/connector-release.yml").read_text()
         build = workflow.index("  build:")
         public_check = workflow.index("scripts/check-public-tree.py", build)
         license_check = workflow.index("scripts/check-licenses.py", public_check)

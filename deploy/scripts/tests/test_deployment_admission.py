@@ -1481,12 +1481,23 @@ class WrapperFailClosedTests(unittest.TestCase):
         self.assertLess(signed_verify, source_extract)
         self.assertLess(source_extract, compose_resolution)
         self.assertLess(compose_resolution, first_pull)
-        self.assertIn('repo_root="$source_stage"', script[source_extract:compose_resolution])
-        self.assertIn('--extract-to "$source_stage"', script[source_extract:compose_resolution])
+        self.assertIn(
+            'repo_root="$source_stage"', script[source_extract:compose_resolution]
+        )
+        self.assertIn(
+            '--extract-to "$source_stage"', script[source_extract:compose_resolution]
+        )
         self.assertIn("--require-root-owner", script[source_extract:compose_resolution])
-        self.assertIn("CONTROL_SOURCE_ARCHIVE_SHA256", script[source_extract:compose_resolution])
-        self.assertIn("CONTROL_SOURCE_ATTESTATION_SHA256", script[source_extract:compose_resolution])
-        self.assertIn("CONTROL_SOURCE_MANIFEST_SHA256", script[source_extract:compose_resolution])
+        self.assertIn(
+            "CONTROL_SOURCE_ARCHIVE_SHA256", script[source_extract:compose_resolution]
+        )
+        self.assertIn(
+            "CONTROL_SOURCE_ATTESTATION_SHA256",
+            script[source_extract:compose_resolution],
+        )
+        self.assertIn(
+            "CONTROL_SOURCE_MANIFEST_SHA256", script[source_extract:compose_resolution]
+        )
         self.assertIn('versions_lock_source="$repo_root/versions.lock.json"', script)
         self.assertNotIn("auth_evidence=${SUB2API_AUTH_EVIDENCE_FILE", script)
         self.assertIn("external SUB2API_AUTH_EVIDENCE_FILE is prohibited", script)
