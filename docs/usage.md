@@ -2,9 +2,9 @@
 
 [简体中文](usage.zh-CN.md) | [Documentation index](../README.md#documentation)
 
-This guide assumes an admitted Control deployment already exists. The first
-public version of this repository does not include supported production images
-or a prebuilt Connector.
+This guide assumes an admitted Control deployment and a signed `connector-v*`
+Release already exist. The current repository state is a source release
+candidate; do not treat its ad hoc builds as supported production packages.
 
 ## Sign in before opening the PWA
 
@@ -16,9 +16,10 @@ credentials stay in the Sub2API browser flow and never enter the Control API.
 
 ## Pair a device
 
-1. Build and configure the Connector as described in
-   [Installation](installation.md#build-a-connector-as-an-ordinary-user).
-2. Run it with `-pair-only` and leave the process running.
+1. In the PWA, open **Devices -> Set up Connector**, install the package for
+   your platform, and generate or initialize the private configuration as
+   described in [Installation](installation.md#install-a-signed-connector-package).
+2. Run `sub2api-codex-connector-ctl pair` and leave it running.
 3. Read the code only from the mode-`0600` `pairing-code.json` path printed on
    stderr. Treat it as a temporary credential.
 4. In the PWA, choose **Pair device**, enter the 16-character code, and confirm
@@ -26,16 +27,24 @@ credentials stay in the Sub2API browser flow and never enter the Control API.
 5. Wait for the Connector to confirm the claim and exit. An expired or rejected
    code must be paired again; do not share it over an untrusted channel.
 
-Start the long-lived Connector as the ordinary Codex user:
+Start the user service as the ordinary Codex user:
 
 ```sh
-/absolute/path/to/sub2api-codex-connector \
-  -config "$HOME/.config/sub2api-codex-control/connector.json"
+sub2api-codex-connector-ctl start
+sub2api-codex-connector-ctl status
 ```
 
-The Connector opens an outbound connection only. Keep the process under a
-user-owned service supervisor if it must survive logout, and ensure its state
-directory remains private to that user.
+The Connector opens an outbound connection only. The native package manages it
+with a user-level service and keeps its state private to that user.
+
+Useful lifecycle and diagnostic commands are:
+
+```sh
+sub2api-codex-connector-ctl stop
+sub2api-codex-connector-ctl restart
+sub2api-codex-connector-ctl status
+sub2api-codex-connector-ctl logs
+```
 
 ## Work with Codex
 
@@ -57,6 +66,13 @@ Use the device menu to revoke a lost or retired Connector. Revocation prevents
 future token exchanges and closes the useful remote path; remove the private
 Connector state directory on the device only after preserving any evidence
 required by your incident policy.
+
+Native package removal preserves the user's private Connector state. After
+revocation, explicitly remove it only when it is no longer needed:
+
+```sh
+sub2api-codex-connector-ctl purge-user-state --yes
+```
 
 Use the PWA sign-out action when finished. It coordinates Control-session and
 Sub2API logout. Closing a browser tab alone is not an explicit logout.
