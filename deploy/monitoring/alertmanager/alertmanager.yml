@@ -1,0 +1,27 @@
+global:
+  resolve_timeout: 1m
+
+route:
+  receiver: external-operator-delivery-not-configured
+  group_by:
+    - alertname
+    - service
+  group_wait: 1s
+  group_interval: 10s
+  repeat_interval: 4h
+  routes:
+    - receiver: local-append-only-evidence
+      matchers:
+        - alertname="CodexControlLocalDeliveryTest"
+
+receivers:
+  - name: external-operator-delivery-not-configured
+  - name: local-append-only-evidence
+    webhook_configs:
+      - url: http://127.0.0.1:19094/v1/alerts
+        send_resolved: true
+        max_alerts: 0
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /run/secrets/evidence_receiver_bearer

@@ -7,6 +7,7 @@ import hashlib
 import http.cookiejar
 import json
 import os
+import re
 import socket
 import ssl
 import stat
@@ -19,6 +20,46 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import Message
 from pathlib import Path
+
+CHALLENGE_UUID4_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+CHALLENGE_DEPLOYMENT_RE = re.compile(
+    r"^bootstrap-[0-9]{8}T[0-9]{6}Z-"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+AUTHENTICATED_CATALOG_SHA256 = (
+    "099d9f4688d72f6866a9d852c8ab4d6b469bf799dde8e879882d94371be31cf7"
+)
+CLOSURE_DEVICE_FLOW_OPTIONS = (
+    ("pairing_code", "--pairing-code"),
+    ("expected_device_id", "--expected-device-id"),
+    ("workspace_root", "--workspace-root"),
+    ("keep_device", "--keep-device"),
+    ("reconnect_only", "--reconnect-only"),
+    ("device_id_file", "--device-id-file"),
+    ("expected_thread_id", "--expected-thread-id"),
+    ("thread_id_file", "--thread-id-file"),
+    ("provider_key_canary_file", "--provider-key-canary-file"),
+    ("expect_cross_instance_fanout", "--expect-cross-instance-fanout"),
+)
+CLOSURE_ALLOWED_ARGUMENTS = frozenset(
+    {
+        "base_url",
+        "access_token_file",
+        "expected_user_id_file",
+        "expect_secure_cookie",
+        "closure_challenge_file",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ClosureChallenge:
+    challenge_sha256: str
+    public_origin: str
+    target_binding_sha256: str
 
 
 @dataclass
@@ -174,6 +215,167 @@ def read_private_opaque_file(path: Path | str, label: str) -> str:
     return value
 
 
+def canonical_https_origin(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value or not value.isascii():
+        raise ValueError(f"{label} is invalid")
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise ValueError(f"{label} is invalid") from None
+    hostname = parsed.hostname
+    if (
+        parsed.scheme != "https"
+        or hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(f"{label} must be one canonical HTTPS origin")
+    host = f"[{hostname.lower()}]" if ":" in hostname else hostname.lower()
+    canonical = f"https://{host}"
+    if port is not None and port != 443:
+        canonical += f":{port}"
+    if value != canonical:
+        raise ValueError(f"{label} must be canonical")
+    return canonical
+
+
+def validate_closure_mode_arguments(args: argparse.Namespace) -> None:
+    if args.access_token is not None:
+        raise ValueError("closure challenge mode rejects --access-token")
+    if "SUB2API_ACCESS_TOKEN" in os.environ:
+        raise ValueError(
+            "closure challenge mode rejects SUB2API_ACCESS_TOKEN environment input"
+        )
+    if args.expected_user_id is not None:
+        raise ValueError("closure challenge mode rejects --expected-user-id")
+    if "SUB2API_EXPECTED_USER_ID" in os.environ:
+        raise ValueError(
+            "closure challenge mode rejects SUB2API_EXPECTED_USER_ID environment input"
+        )
+    option_names = dict(CLOSURE_DEVICE_FLOW_OPTIONS)
+    for attribute, value in vars(args).items():
+        if attribute not in CLOSURE_ALLOWED_ARGUMENTS and value not in (None, False):
+            option = option_names.get(attribute, f"--{attribute.replace('_', '-')}")
+            raise ValueError(f"closure challenge mode rejects {option}")
+    if not args.access_token_file:
+        raise ValueError("closure challenge mode requires --access-token-file")
+    if not args.expected_user_id_file:
+        raise ValueError("closure challenge mode requires --expected-user-id-file")
+    if not args.base_url:
+        raise ValueError("closure challenge mode requires explicit --base-url")
+    if args.insecure:
+        raise ValueError("closure challenge mode rejects --insecure")
+    if not args.expect_secure_cookie:
+        raise ValueError("closure challenge mode requires --expect-secure-cookie")
+
+
+def read_closure_challenge(path: Path | str) -> ClosureChallenge:
+    raw = read_private_bytes(path, "closure challenge file", 16 * 1024)
+    if (
+        len(raw) > 16 * 1024
+        or not raw.endswith(b"\n")
+        or b"\r" in raw
+        or b"\x00" in raw
+    ):
+        raise ValueError("closure challenge is not canonical newline-delimited JSON")
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("closure challenge is not valid JSON") from exc
+    expected_keys = {
+        "$schema",
+        "format_version",
+        "deployment_id",
+        "deployment_basename",
+        "bootstrap_record_sha256",
+        "issued_at",
+        "nonce",
+        "target",
+    }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise ValueError("closure challenge has an unexpected schema")
+    if value["format_version"] != 2:
+        raise ValueError("closure challenge has an unexpected format version")
+    if value["$schema"] != (
+        "https://sub2api-codex.invalid/schemas/authenticated-smoke-challenge-v2.json"
+    ):
+        raise ValueError("closure challenge has an unexpected schema ID")
+    deployment_id = value["deployment_id"]
+    deployment_basename = value["deployment_basename"]
+    bootstrap_sha256 = value["bootstrap_record_sha256"]
+    nonce = value["nonce"]
+    if (
+        not isinstance(deployment_id, str)
+        or CHALLENGE_UUID4_RE.fullmatch(deployment_id) is None
+    ):
+        raise ValueError("closure challenge deployment_id is invalid")
+    if (
+        not isinstance(deployment_basename, str)
+        or CHALLENGE_DEPLOYMENT_RE.fullmatch(deployment_basename) is None
+        or not deployment_basename.endswith(deployment_id)
+    ):
+        raise ValueError("closure challenge deployment_basename is invalid")
+    if (
+        not isinstance(bootstrap_sha256, str)
+        or SHA256_RE.fullmatch(bootstrap_sha256) is None
+    ):
+        raise ValueError("closure challenge bootstrap_record_sha256 is invalid")
+    if not isinstance(nonce, str) or SHA256_RE.fullmatch(nonce) is None:
+        raise ValueError("closure challenge nonce is invalid")
+    issued_at = value["issued_at"]
+    if not isinstance(issued_at, str) or not issued_at.endswith("Z"):
+        raise ValueError("closure challenge issued_at is invalid")
+    target = value["target"]
+    target_keys = {
+        "public_origin",
+        "compose_plan_sha256",
+        "artifact_identity_sha256",
+        "runtime_identity_sha256",
+        "source_identity_sha256",
+        "local_images_sha256",
+        "running_containers_sha256",
+        "binding_sha256",
+    }
+    if not isinstance(target, dict) or set(target) != target_keys:
+        raise ValueError("closure challenge target has an unexpected schema")
+    public_origin = canonical_https_origin(
+        target["public_origin"], "closure challenge public_origin"
+    )
+    for name in target_keys - {"public_origin"}:
+        if (
+            not isinstance(target[name], str)
+            or SHA256_RE.fullmatch(target[name]) is None
+        ):
+            raise ValueError("closure challenge target digest is invalid")
+    binding_value = {
+        key: target[key] for key in sorted(target) if key != "binding_sha256"
+    }
+    binding_sha256 = hashlib.sha256(
+        json.dumps(
+            binding_value,
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    ).hexdigest()
+    if binding_sha256 != target["binding_sha256"]:
+        raise ValueError("closure challenge target binding digest differs")
+    return ClosureChallenge(
+        challenge_sha256=hashlib.sha256(raw).hexdigest(),
+        public_origin=public_origin,
+        target_binding_sha256=binding_sha256,
+    )
+
+
+def read_closure_challenge_sha256(path: Path | str) -> str:
+    return read_closure_challenge(path).challenge_sha256
+
+
 class WebSocketStream:
     def __init__(self, connection: socket.socket, initial: bytes = b"") -> None:
         self.connection = connection
@@ -243,6 +445,7 @@ class Smoke:
         insecure: bool,
         expect_secure_cookie: bool,
         provider_key_canary: str | None,
+        closure_catalog_required: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         parsed = urllib.parse.urlsplit(self.base_url)
@@ -268,6 +471,8 @@ class Smoke:
             )
         self.opener = urllib.request.build_opener(*handlers)
         self.passed = 0
+        self.closure_catalog_required = closure_catalog_required
+        self.closure_descriptions: list[str] = []
         self.browser_event_cursors: list[int] = []
         self.provider_key_canary = provider_key_canary
 
@@ -310,7 +515,26 @@ class Smoke:
         if not condition:
             raise AssertionError(description)
         self.passed += 1
+        if self.closure_catalog_required:
+            self.closure_descriptions.append(description)
         print(f"ok {self.passed} - {description}")
+
+    def validate_closure_catalog(self) -> None:
+        catalog = json.dumps(
+            self.closure_descriptions,
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+        if (
+            self.passed != 84
+            or len(self.closure_descriptions) != 84
+            or hashlib.sha256(catalog).hexdigest() != AUTHENTICATED_CATALOG_SHA256
+        ):
+            raise AssertionError(
+                "closure challenge requires the exact 84-check authenticated smoke catalog"
+            )
 
     def eventually(
         self,
@@ -1455,6 +1679,10 @@ def main(argv: list[str] | None = None) -> int:
         help="exact Sub2API identity expected after exchange",
     )
     parser.add_argument(
+        "--expected-user-id-file",
+        help="private 0600 file containing the expected Sub2API identity",
+    )
+    parser.add_argument(
         "--insecure", action="store_true", help="accept a self-signed TLS certificate"
     )
     parser.add_argument(
@@ -1501,15 +1729,37 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="require the deterministic two-API-instance E2E topology",
     )
+    parser.add_argument(
+        "--closure-challenge-file",
+        help="non-secret challenge created beside the bootstrap deployment record",
+    )
     args = parser.parse_args(argv)
 
     try:
+        challenge = None
+        if args.closure_challenge_file is not None:
+            validate_closure_mode_arguments(args)
+            origin = canonical_https_origin(args.base_url, "--base-url")
+            challenge = read_closure_challenge(args.closure_challenge_file)
+            if origin != challenge.public_origin:
+                raise ValueError(
+                    "--base-url differs from the closure challenge public origin"
+                )
         if not args.base_url:
             raise ValueError("--base-url is required; smoke has no default target")
         base_url = args.base_url
         expected_user_id = args.expected_user_id or os.environ.get(
             "SUB2API_EXPECTED_USER_ID", "e2e-user-42"
         )
+        if args.expected_user_id_file:
+            if (
+                args.expected_user_id is not None
+                or "SUB2API_EXPECTED_USER_ID" in os.environ
+            ):
+                raise ValueError("use only one expected-user-id input")
+            expected_user_id = read_private_opaque_file(
+                args.expected_user_id_file, "expected user id file"
+            )
         access_token = args.access_token or os.environ.get("SUB2API_ACCESS_TOKEN")
         if args.access_token_file:
             if access_token is not None:
@@ -1539,6 +1789,7 @@ def main(argv: list[str] | None = None) -> int:
             args.insecure,
             args.expect_secure_cookie,
             provider_key_canary,
+            closure_catalog_required=challenge is not None,
         )
         smoke.run(
             access_token,
@@ -1553,10 +1804,18 @@ def main(argv: list[str] | None = None) -> int:
             thread_id_file=args.thread_id_file,
             expect_cross_instance_fanout=args.expect_cross_instance_fanout,
         )
+        if challenge is not None:
+            smoke.validate_closure_catalog()
     except (AssertionError, OSError, ValueError, json.JSONDecodeError) as error:
         print(f"not ok - {error}", file=sys.stderr)
         return 1
-    print(f"1..{smoke.passed}")
+    challenge_suffix = ""
+    if challenge is not None:
+        challenge_suffix = (
+            f" # closure-challenge-sha256={challenge.challenge_sha256}"
+            f" target-binding-sha256={challenge.target_binding_sha256}"
+        )
+    print(f"1..{smoke.passed}{challenge_suffix}")
     return 0
 
 

@@ -12,7 +12,7 @@ auth_max_age=${SUB2API_AUTH_EVIDENCE_MAX_AGE_SECONDS:-900}
 auth_probe_nonce=${SUB2API_AUTH_EVIDENCE_NONCE:-}
 auth_probe_user_id=${SUB2API_AUTH_EVIDENCE_EXPECTED_USER_ID:-}
 auth_probe_base_url=${SUB2API_AUTH_EVIDENCE_BASE_URL:-}
-expected_network=${SUB2API_EXPECTED_NETWORK:-${SUB2API_NETWORK_NAME:-sub2api-network}}
+expected_network=${SUB2API_EXPECTED_NETWORK:-${SUB2API_NETWORK_NAME:-sub2api-deploy_sub2api-network}}
 expected_alias=${SUB2API_EXPECTED_NETWORK_ALIAS:-sub2api}
 
 fail() {
@@ -100,6 +100,21 @@ sha256sum "/proc/$pid1_host_pid/exe" > "$work_dir/pid1-sha256.txt"
 pid1_binary_sha256=$(awk 'NR == 1 && NF >= 1 {print $1}' "$work_dir/pid1-sha256.txt")
 [ "$pid1_binary_sha256" = "$actual_binary_sha256" ] \
   || fail "container PID 1 executable hash differs from /app/sub2api"
+: > "$work_dir/writable-file-sha256.txt"
+for writable_path in \
+  /app/sub2api.backup \
+  /app/sub2api.backup.backup \
+  /root/.ash_history
+do
+  if docker container exec --user 0 "$container_id" test -f "$writable_path"; then
+    docker container exec --user 0 "$container_id" sha256sum "$writable_path" \
+      >> "$work_dir/writable-file-sha256.txt"
+  else
+    writable_status=$?
+    [ "$writable_status" = "1" ] \
+      || fail "could not inspect prohibited writable file: $writable_path"
+  fi
+done
 docker container exec "$container_id" /app/sub2api --version > "$work_dir/version.txt" 2>&1
 docker container diff "$container_id" > "$work_dir/diff.txt"
 docker container inspect "$container_id" > "$work_dir/container-after.json"
@@ -124,6 +139,7 @@ set -- \
   --pid1-sha256 "$pid1_binary_sha256" \
   --version-output "$work_dir/version.txt" \
   --diff "$work_dir/diff.txt" \
+  --writable-file-sha256 "$work_dir/writable-file-sha256.txt" \
   --auth-max-age-seconds "$auth_max_age" \
   --expected-network "$expected_network" \
   --expected-alias "$expected_alias"

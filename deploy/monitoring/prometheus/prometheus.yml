@@ -1,0 +1,64 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 5s
+  evaluation_interval: 15s
+  external_labels:
+    service: codex-control
+    monitoring_scope: production
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 127.0.0.1:19093
+      authorization:
+        type: Bearer
+        credentials_file: /run/secrets/alertmanager_proxy_bearer
+
+rule_files:
+  - /etc/prometheus/native-alerts.yml
+  - /etc/prometheus/external-alerts.yml
+  - /etc/prometheus/production-integrity.yml
+
+scrape_configs:
+  - job_name: codex-control-api
+    metrics_path: /internal/metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/control_metrics_bearer
+    static_configs:
+      - targets:
+          - 127.0.0.1:18090
+          - 127.0.0.1:18093
+
+  - job_name: codex-control-monitoring-collector
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - 127.0.0.1:19091
+
+  - job_name: codex-control-connector
+    metrics_path: /metrics/connector
+    scheme: http
+    static_configs:
+      - targets:
+          - 127.0.0.1:19091
+
+  - job_name: prometheus
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - 127.0.0.1:19090
+
+  - job_name: alertmanager
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - 127.0.0.1:19093
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/alertmanager_proxy_bearer

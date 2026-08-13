@@ -23,10 +23,6 @@ IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 DIGEST_REF_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 IMMUTABLE_PROFILE = "immutable-image-v1"
-PROHIBITED_LEGACY_LOCK_FIELDS = {
-    "production_admission_profile",
-    "production_compatibility",
-}
 MAX_AUTH_EVIDENCE_BYTES = 1024 * 1024
 MAX_AUTH_CONTRACT_BYTES = 4 * 1024 * 1024
 
@@ -134,6 +130,31 @@ def required_string(mapping: dict[str, Any], key: str, label: str) -> str:
     if not isinstance(value, str) or not value:
         fail(f"{label}.{key} must be a non-empty string")
     return value
+
+
+def load_sha256_inventory(path: Path) -> dict[str, str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        fail(f"cannot read writable-layer hash inventory {path}: {exc}")
+    inventory: dict[str, str] = {}
+    for line_number, line in enumerate(lines, start=1):
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            fail(f"writable-layer hash inventory line {line_number} is malformed")
+        digest, filename = parts
+        if not SHA256_RE.fullmatch(digest):
+            fail(
+                f"writable-layer hash inventory line {line_number} has an invalid digest"
+            )
+        if not filename.startswith("/") or posixpath.normpath(filename) != filename:
+            fail(
+                f"writable-layer hash inventory line {line_number} has an invalid path"
+            )
+        if filename in inventory:
+            fail(f"writable-layer hash inventory repeats {filename}")
+        inventory[filename] = digest
+    return inventory
 
 
 def parse_diff(path: Path) -> list[str]:
@@ -283,7 +304,10 @@ def validate_host_config(
         )
 
 
-def validate_process(container: dict[str, Any], image: dict[str, Any]) -> list[str]:
+def validate_process(
+    container: dict[str, Any],
+    image: dict[str, Any],
+) -> list[str]:
     config = container.get("Config")
     image_config = image.get("Config")
     if not isinstance(config, dict) or not isinstance(image_config, dict):
@@ -536,12 +560,6 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     sub2api = lock.get("sub2api")
     if not isinstance(sub2api, dict):
         fail("versions.lock.json has no sub2api object")
-    legacy_fields = sorted(PROHIBITED_LEGACY_LOCK_FIELDS.intersection(sub2api))
-    if legacy_fields:
-        fail(
-            "versions.lock.json contains prohibited legacy Sub2API fields: "
-            + ", ".join(legacy_fields)
-        )
 
     runtime_source_image = required_string(sub2api, "container_image", "sub2api")
     runtime_source_image_id = required_string(sub2api, "container_image_id", "sub2api")
@@ -570,9 +588,16 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
         )
     source = expected_source_url(release_url)
 
+    profile = sub2api.get("production_admission_profile")
+    if profile != IMMUTABLE_PROFILE:
+        fail(f"unsupported Sub2API production admission profile: {profile!r}")
+    if "production_compatibility" in sub2api:
+        fail("immutable profile may not carry production compatibility exceptions")
     expected_image = runtime_source_image
     expected_image_id = runtime_source_image_id
     image_created = runtime_source_image_created
+    image_label_version = version
+    image_label_commit = commit
     expected_config_image = expected_image
     expected_port_bindings = EXPECTED_PORT_BINDINGS
 
@@ -713,15 +738,15 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
 
     validate_labels(
         config.get("Labels"),
-        version=version,
-        commit=commit,
+        version=image_label_version,
+        commit=image_label_commit,
         source=source,
         label="container",
     )
     validate_labels(
         image_config.get("Labels"),
-        version=version,
-        commit=commit,
+        version=image_label_version,
+        commit=image_label_commit,
         source=source,
         label="image",
     )
@@ -761,8 +786,11 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     ):
         fail("Sub2API --version output does not contain the exact locked runtime tuple")
     diff_lines = parse_diff(args.diff)
+    writable_file_sha256 = load_sha256_inventory(args.writable_file_sha256)
     if diff_lines:
         fail("immutable Sub2API container has writable-layer drift")
+    if writable_file_sha256:
+        fail("immutable Sub2API container exposes legacy writable files")
 
     auth: dict[str, Any] | None = None
     if args.auth_evidence:
@@ -790,7 +818,8 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "format_version": 2,
         "verified_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "admission_profile": IMMUTABLE_PROFILE,
+        "admission_profile": profile,
+        "mutable_rootfs": False,
         "container_id": container_id,
         "image_id": image_id,
         "image_digest": expected_image,
@@ -811,6 +840,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
         "oci_source": source,
         "mounts": mounts,
         "writable_layer_diff": diff_lines,
+        "writable_file_sha256": writable_file_sha256,
         "network": args.expected_network,
         "network_alias": args.expected_alias,
         "contract_sha256": contract_sha256,
@@ -832,6 +862,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pid1-sha256", required=True)
     parser.add_argument("--version-output", type=Path, required=True)
     parser.add_argument("--diff", type=Path, required=True)
+    parser.add_argument("--writable-file-sha256", type=Path, required=True)
     parser.add_argument("--expected-network", required=True)
     parser.add_argument("--expected-alias", required=True)
     parser.add_argument("--auth-evidence", type=Path)

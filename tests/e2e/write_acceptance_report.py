@@ -71,7 +71,7 @@ def main() -> int:
             },
             "sub2api": {
                 "kind": "deterministic authentication contract fixture",
-                "claimed_contract_marker": "0.1.175/93c32fa",
+                "claimed_contract_marker": "0.1.176/e803e38",
             },
         },
         "topology": {

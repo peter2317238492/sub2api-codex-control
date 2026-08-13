@@ -1,71 +1,87 @@
 # Sub2API runtime contract
 
-Control authentication depends on the Sub2API runtime and its authentication
-contract. Production admission therefore binds one immutable Sub2API image and
-runtime tuple from `versions.lock.json`; it never infers compatibility from a
-mutable tag or version string alone.
+Status: formally frozen at Sub2API `0.1.176`; production admission accepts only
+the explicit `immutable-image-v1` profile.
 
-## Locked identity
+The upstream `v0.1.176` annotated tag object
+`14e6d7ee7bdb1e4cb6bc59129a7ee1dd1110c52a` resolves to commit
+`e803e3851c0a7e222cfadeafad7b8636ab959d11`. The release was published at
+`2026-08-13T01:46:35Z`. Its linux/amd64 archive SHA-256 is
+`ff639ed55f7d940ab86ab75242fe915d8bc3b067d63a95239628f75c20716ba5`;
+the extracted `/app/sub2api` binary is 117797026 bytes with SHA-256
+`ee2505964d8614388591b7cd98157ae6e3b7edad2489b83a0baef601834038e4`
+and reports build time `2026-08-13T01:36:58Z`.
 
-The public lock records:
+Exact runtime and image values are machine-readable in `versions.lock.json`.
+The pinned refresh/logout/session-binding/storage shape is in
+`sub2api-auth.v0.1.176.json`, whose SHA-256
+`a02d18e193d66a8607c09078d9d90e8883b8d660c587e52b015f9e51401f6e04`
+is locked there. A byte-for-byte comparison from `v0.1.175` to `v0.1.176`
+found no change in the frozen frontend auth, JWT middleware, session-binding
+middleware, refresh handler, or response wrapper.
 
-- the upstream release tag and release metadata;
-- the exact `linux/amd64` image manifest digest, image/config ID, and immutable
-  digest reference;
-- the runtime version, commit, build timestamp, executable size, and SHA-256;
-- the exact image label tuple;
-- the authentication contract file and SHA-256;
-- the browser token-storage key names and auth endpoint paths.
+## Historical rejected runtime
 
-These are upstream release inputs, not a statement about any particular live
-server. Before admitting a future Control release, independently verify the
-upstream source and artifacts and update the lock through review. Never add
-host paths, account identifiers, container IDs, writable-layer exceptions, or
-deployment snapshots to the public lock.
+A read-only production audit on 2026-08-12 found a mutable, self-updated
+container based on image `sha256:2ca591...d6c8` with `0.1.151/deff3123` labels,
+while its modified executable reported `0.1.175/93c32fa1`. `docker diff` also
+showed two updater backups and root shell history. That evidence remains useful
+for incident history, but neither the old image nor its formerly exact writable
+shape is an accepted production compatibility profile. It must fail the
+current gate.
 
-## Immutable container profile
+The frozen `0.1.176` authentication contract is:
 
-`deploy/scripts/verify-sub2api-runtime.py` admits only
-`immutable-image-v1`. The named Sub2API container must:
+- access token localStorage key: `auth_token`
+- refresh token localStorage key: `refresh_token`
+- authoritative identity endpoint: `GET /api/v1/auth/me`
+- inactive-user rejection: HTTP `401` with code `USER_INACTIVE`
+- TokenVersion-revoked rejection: HTTP `401` with code `TOKEN_REVOKED`
+- session-binding rejection: HTTP `401` with code
+  `SESSION_BINDING_MISMATCH`
+- session-binding identity: forward the original browser IP in
+  `X-Forwarded-For` and the exact browser `User-Agent` when calling `/auth/me`
+- API authentication: `Authorization: Bearer <access token>`
+- token rotation endpoint: `POST /api/v1/auth/refresh` with JSON
+  `{"refresh_token":"..."}`; success is the exact
+  `{"code":0,"message":"success","data":{...}}` envelope whose `data` contains
+  string `access_token`, rotated string `refresh_token`, positive numeric
+  `expires_in`, and `token_type: "Bearer"`
+- logout endpoint: `POST /api/v1/auth/logout` with JSON
+  `{"refresh_token":"..."}` and the access-token Bearer header when available;
+  the PWA does not depend on a response body
 
-- use exactly the digest reference and image ID in the lock;
-- be running and healthy with a read-only root filesystem;
-- have an empty Docker writable-layer diff;
-- have exactly one writable Docker named volume mounted at `/app/data` and no
-  other mount;
-- expose only the expected loopback application binding and carry the
-  `sub2api` alias on the exact external network selected for Control;
-- preserve the locked entrypoint, command, OCI labels, binary identity, and
-  runtime tuple across the complete verification window;
-- remain the same named container and full container ID before and after the
-  check.
+Only `auth_token` may be sent to `POST /codex-api/v1/session/exchange`.
+`refresh_token` is never read by Control API code, sent over the control
+protocol, or stored in the control database. The PWA uses the refresh and
+logout endpoints directly and rotates the existing Sub2API localStorage keys.
 
-Bind mounts, anonymous or identity-less volumes, mutable image tags, a writable
-root, masked executable paths, any Docker diff, or container replacement fail
-closed. The verifier also rejects the presence of retired compatibility keys
-such as `production_admission_profile` and `production_compatibility`; there is
-no legacy mutable-container exception.
+## Production freeze gate
 
-## Authentication evidence
+The only admitted linux/amd64 manifest is
+`weishaw/sub2api@sha256:989c1a56f3598b4e907fc23c80377db1ad22d024f673e6725d80b970d43b6c00`,
+with image/config ID
+`sha256:40d807a98dbd6c56dd5838ca1a2efe4f60bf2dd88c3621f11eab090c98d38742`.
+The `0.1.176` multi-platform tag resolves first to the distinct index digest
+`sha256:905baf250580334dacd902471f61da7b8b1e5da57e3c8c1769489952d51771a1`;
+the index must not be substituted for the amd64 RepoDigest. The image was
+created at `2026-08-13T01:45:34.06109435Z`, and its version, revision, source,
+description, and maintainer labels match the lock.
 
-Runtime identity does not prove the auth API. Production admission additionally
-requires fresh, nonce-bound evidence from the admitted Control API image in the
-verified Sub2API network namespace. The evidence must cover:
+Admission requires digest-only `Config.Image`, the exact RepoDigest/image ID,
+read-only rootfs, all Linux capabilities dropped, no-new-privileges, PID 1 at
+`/app/sub2api`, no writable-layer diff, and exactly one named writable Docker
+volume at `/app/data`. Bind mounts, updater artifacts, mutable tags, compatibility
+exceptions, or a missing/unknown profile fail closed. Container identity,
+process metadata, network identity, PID, restart count, and PID 1 hash must stay
+stable throughout verification.
 
-- successful `/auth/me` for an active user;
-- disabled-user and revoked-token rejection;
-- refresh rotation and rejection of the old refresh credential;
-- logout followed by refresh rejection;
-- exact response shapes from the locked auth contract.
-
-Use disposable, mode-`0600` token files from a private directory. Raw tokens,
-token hashes, cookies, and refresh credentials must not enter the evidence,
-environment, command arguments, image metadata, logs, or Git. External cached
-evidence and alternate probe origins are not admission evidence.
-
-## Change policy
-
-Any change to the Sub2API image digest, runtime binary, auth shape, token keys,
-network policy, or mount contract requires a new reviewed lock, contract tests,
-and fresh authenticated evidence. A passing healthcheck alone cannot authorize
-the change.
+Release evidence must also capture success and rejection fixtures for
+`/auth/me`, `/auth/refresh`, and `/auth/logout`, including refresh rotation,
+old-refresh rejection, and refresh rejection after logout. Evidence contains
+only status, frozen rejection codes, and shape booleans, never raw tokens, and
+is accepted only while fresh and bound to a deployment-generated nonce, exact
+user, container network namespace, image/binary identity, and release-bound
+locked contract hash. Random invalid tokens return a different code and cannot stand in for
+disabled or revoked fixtures. Any mismatch blocks migration and deployment
+promotion until the authentication contract is re-audited.

@@ -1,0 +1,19 @@
+{
+  "control_url": "wss://control.example.com/codex-ws/device",
+  "pairing_url": "https://control.example.com/codex-api/v1/device-pairings/start",
+  "token_url": "https://control.example.com/codex-api/v1/device/connect-token",
+  "display_name": "My device",
+  "state_dir": "/home/example/.local/state/sub2api-codex-connector",
+  "workspace_roots": [
+    "/home/example/workspace"
+  ],
+  "sandbox_cap": "workspace-write",
+  "codex_binary": "codex",
+  "codex_version": "0.147.0",
+  "schema_digest": "511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b",
+  "heartbeat_interval": "20s",
+  "approval_timeout": "120s",
+  "pairing_poll_interval": "2s",
+  "reconnect_min": "1s",
+  "reconnect_max": "30s"
+}

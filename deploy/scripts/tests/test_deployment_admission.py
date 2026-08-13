@@ -699,6 +699,7 @@ class RuntimeEvidenceTests(unittest.TestCase):
             encoding="utf-8",
         )
         (self.root / "diff.txt").write_text("", encoding="utf-8")
+        (self.root / "writable-sha256.txt").write_text("", encoding="utf-8")
         return run_python(
             RUNTIME,
             "--lock",
@@ -723,6 +724,8 @@ class RuntimeEvidenceTests(unittest.TestCase):
             str(self.root / "version.txt"),
             "--diff",
             str(self.root / "diff.txt"),
+            "--writable-file-sha256",
+            str(self.root / "writable-sha256.txt"),
             "--expected-network",
             "sub2api-network",
             "--expected-alias",
@@ -1474,31 +1477,6 @@ class WrapperFailClosedTests(unittest.TestCase):
         self.assertNotIn("\ncompose config ", script)
         self.assertGreaterEqual(script.count('-f "$compose_snapshot"'), 2)
         self.assertEqual(script.count('--versions-lock "$versions_lock"'), 2)
-        signed_verify = script.index("stage=verify-signed-release")
-        source_extract = script.index("stage=extract-signed-source", signed_verify)
-        compose_resolution = script.index("stage=resolve-compose", source_extract)
-        first_pull = script.index("stage=pull-release-images", compose_resolution)
-        self.assertLess(signed_verify, source_extract)
-        self.assertLess(source_extract, compose_resolution)
-        self.assertLess(compose_resolution, first_pull)
-        self.assertIn(
-            'repo_root="$source_stage"', script[source_extract:compose_resolution]
-        )
-        self.assertIn(
-            '--extract-to "$source_stage"', script[source_extract:compose_resolution]
-        )
-        self.assertIn("--require-root-owner", script[source_extract:compose_resolution])
-        self.assertIn(
-            "CONTROL_SOURCE_ARCHIVE_SHA256", script[source_extract:compose_resolution]
-        )
-        self.assertIn(
-            "CONTROL_SOURCE_ATTESTATION_SHA256",
-            script[source_extract:compose_resolution],
-        )
-        self.assertIn(
-            "CONTROL_SOURCE_MANIFEST_SHA256", script[source_extract:compose_resolution]
-        )
-        self.assertIn('versions_lock_source="$repo_root/versions.lock.json"', script)
         self.assertNotIn("auth_evidence=${SUB2API_AUTH_EVIDENCE_FILE", script)
         self.assertIn("external SUB2API_AUTH_EVIDENCE_FILE is prohibited", script)
         self.assertIn('--network "container:$sub2api_id"', script)

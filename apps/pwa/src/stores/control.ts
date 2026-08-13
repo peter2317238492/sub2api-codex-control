@@ -5,6 +5,7 @@ import { computed, ref } from "vue";
 import { ApiError, apiRequest, browserWebSocketUrl, notifyControlAuthenticationRequired } from "@/api/client";
 import type {
   ApprovalItem,
+  ConnectorReleaseMetadata,
   ControlBootstrapSnapshot,
   DeviceSummary,
   ManagedThreadSummary,
@@ -47,11 +48,13 @@ export const useControlStore = defineStore("control", () => {
   const devices = ref<DeviceSummary[]>([]);
   const threads = ref<ManagedThreadSummary[]>([]);
   const models = ref<ModelOption[]>([]);
+  const connectorRelease = ref<ConnectorReleaseMetadata | null>(null);
   const activeThread = ref<ThreadDetail | null>(null);
   const approvals = ref<ApprovalItem[]>([]);
   const selectedDeviceId = ref<string | null>(null);
   const selectedThreadId = ref<string | null>(null);
   const loading = ref(false);
+  const creatingThread = ref(false);
   const turnSubmitting = ref(false);
   const decidingApprovalIds = ref<string[]>([]);
   const archivingThreadIds = ref<string[]>([]);
@@ -73,6 +76,7 @@ export const useControlStore = defineStore("control", () => {
   let cursorStabilityTimer: number | null = null;
   let cursorRecoveryTimer: number | null = null;
   let threadRefreshTimer: number | null = null;
+  let approvalExpiryTimer: number | null = null;
   let threadRefreshAttempt = 0;
   let reconnectAttempt = 0;
   let cursorRecoveryAttempt = 0;
@@ -85,6 +89,7 @@ export const useControlStore = defineStore("control", () => {
   let principalGeneration = 0;
   let principalAbortController = new AbortController();
   let threadRequestGeneration = 0;
+  let createThreadOperation: symbol | null = null;
   let turnOperation: symbol | null = null;
   const approvalDecisionOperations = new Map<string, symbol>();
   const archiveThreadOperations = new Map<string, symbol>();
@@ -103,6 +108,52 @@ export const useControlStore = defineStore("control", () => {
   );
   const pendingApprovals = computed(() => approvals.value.length);
 
+  function approvalExpiry(approval: ApprovalItem): number | null {
+    const expiresAt = Date.parse(approval.expires_at);
+    return Number.isFinite(expiresAt) ? expiresAt : null;
+  }
+
+  function removeApproval(approvalId: string): void {
+    approvals.value = approvals.value.filter((approval) => approval.approval_id !== approvalId);
+  }
+
+  function pruneExpiredApprovals(now = Date.now()): string[] {
+    const expiredIds = approvals.value
+      .filter((approval) => {
+        const expiresAt = approvalExpiry(approval);
+        return expiresAt === null || expiresAt <= now;
+      })
+      .map((approval) => approval.approval_id);
+    if (expiredIds.length === 0) return [];
+    const expired = new Set(expiredIds);
+    approvals.value = approvals.value.filter((approval) => !expired.has(approval.approval_id));
+    return expiredIds;
+  }
+
+  function scheduleApprovalExpiry(): void {
+    if (approvalExpiryTimer !== null) window.clearTimeout(approvalExpiryTimer);
+    approvalExpiryTimer = null;
+    pruneExpiredApprovals();
+    const nextExpiry = approvals.value.reduce<number | null>((earliest, approval) => {
+      const expiresAt = approvalExpiry(approval);
+      if (expiresAt === null) return earliest;
+      return earliest === null ? expiresAt : Math.min(earliest, expiresAt);
+    }, null);
+    if (nextExpiry === null) return;
+    const delay = Math.min(60_000, Math.max(0, nextExpiry - Date.now() + 1));
+    approvalExpiryTimer = window.setTimeout(() => {
+      approvalExpiryTimer = null;
+      const expiredIds = pruneExpiredApprovals();
+      if (expiredIds.length > 0) error.value = "审批已过期，已从待处理列表移除";
+      scheduleApprovalExpiry();
+    }, delay);
+  }
+
+  function replaceApprovals(items: ApprovalItem[]): void {
+    approvals.value = items;
+    scheduleApprovalExpiry();
+  }
+
   async function bootstrap(cursorRecovery = false): Promise<boolean> {
     if (!cursorRecovery) cancelCursorRecovery();
     resetView();
@@ -114,7 +165,8 @@ export const useControlStore = defineStore("control", () => {
       const snapshot = await apiRequest<ControlBootstrapSnapshot>("/bootstrap");
       if (generation !== stateGeneration) return false;
       devices.value = snapshot.devices;
-      approvals.value = snapshot.approvals;
+      connectorRelease.value = snapshot.connector_release ?? null;
+      replaceApprovals(snapshot.approvals);
       lastCursor.value = snapshot.event_cursor;
       for (const thread of snapshot.threads) threadSummariesById.set(thread.id, thread);
       for (const device of snapshot.devices) snapshotDeviceIds.add(device.id);
@@ -278,32 +330,42 @@ export const useControlStore = defineStore("control", () => {
 
   async function createThread(cwd: string, model?: string): Promise<boolean> {
     const deviceId = selectedDeviceId.value;
-    if (!deviceId) return false;
+    if (!deviceId || createThreadOperation !== null) return false;
+    const operation = Symbol("create-thread");
+    createThreadOperation = operation;
+    creatingThread.value = true;
     const principalAtRequest = principalGeneration;
     const idempotencyKey = crypto.randomUUID();
-    let thread: ManagedThreadSummary;
     try {
-      thread = await apiRequest<ManagedThreadSummary>(`/devices/${deviceId}/threads`, {
-        method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey },
-        body: JSON.stringify({ cwd, model }),
-        signal: principalAbortController.signal,
-      });
-    } catch (createError) {
-      if (principalAtRequest !== principalGeneration) return false;
-      throw createError;
-    }
-    if (principalAtRequest !== principalGeneration || selectedDeviceId.value !== deviceId) return false;
-    removedThreadIds.delete(thread.id);
-    threadSummariesById.set(thread.id, thread);
-    refreshSelectedThreadSummaries();
-    try {
-      await selectThread(thread.id, false, false);
-    } catch (selectionError) {
+      let thread: ManagedThreadSummary;
+      try {
+        thread = await apiRequest<ManagedThreadSummary>(`/devices/${deviceId}/threads`, {
+          method: "POST",
+          headers: { "Idempotency-Key": idempotencyKey },
+          body: JSON.stringify({ cwd, model }),
+          signal: principalAbortController.signal,
+        });
+      } catch (createError) {
+        if (principalAtRequest !== principalGeneration) return false;
+        throw createError;
+      }
       if (principalAtRequest !== principalGeneration || selectedDeviceId.value !== deviceId) return false;
-      throw selectionError;
+      removedThreadIds.delete(thread.id);
+      threadSummariesById.set(thread.id, thread);
+      refreshSelectedThreadSummaries();
+      try {
+        await selectThread(thread.id, false, false);
+      } catch (selectionError) {
+        if (principalAtRequest !== principalGeneration || selectedDeviceId.value !== deviceId) return false;
+        throw selectionError;
+      }
+      return principalAtRequest === principalGeneration && selectedThreadId.value === thread.id;
+    } finally {
+      if (createThreadOperation === operation) {
+        createThreadOperation = null;
+        creatingThread.value = false;
+      }
     }
-    return principalAtRequest === principalGeneration && selectedThreadId.value === thread.id;
   }
 
   async function archiveThread(threadId: string): Promise<boolean> {
@@ -534,6 +596,14 @@ export const useControlStore = defineStore("control", () => {
 
   async function resolveApproval(approvalId: string, decision: "approve" | "deny"): Promise<boolean> {
     if (approvalDecisionOperations.has(approvalId)) return false;
+    const approval = approvals.value.find((item) => item.approval_id === approvalId);
+    const expiresAt = approval ? approvalExpiry(approval) : null;
+    if (!approval || expiresAt === null || expiresAt <= Date.now()) {
+      removeApproval(approvalId);
+      scheduleApprovalExpiry();
+      error.value = approval ? "该审批已过期，已从待处理列表移除" : "该审批已不在待处理列表中";
+      return false;
+    }
     const operation = Symbol("approval-decision");
     const principalAtRequest = principalGeneration;
     approvalDecisionOperations.set(approvalId, operation);
@@ -545,10 +615,21 @@ export const useControlStore = defineStore("control", () => {
         signal: principalAbortController.signal,
       });
       if (principalAtRequest !== principalGeneration) return false;
-      approvals.value = approvals.value.filter((approval) => approval.approval_id !== approvalId);
+      removeApproval(approvalId);
+      scheduleApprovalExpiry();
       return true;
     } catch (approvalError) {
       if (principalAtRequest !== principalGeneration) return false;
+      if (approvalError instanceof ApiError && [404, 409, 410].includes(approvalError.status)) {
+        removeApproval(approvalId);
+        scheduleApprovalExpiry();
+        error.value = approvalError.status === 404
+          ? "该审批已不存在，已从待处理列表移除"
+          : approvalError.status === 410
+            ? "该审批已过期，已从待处理列表移除"
+            : "该审批已失效或已处理，已从待处理列表移除";
+        return false;
+      }
       throw approvalError;
     } finally {
       if (approvalDecisionOperations.get(approvalId) === operation) {
@@ -672,6 +753,7 @@ export const useControlStore = defineStore("control", () => {
       const wasOnline = index !== -1 && devices.value[index]?.status === "online";
       if (index === -1) devices.value.push(device);
       else devices.value[index] = device;
+      snapshotDeviceIds.add(device.id);
       if (!wasOnline && device.status === "online") {
         void syncDevice(device.id).then(async () => {
           if (selectedDeviceId.value === device.id && selectedThreadId.value) {
@@ -683,10 +765,14 @@ export const useControlStore = defineStore("control", () => {
     if (event.type === "approval.created") {
       const approval = event.data as unknown as ApprovalItem;
       approvals.value = [approval, ...approvals.value.filter((item) => item.approval_id !== approval.approval_id)];
+      const expiredIds = pruneExpiredApprovals();
+      if (expiredIds.includes(approval.approval_id)) error.value = "审批到达时已过期，已从待处理列表移除";
+      scheduleApprovalExpiry();
     }
     if (event.type === "approval.resolved") {
       const approvalId = String(event.data.approval_id ?? "");
-      approvals.value = approvals.value.filter((item) => item.approval_id !== approvalId);
+      removeApproval(approvalId);
+      scheduleApprovalExpiry();
     }
     if (event.type === "command.updated") {
       const deviceId = typeof event.data.device_id === "string" ? event.data.device_id : null;
@@ -881,6 +967,7 @@ export const useControlStore = defineStore("control", () => {
     activeThread.value = null;
     threads.value = [];
     models.value = [];
+    connectorRelease.value = null;
     const replacement = devices.value.find((device) => device.status === "online") ?? devices.value[0];
     if (!replacement) return;
     const firstThreadId = selectSnapshotDevice(replacement.id);
@@ -1083,6 +1170,8 @@ export const useControlStore = defineStore("control", () => {
     threadRefreshAttempt = 0;
     threadRequestGeneration += 1;
     reconnectAttempt = 0;
+    if (approvalExpiryTimer !== null) window.clearTimeout(approvalExpiryTimer);
+    approvalExpiryTimer = null;
     devices.value = [];
     threads.value = [];
     models.value = [];
@@ -1113,6 +1202,8 @@ export const useControlStore = defineStore("control", () => {
     principalAbortController.abort();
     principalAbortController = new AbortController();
     cancelCursorRecovery();
+    createThreadOperation = null;
+    creatingThread.value = false;
     turnOperation = null;
     turnSubmitting.value = false;
     approvalDecisionOperations.clear();
@@ -1132,6 +1223,7 @@ export const useControlStore = defineStore("control", () => {
     devices,
     threads,
     models,
+    connectorRelease,
     activeThread,
     approvals,
     selectedDeviceId,
@@ -1139,6 +1231,7 @@ export const useControlStore = defineStore("control", () => {
     selectedDevice,
     pendingApprovals,
     loading,
+    creatingThread,
     turnSubmitting,
     decidingApprovalIds,
     archivingThreadIds,

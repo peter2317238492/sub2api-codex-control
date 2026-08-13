@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api-codex.invalid/schemas/release-observability-receipt-v1.json",
+  "title": "Release observability admission receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "kind",
+    "release",
+    "vcs_ref",
+    "deployment_id",
+    "deployed_at",
+    "verified_at",
+    "external_delivery",
+    "release_gate_snapshot",
+    "stability_window",
+    "post_release_backup"
+  ],
+  "properties": {
+    "format_version": { "const": 1 },
+    "kind": { "const": "codex-control-release-observability" },
+    "release": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$" },
+    "vcs_ref": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "deployment_id": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z._:-]{2,127}$" },
+    "deployed_at": { "$ref": "#/$defs/timestamp" },
+    "verified_at": { "$ref": "#/$defs/timestamp" },
+    "external_delivery": { "$ref": "#/$defs/descriptor" },
+    "release_gate_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observed_at",
+        "signals",
+        "pending_release_gate_alerts",
+        "firing_release_gate_alerts",
+        "unexplained_container_restarts",
+        "resource_headroom_ok"
+      ],
+      "properties": {
+        "observed_at": { "$ref": "#/$defs/timestamp" },
+        "signals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "alertmanager-current",
+            "api-build-identity-exact",
+            "api-replica-18090-up",
+            "api-replica-18093-up",
+            "authenticated-session-exchange",
+            "backup-current",
+            "connector-current",
+            "external-operator-delivery",
+            "migration-head-current",
+            "policy-checks-current",
+            "postgresql-current",
+            "public-live-synthetic",
+            "public-ready-synthetic",
+            "pwa-synthetic",
+            "redis-current",
+            "restore-rehearsal-current"
+          ],
+          "properties": {
+            "alertmanager-current": { "const": true },
+            "api-build-identity-exact": { "const": true },
+            "api-replica-18090-up": { "const": true },
+            "api-replica-18093-up": { "const": true },
+            "authenticated-session-exchange": { "const": true },
+            "backup-current": { "const": true },
+            "connector-current": { "const": true },
+            "external-operator-delivery": { "const": true },
+            "migration-head-current": { "const": true },
+            "policy-checks-current": { "const": true },
+            "postgresql-current": { "const": true },
+            "public-live-synthetic": { "const": true },
+            "public-ready-synthetic": { "const": true },
+            "pwa-synthetic": { "const": true },
+            "redis-current": { "const": true },
+            "restore-rehearsal-current": { "const": true }
+          }
+        },
+        "pending_release_gate_alerts": { "const": 0 },
+        "firing_release_gate_alerts": { "const": 0 },
+        "unexplained_container_restarts": { "const": 0 },
+        "resource_headroom_ok": { "const": true }
+      }
+    },
+    "stability_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "started_at",
+        "ended_at",
+        "session_renewal_ok",
+        "connector_reconnect_ok",
+        "scheduled_monitoring_cycles",
+        "scheduled_backup_cycles",
+        "unresolved_p0_p1"
+      ],
+      "properties": {
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "ended_at": { "$ref": "#/$defs/timestamp" },
+        "session_renewal_ok": { "const": true },
+        "connector_reconnect_ok": { "const": true },
+        "scheduled_monitoring_cycles": { "type": "integer", "minimum": 2 },
+        "scheduled_backup_cycles": { "type": "integer", "minimum": 1 },
+        "unresolved_p0_p1": { "const": 0 }
+      }
+    },
+    "post_release_backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completed_at", "checksum_verified", "backup_receipt", "restore_receipt"],
+      "properties": {
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "checksum_verified": { "const": true },
+        "backup_receipt": { "$ref": "#/$defs/descriptor" },
+        "restore_receipt": { "$ref": "#/$defs/descriptor" }
+      }
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["basename", "sha256"],
+      "properties": {
+        "basename": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

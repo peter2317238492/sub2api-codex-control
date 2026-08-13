@@ -47,11 +47,11 @@
     {
       "id": "sub2api",
       "name": "Sub2API",
-      "version": "0.1.175",
+      "version": "0.1.176",
       "relationship": "compatibility-reference",
-      "package": "pkg:github/Wei-Shaw/sub2api@v0.1.175",
+      "package": "pkg:github/Wei-Shaw/sub2api@v0.1.176",
       "repository": "https://github.com/Wei-Shaw/sub2api",
-      "source_ref": "v0.1.175",
+      "source_ref": "v0.1.176",
       "version_evidence": {
         "kind": "json-pointer",
         "path": "versions.lock.json",
@@ -62,15 +62,15 @@
       },
       "license_expression": "LGPL-3.0-or-later",
       "license_declaration": {
-        "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/93c32fa1a2450351561abc46156d2e28cb5f74ca/README.md",
-        "source_sha256": "9763f66acba04a47692219bc8fa5a9da1d6e487cdab647cd6a2c58c09b574b00",
+        "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/e803e3851c0a7e222cfadeafad7b8636ab959d11/README.md",
+        "source_sha256": "1c29e6c1e85681a8945ac1ade191e119b3c937e973f0ee367c0bed51be69ecf5",
         "text": "GNU Lesser General Public License v3.0 (or later)"
       },
       "license_files": [
         {
           "kind": "license",
           "path": "third_party/licenses/Sub2API-LICENSE.txt",
-          "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/v0.1.175/LICENSE",
+          "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/v0.1.176/LICENSE",
           "source_sha256": "a5681bf9b05db14d86776930017c647ad9e6e56ff6bbcfdf21e5848288dfaf1b",
           "file_sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
           "normalization": "append-final-newline"

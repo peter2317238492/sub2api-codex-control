@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api-codex.invalid/schemas/authenticated-smoke-closure-v2.json",
+  "title": "Unsigned bootstrap authenticated smoke closure v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format_version",
+    "status",
+    "closure_mode",
+    "recorded_at",
+    "bootstrap_record",
+    "original_verified_evidence",
+    "authenticated_smoke",
+    "revocation_observation",
+    "closure_challenge",
+    "closes_authenticated_smoke_pending",
+    "original_bootstrap_record_mutated"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://sub2api-codex.invalid/schemas/authenticated-smoke-closure-v2.json"
+    },
+    "format_version": { "const": 2 },
+    "status": { "const": "authenticated-smoke-closed" },
+    "closure_mode": { "const": "append-only-v1" },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "bootstrap_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "basename",
+        "sha256",
+        "size",
+        "deployment_id",
+        "deployment_basename",
+        "status",
+        "trust_mode",
+        "recorded_at",
+        "authenticated_smoke_pending"
+      ],
+      "properties": {
+        "basename": { "const": "bootstrap-deployment.json" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "deployment_id": { "$ref": "#/$defs/uuid4" },
+        "deployment_basename": { "$ref": "#/$defs/deploymentBasename" },
+        "status": { "const": "bootstrapped-unsigned" },
+        "trust_mode": { "const": "unsigned-first-deployment-v1" },
+        "recorded_at": { "type": "string", "minLength": 1 },
+        "authenticated_smoke_pending": { "const": true }
+      }
+    },
+    "original_verified_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "sha256", "entries"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "entries": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,127}$" },
+          "additionalProperties": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "authenticated_smoke": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence",
+        "format",
+        "status",
+        "checks_expected",
+        "checks_passed",
+        "checks_failed",
+        "sequential",
+        "tap_plan_observed",
+        "challenge_sha256",
+        "target_binding_sha256",
+        "check_catalog_sha256"
+      ],
+      "properties": {
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "format": { "const": "sub2api-control-authenticated-smoke-tap-plan-v2" },
+        "status": { "const": "passed" },
+        "checks_expected": { "const": 84 },
+        "checks_passed": { "const": 84 },
+        "checks_failed": { "const": 0 },
+        "sequential": { "const": true },
+        "tap_plan_observed": { "const": true },
+        "challenge_sha256": { "$ref": "#/$defs/sha256" },
+        "target_binding_sha256": { "$ref": "#/$defs/sha256" },
+        "check_catalog_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "revocation_observation": { "type": "null" },
+    "closure_challenge": { "$ref": "#/$defs/challenge" },
+    "closes_authenticated_smoke_pending": { "const": true },
+    "original_bootstrap_record_mutated": { "const": false }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "uuid4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "deploymentBasename": {
+      "type": "string",
+      "pattern": "^bootstrap-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["basename", "sha256", "size"],
+      "properties": {
+        "basename": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$"
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "challenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence",
+        "format",
+        "deployment_id",
+        "deployment_basename",
+        "bootstrap_record_sha256",
+        "issued_at",
+        "nonce_sha256",
+        "target"
+      ],
+      "properties": {
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "format": { "const": "sub2api-control-authenticated-smoke-challenge-v2" },
+        "deployment_id": { "$ref": "#/$defs/uuid4" },
+        "deployment_basename": { "$ref": "#/$defs/deploymentBasename" },
+        "bootstrap_record_sha256": { "$ref": "#/$defs/sha256" },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "nonce_sha256": { "$ref": "#/$defs/sha256" },
+        "target": { "$ref": "#/$defs/target" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "public_origin",
+        "compose_plan_sha256",
+        "artifact_identity_sha256",
+        "runtime_identity_sha256",
+        "source_identity_sha256",
+        "local_images_sha256",
+        "running_containers_sha256",
+        "binding_sha256"
+      ],
+      "properties": {
+        "public_origin": {
+          "type": "string",
+          "pattern": "^https://(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:.]+\\])(?::[1-9][0-9]{0,4})?$"
+        },
+        "compose_plan_sha256": { "$ref": "#/$defs/sha256" },
+        "artifact_identity_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_identity_sha256": { "$ref": "#/$defs/sha256" },
+        "source_identity_sha256": { "$ref": "#/$defs/sha256" },
+        "local_images_sha256": { "$ref": "#/$defs/sha256" },
+        "running_containers_sha256": { "$ref": "#/$defs/sha256" },
+        "binding_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

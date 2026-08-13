@@ -153,7 +153,7 @@ control_protocol_sha256=$(openssl dgst -sha256 \
   "$repo_root/packages/control-protocol/schema/control-envelope.schema.json" \
   | awk 'NR == 1 {print $NF}')
 sub2api_auth_contract_sha256=$(openssl dgst -sha256 \
-  "$repo_root/docs/contracts/sub2api-auth.v0.1.175.json" \
+  "$repo_root/docs/contracts/sub2api-auth.v0.1.176.json" \
   | awk 'NR == 1 {print $NF}')
 
 mkdir -p \
@@ -949,10 +949,14 @@ markers = {
     "exact_ws": f"acceptance_exact_ws_secret-{nonce}",
     "catchall": f"acceptance_codex_catchall_secret-{nonce}",
 }
+probe_uris = {
+    "exact_ws": "/codex-ws",
+    "catchall": f"/codex-redaction-probe-{nonce}",
+}
 
 for path, marker in (
-    ("/codex-ws", markers["exact_ws"]),
-    ("/codex-adjacent", markers["catchall"]),
+    (probe_uris["exact_ws"], markers["exact_ws"]),
+    (probe_uris["catchall"], markers["catchall"]),
 ):
     try:
         urllib.request.urlopen(
@@ -987,7 +991,7 @@ with urllib.request.urlopen(
         raise SystemExit("query-log probe did not return a bounded X-Request-ID")
 pathlib.Path(sys.argv[2]).write_text(
     json.dumps(
-        {"markers": markers, "request_id": request_id},
+        {"markers": markers, "request_id": request_id, "uris": probe_uris},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -1066,6 +1070,19 @@ if (
     or probe_entry.get("status") != 200
 ):
     raise SystemExit("Nginx access-log probe correlated to the wrong request")
+for label, uri in probe["uris"].items():
+    denial_entries = [
+        entry
+        for entry in entries
+        if entry.get("method") == "GET"
+        and entry.get("uri") == uri
+        and entry.get("status") == 404
+    ]
+    if len(denial_entries) != 1:
+        raise SystemExit(
+            f"Nginx {label} denial did not correlate to exactly one JSON row: "
+            f"{len(denial_entries)}"
+        )
 required_fields = {
     "time", "remote_addr", "method", "uri", "status", "bytes",
     "request_time", "upstream_time", "upstream_status", "upstream_addr", "request_id",

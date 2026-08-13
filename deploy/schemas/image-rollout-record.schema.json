@@ -1,0 +1,1928 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api-codex.invalid/schemas/image-rollout-record-v1.json",
+  "title": "Bootstrap image-only follow-up rollout record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "type",
+    "status",
+    "failure_stage",
+    "rollout_id",
+    "created_at",
+    "completed_at",
+    "tooling",
+    "base_bootstrap",
+    "bundle",
+    "source",
+    "operator_exception",
+    "images",
+    "compose",
+    "steps",
+    "invariants",
+    "smoke",
+    "rollback",
+    "evidence"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "type": { "const": "bootstrap-image-only-followup-v1" },
+    "status": { "enum": ["succeeded", "failed"] },
+    "failure_stage": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/stageToken" }
+      ]
+    },
+    "rollout_id": { "$ref": "#/$defs/uuid4" },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "completed_at": { "$ref": "#/$defs/timestamp" },
+    "tooling": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/tooling" }
+      ]
+    },
+    "base_bootstrap": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/baseBootstrap" }
+      ]
+    },
+    "bundle": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/bundle" }
+      ]
+    },
+    "source": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/source" }
+      ]
+    },
+    "operator_exception": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/operatorException" }
+      ]
+    },
+    "images": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/images" }
+      ]
+    },
+    "compose": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/compose" }
+      ]
+    },
+    "steps": { "$ref": "#/$defs/rolloutSteps" },
+    "invariants": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/recordInvariants" }
+      ]
+    },
+    "smoke": { "$ref": "#/$defs/smoke" },
+    "rollback": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/rollback" }
+      ]
+    },
+    "evidence": { "$ref": "#/$defs/evidence" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": { "const": "succeeded" }
+        }
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "failure_stage": { "type": "null" },
+          "tooling": { "$ref": "#/$defs/tooling" },
+          "base_bootstrap": { "$ref": "#/$defs/baseBootstrap" },
+          "bundle": { "$ref": "#/$defs/successfulBundle" },
+          "source": { "$ref": "#/$defs/source" },
+          "operator_exception": { "$ref": "#/$defs/operatorException" },
+          "images": { "$ref": "#/$defs/images" },
+          "compose": { "$ref": "#/$defs/successfulCompose" },
+          "steps": { "$ref": "#/$defs/successfulRolloutSteps" },
+          "invariants": { "$ref": "#/$defs/recordInvariants" },
+          "smoke": { "$ref": "#/$defs/passedSmoke" },
+          "rollback": { "type": "null" },
+          "evidence": { "$ref": "#/$defs/completeEvidence" }
+        }
+      },
+      "else": {
+        "type": "object",
+        "properties": {
+          "failure_stage": {
+            "$ref": "#/$defs/stageToken"
+          },
+          "steps": { "$ref": "#/$defs/failedRolloutSteps" },
+          "rollback": { "$ref": "#/$defs/rollback" }
+        },
+        "oneOf": [
+          { "$ref": "#/$defs/failedState0" },
+          { "$ref": "#/$defs/failedState1" },
+          { "$ref": "#/$defs/failedState2" },
+          { "$ref": "#/$defs/failedState3" }
+        ]
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "required": ["smoke"],
+        "properties": {
+          "smoke": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "not-run" }
+            }
+          }
+        }
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "smoke": { "type": "null" },
+              "smoke_challenge": { "type": "null" }
+            }
+          }
+        }
+      },
+      "else": {
+        "type": "object",
+        "properties": {
+          "tooling": { "$ref": "#/$defs/tooling" },
+          "base_bootstrap": { "$ref": "#/$defs/baseBootstrap" },
+          "bundle": { "$ref": "#/$defs/bundle" },
+          "source": { "$ref": "#/$defs/source" },
+          "operator_exception": { "$ref": "#/$defs/operatorException" },
+          "images": { "$ref": "#/$defs/images" },
+          "compose": { "$ref": "#/$defs/compose" },
+          "invariants": { "$ref": "#/$defs/recordInvariants" },
+          "evidence": { "$ref": "#/$defs/completeEvidence" }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "required": ["tooling"],
+        "properties": {
+          "tooling": { "type": "null" }
+        }
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "status": { "const": "failed" },
+          "base_bootstrap": { "type": "null" },
+          "bundle": { "type": "null" },
+          "source": { "type": "null" },
+          "operator_exception": { "type": "null" },
+          "images": { "type": "null" },
+          "compose": { "type": "null" },
+          "steps": { "$ref": "#/$defs/forwardAllNotRun" },
+          "invariants": { "type": "null" },
+          "smoke": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "not-run" }
+            }
+          },
+          "rollback": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "not-required" }
+            }
+          },
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "baseline": { "type": "null" },
+              "invariants": { "type": "null" },
+              "plan": { "type": "null" },
+              "running": { "type": "null" },
+              "smoke": { "type": "null" },
+              "smoke_challenge": { "type": "null" }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "dockerImageId": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nullableDockerImageId": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/dockerImageId" }
+      ]
+    },
+    "containerId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullableContainerId": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/containerId" }
+      ]
+    },
+    "uuid4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,6})?Z$"
+    },
+    "nullableTimestamp": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/timestamp" }
+      ]
+    },
+    "basename": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$"
+    },
+    "stageToken": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "fileEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["basename", "sha256", "size"],
+      "properties": {
+        "basename": { "$ref": "#/$defs/basename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "nullableFileEvidence": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/fileEvidence" }
+      ]
+    },
+    "toolArchiveEvidence": {
+      "allOf": [
+        { "$ref": "#/$defs/fileEvidence" },
+        {
+          "type": "object",
+          "required": ["basename"],
+          "properties": {
+            "basename": { "const": "image-rollout-tools.tar" }
+          }
+        }
+      ]
+    },
+    "tooling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tooling_identity",
+        "archive",
+        "manifest",
+        "external_verifier",
+        "admission",
+        "wrapper",
+        "admission_helper",
+        "smoke_helper",
+        "record_schema",
+        "root_owned_read_only"
+      ],
+      "properties": {
+        "tooling_identity": { "$ref": "#/$defs/sha256" },
+        "archive": { "$ref": "#/$defs/toolArchiveEvidence" },
+        "manifest": { "$ref": "#/$defs/fileEvidence" },
+        "external_verifier": { "$ref": "#/$defs/fileEvidence" },
+        "admission": { "$ref": "#/$defs/fileEvidence" },
+        "wrapper": { "$ref": "#/$defs/fileEvidence" },
+        "admission_helper": { "$ref": "#/$defs/fileEvidence" },
+        "smoke_helper": { "$ref": "#/$defs/fileEvidence" },
+        "record_schema": { "$ref": "#/$defs/fileEvidence" },
+        "root_owned_read_only": { "const": true }
+      }
+    },
+    "baseBootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_id",
+        "deployment_basename",
+        "bootstrap_record",
+        "bootstrap_status",
+        "authenticated_smoke_closure",
+        "closure_status",
+        "closure_closes_authenticated_smoke_pending",
+        "original_bootstrap_record_mutated"
+      ],
+      "properties": {
+        "deployment_id": { "$ref": "#/$defs/uuid4" },
+        "deployment_basename": {
+          "type": "string",
+          "pattern": "^bootstrap-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "bootstrap_record": { "$ref": "#/$defs/fileEvidence" },
+        "bootstrap_status": { "const": "bootstrapped-unsigned" },
+        "authenticated_smoke_closure": { "$ref": "#/$defs/fileEvidence" },
+        "closure_status": { "const": "authenticated-smoke-closed" },
+        "closure_closes_authenticated_smoke_pending": { "const": true },
+        "original_bootstrap_record_mutated": { "const": false }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bundle_id",
+        "release",
+        "transport_sha256",
+        "manifest_sha256",
+        "verification_record",
+        "verified",
+        "image_archives",
+        "archive_count",
+        "archives_loaded"
+      ],
+      "properties": {
+        "bundle_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "release": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "transport_sha256": { "$ref": "#/$defs/sha256" },
+        "manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "verification_record": { "$ref": "#/$defs/fileEvidence" },
+        "verified": { "const": true },
+        "image_archives": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["api", "pwa", "postgres_tools"],
+          "properties": {
+            "api": { "$ref": "#/$defs/fileEvidence" },
+            "pwa": { "$ref": "#/$defs/fileEvidence" },
+            "postgres_tools": { "$ref": "#/$defs/fileEvidence" }
+          }
+        },
+        "archive_count": { "const": 3 },
+        "archives_loaded": { "type": "boolean" }
+      }
+    },
+    "successfulBundle": {
+      "allOf": [
+        { "$ref": "#/$defs/bundle" },
+        {
+          "type": "object",
+          "required": ["archives_loaded"],
+          "properties": {
+            "archives_loaded": { "const": true }
+          }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "verification_record",
+        "verified",
+        "verifier_normalized_read_only",
+        "tree_sha256_before",
+        "tree_sha256_after",
+        "tree_unchanged",
+        "bytecode_files_before",
+        "bytecode_files_after",
+        "python_dont_write_bytecode"
+      ],
+      "properties": {
+        "identity": { "$ref": "#/$defs/sha256" },
+        "verification_record": { "$ref": "#/$defs/fileEvidence" },
+        "verified": { "const": true },
+        "verifier_normalized_read_only": { "const": true },
+        "tree_sha256_before": { "$ref": "#/$defs/sha256" },
+        "tree_sha256_after": { "$ref": "#/$defs/sha256" },
+        "tree_unchanged": { "const": true },
+        "bytecode_files_before": { "const": 0 },
+        "bytecode_files_after": { "const": 0 },
+        "python_dont_write_bytecode": { "const": true }
+      }
+    },
+    "operatorException": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "reason",
+        "acknowledged_at",
+        "duplicate_backup_prohibited",
+        "backup_created",
+        "backup_command_run",
+        "migration_run"
+      ],
+      "properties": {
+        "type": { "const": "no-duplicate-backup-operator-instruction-v1" },
+        "reason": { "const": "operator-prohibited-duplicate-backup" },
+        "acknowledged_at": { "$ref": "#/$defs/timestamp" },
+        "duplicate_backup_prohibited": { "const": true },
+        "backup_created": { "const": false },
+        "backup_command_run": { "const": false },
+        "migration_run": { "const": false }
+      }
+    },
+    "imageIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image_id", "platform"],
+      "properties": {
+        "image_id": { "$ref": "#/$defs/dockerImageId" },
+        "platform": { "const": "linux/amd64" }
+      }
+    },
+    "imageSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api", "pwa", "postgres_tools"],
+      "properties": {
+        "api": { "$ref": "#/$defs/imageIdentity" },
+        "pwa": { "$ref": "#/$defs/imageIdentity" },
+        "postgres_tools": { "$ref": "#/$defs/imageIdentity" }
+      }
+    },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "old",
+        "new",
+        "api_changed",
+        "pwa_changed",
+        "postgres_tools_changed",
+        "new_ids_distinct",
+        "postgres_tools_executed"
+      ],
+      "properties": {
+        "old": { "$ref": "#/$defs/imageSet" },
+        "new": { "$ref": "#/$defs/imageSet" },
+        "api_changed": { "const": true },
+        "pwa_changed": { "const": true },
+        "postgres_tools_changed": { "const": true },
+        "new_ids_distinct": { "const": true },
+        "postgres_tools_executed": { "const": false }
+      }
+    },
+    "compose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "base_config",
+        "rollout_config",
+        "only_identity_allowlist_changed",
+        "pull_policy",
+        "no_deps",
+        "force_recreate",
+        "down_invoked",
+        "pull_invoked",
+        "build_invoked",
+        "load_invoked",
+        "migrate_invoked"
+      ],
+      "properties": {
+        "project": { "const": "sub2api-codex-control" },
+        "base_config": { "$ref": "#/$defs/fileEvidence" },
+        "rollout_config": { "$ref": "#/$defs/fileEvidence" },
+        "only_identity_allowlist_changed": { "const": true },
+        "pull_policy": { "const": "never" },
+        "no_deps": { "const": true },
+        "force_recreate": { "const": true },
+        "down_invoked": { "const": false },
+        "pull_invoked": { "const": false },
+        "build_invoked": { "const": false },
+        "load_invoked": { "type": "boolean" },
+        "migrate_invoked": { "const": false }
+      }
+    },
+    "successfulCompose": {
+      "allOf": [
+        { "$ref": "#/$defs/compose" },
+        {
+          "type": "object",
+          "required": ["load_invoked"],
+          "properties": {
+            "load_invoked": { "const": true }
+          }
+        }
+      ]
+    },
+    "readinessEvidence": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/fileEvidence" }
+      ]
+    },
+    "rolloutStepBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "order",
+        "service",
+        "status",
+        "started_at",
+        "completed_at",
+        "old_container_id",
+        "new_container_id",
+        "old_image_id",
+        "new_image_id",
+        "recreated",
+        "health_before",
+        "health_after",
+        "readiness_evidence"
+      ],
+      "properties": {
+        "order": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "service": {
+          "enum": ["control-api-replica", "control-api", "codex-pwa"]
+        },
+        "status": { "enum": ["succeeded", "failed", "not-run"] },
+        "started_at": { "$ref": "#/$defs/nullableTimestamp" },
+        "completed_at": { "$ref": "#/$defs/nullableTimestamp" },
+        "old_container_id": { "$ref": "#/$defs/nullableContainerId" },
+        "new_container_id": { "$ref": "#/$defs/nullableContainerId" },
+        "old_image_id": { "$ref": "#/$defs/nullableDockerImageId" },
+        "new_image_id": { "$ref": "#/$defs/nullableDockerImageId" },
+        "recreated": { "type": "boolean" },
+        "health_before": { "enum": ["healthy", "not-observed"] },
+        "health_after": { "enum": ["healthy", "unhealthy", "not-observed"] },
+        "readiness_evidence": { "$ref": "#/$defs/readinessEvidence" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "succeeded" }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "started_at": { "$ref": "#/$defs/timestamp" },
+              "completed_at": { "$ref": "#/$defs/timestamp" },
+              "old_container_id": { "$ref": "#/$defs/containerId" },
+              "new_container_id": { "$ref": "#/$defs/containerId" },
+              "old_image_id": { "$ref": "#/$defs/dockerImageId" },
+              "new_image_id": { "$ref": "#/$defs/dockerImageId" },
+              "recreated": { "const": true },
+              "health_before": { "const": "healthy" },
+              "health_after": { "const": "healthy" },
+              "readiness_evidence": { "$ref": "#/$defs/fileEvidence" }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "not-run" }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "started_at": { "type": "null" },
+              "completed_at": { "type": "null" },
+              "new_container_id": { "type": "null" },
+              "recreated": { "const": false },
+              "health_after": { "const": "not-observed" },
+              "readiness_evidence": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "failed" }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "started_at": { "$ref": "#/$defs/timestamp" },
+              "completed_at": { "$ref": "#/$defs/timestamp" }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["status", "recreated"],
+            "properties": {
+              "status": { "const": "failed" },
+              "recreated": { "const": false }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "new_container_id": { "type": "null" },
+              "health_after": { "const": "not-observed" },
+              "readiness_evidence": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["recreated"],
+            "properties": {
+              "recreated": { "const": true }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "old_container_id": { "$ref": "#/$defs/containerId" },
+              "old_image_id": { "$ref": "#/$defs/dockerImageId" },
+              "new_image_id": { "$ref": "#/$defs/dockerImageId" },
+              "health_before": { "const": "healthy" }
+            }
+          }
+        }
+      ]
+    },
+    "replicaRolloutStep": {
+      "allOf": [
+        { "$ref": "#/$defs/rolloutStepBase" },
+        {
+          "type": "object",
+          "required": ["order", "service"],
+          "properties": {
+            "order": { "const": 1 },
+            "service": { "const": "control-api-replica" }
+          }
+        }
+      ]
+    },
+    "primaryRolloutStep": {
+      "allOf": [
+        { "$ref": "#/$defs/rolloutStepBase" },
+        {
+          "type": "object",
+          "required": ["order", "service"],
+          "properties": {
+            "order": { "const": 2 },
+            "service": { "const": "control-api" }
+          }
+        }
+      ]
+    },
+    "pwaRolloutStep": {
+      "allOf": [
+        { "$ref": "#/$defs/rolloutStepBase" },
+        {
+          "type": "object",
+          "required": ["order", "service"],
+          "properties": {
+            "order": { "const": 3 },
+            "service": { "const": "codex-pwa" }
+          }
+        }
+      ]
+    },
+    "rolloutSteps": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/replicaRolloutStep" },
+        { "$ref": "#/$defs/primaryRolloutStep" },
+        { "$ref": "#/$defs/pwaRolloutStep" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "successfulRolloutSteps": {
+      "allOf": [
+        { "$ref": "#/$defs/rolloutSteps" },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "object",
+              "required": ["status"],
+              "properties": { "status": { "const": "succeeded" } }
+            },
+            {
+              "type": "object",
+              "required": ["status"],
+              "properties": { "status": { "const": "succeeded" } }
+            },
+            {
+              "type": "object",
+              "required": ["status"],
+              "properties": { "status": { "const": "succeeded" } }
+            }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        }
+      ]
+    },
+    "failedForward0": {
+      "allOf": [
+        { "$ref": "#/$defs/rolloutSteps" },
+        {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/forwardAllNotRun"
+            },
+            {
+              "$ref": "#/$defs/forwardReplicaFailedNotRecreated"
+            }
+          ]
+        }
+      ]
+    },
+    "failedForward1": {
+      "allOf": [
+        { "$ref": "#/$defs/rolloutSteps" },
+        {
+          "oneOf": [
+            { "$ref": "#/$defs/forwardReplicaFailedRecreated" },
+            { "$ref": "#/$defs/forwardReplicaSucceededOnly" },
+            { "$ref": "#/$defs/forwardPrimaryFailedNotRecreated" }
+          ]
+        }
+      ]
+    },
+    "failedForward2": {
+      "allOf": [
+        { "$ref": "#/$defs/rolloutSteps" },
+        {
+          "oneOf": [
+            { "$ref": "#/$defs/forwardPrimaryFailedRecreated" },
+            { "$ref": "#/$defs/forwardApisSucceededOnly" },
+            { "$ref": "#/$defs/forwardPwaFailedNotRecreated" }
+          ]
+        }
+      ]
+    },
+    "failedForward3": {
+      "allOf": [
+        { "$ref": "#/$defs/rolloutSteps" },
+        {
+          "oneOf": [
+            { "$ref": "#/$defs/forwardPwaFailedRecreated" },
+            { "$ref": "#/$defs/forwardAllSucceeded" }
+          ]
+        }
+      ]
+    },
+    "failedRolloutSteps": {
+      "oneOf": [
+        { "$ref": "#/$defs/failedForward0" },
+        { "$ref": "#/$defs/failedForward1" },
+        { "$ref": "#/$defs/failedForward2" },
+        { "$ref": "#/$defs/failedForward3" }
+      ]
+    },
+    "forwardAllNotRun": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/statusNotRun" },
+        { "$ref": "#/$defs/statusNotRun" },
+        { "$ref": "#/$defs/statusNotRun" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "forwardReplicaFailedNotRecreated": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/statusFailedNotRecreated" },
+        { "$ref": "#/$defs/statusNotRun" },
+        { "$ref": "#/$defs/statusNotRun" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "forwardReplicaFailedRecreated": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/statusFailedRecreated" },
+        { "$ref": "#/$defs/statusNotRun" },
+        { "$ref": "#/$defs/statusNotRun" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "forwardReplicaSucceededOnly": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/statusSucceeded" },
+        { "$ref": "#/$defs/statusNotRun" },
+        { "$ref": "#/$defs/statusNotRun" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "forwardPrimaryFailedNotRecreated": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/statusSucceeded" },
+        { "$ref": "#/$defs/statusFailedNotRecreated" },
+        { "$ref": "#/$defs/statusNotRun" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "forwardPrimaryFailedRecreated": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/statusSucceeded" },
+        { "$ref": "#/$defs/statusFailedRecreated" },
+        { "$ref": "#/$defs/statusNotRun" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "forwardApisSucceededOnly": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/statusSucceeded" },
+        { "$ref": "#/$defs/statusSucceeded" },
+        { "$ref": "#/$defs/statusNotRun" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "forwardPwaFailedNotRecreated": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/statusSucceeded" },
+        { "$ref": "#/$defs/statusSucceeded" },
+        { "$ref": "#/$defs/statusFailedNotRecreated" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "forwardPwaFailedRecreated": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/statusSucceeded" },
+        { "$ref": "#/$defs/statusSucceeded" },
+        { "$ref": "#/$defs/statusFailedRecreated" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "forwardAllSucceeded": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/statusSucceeded" },
+        { "$ref": "#/$defs/statusSucceeded" },
+        { "$ref": "#/$defs/statusSucceeded" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "statusNotRun": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "const": "not-run" }
+      }
+    },
+    "statusSucceeded": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "const": "succeeded" }
+      }
+    },
+    "statusFailedNotRecreated": {
+      "type": "object",
+      "required": ["status", "recreated"],
+      "properties": {
+        "status": { "const": "failed" },
+        "recreated": { "const": false }
+      }
+    },
+    "statusFailedRecreated": {
+      "type": "object",
+      "required": ["status", "recreated"],
+      "properties": {
+        "status": { "const": "failed" },
+        "recreated": { "const": true }
+      }
+    },
+    "recordInvariantContainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cap_add",
+        "cap_drop",
+        "container_id",
+        "devices_sha256",
+        "health",
+        "image_id",
+        "mounts_sha256",
+        "networks",
+        "namespace_modes_sha256",
+        "no_new_privileges",
+        "ports",
+        "privileged",
+        "read_only_rootfs",
+        "resource_access_sha256",
+        "restart_count",
+        "running",
+        "security_opts_sha256",
+        "security_sha256",
+        "user_sha256"
+      ],
+      "properties": {
+        "cap_add": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "uniqueItems": true
+        },
+        "cap_drop": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "uniqueItems": true
+        },
+        "container_id": { "$ref": "#/$defs/containerId" },
+        "devices_sha256": { "$ref": "#/$defs/sha256" },
+        "health": { "const": "healthy" },
+        "image_id": { "$ref": "#/$defs/dockerImageId" },
+        "mounts_sha256": { "$ref": "#/$defs/sha256" },
+        "networks": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 255 },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "namespace_modes_sha256": { "$ref": "#/$defs/sha256" },
+        "no_new_privileges": { "type": "boolean" },
+        "ports": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 255 },
+          "uniqueItems": true
+        },
+        "privileged": { "const": false },
+        "read_only_rootfs": { "type": "boolean" },
+        "resource_access_sha256": { "$ref": "#/$defs/sha256" },
+        "restart_count": { "type": "integer", "minimum": 0 },
+        "running": { "const": true },
+        "security_opts_sha256": { "$ref": "#/$defs/sha256" },
+        "security_sha256": { "$ref": "#/$defs/sha256" },
+        "user_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "recordInvariantNginx": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "effective_config_sha256",
+        "managed_tree_sha256",
+        "master_pid",
+        "restart_count"
+      ],
+      "properties": {
+        "effective_config_sha256": { "$ref": "#/$defs/sha256" },
+        "managed_tree_sha256": { "$ref": "#/$defs/sha256" },
+        "master_pid": { "type": "integer", "minimum": 1 },
+        "restart_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "recordInvariantUfw": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "normalized_rules_sha256"],
+      "properties": {
+        "status": { "const": "active" },
+        "normalized_rules_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "migrationRevision": {
+      "type": "string",
+      "pattern": "^[0-9]{8}_[0-9]{4}$"
+    },
+    "recordInvariantMigration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at_expected_head",
+        "current_revision",
+        "expected_revision",
+        "head_revision",
+        "state_sha256"
+      ],
+      "properties": {
+        "at_expected_head": { "const": true },
+        "current_revision": { "$ref": "#/$defs/migrationRevision" },
+        "expected_revision": { "$ref": "#/$defs/migrationRevision" },
+        "head_revision": { "$ref": "#/$defs/migrationRevision" },
+        "state_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "recordInvariantPostgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "control_database_acl_sha256",
+        "control_owned_relation_count",
+        "control_owned_schema_count",
+        "control_relation_acl_sha256",
+        "control_schema_acl_sha256",
+        "database",
+        "database_owner",
+        "role",
+        "role_bypass_rls",
+        "role_create_db",
+        "role_create_role",
+        "role_inherit",
+        "role_login",
+        "role_membership_count",
+        "role_replication",
+        "role_superuser",
+        "sub2api_database",
+        "sub2api_database_acl_sha256",
+        "sub2api_direct_database_acl_privilege_count",
+        "sub2api_direct_relation_acl_privilege_count",
+        "sub2api_direct_schema_acl_privilege_count",
+        "sub2api_effective_connect",
+        "sub2api_effective_create",
+        "sub2api_effective_relation_privilege_count",
+        "sub2api_effective_schema_create_privilege_count",
+        "sub2api_effective_sequence_privilege_count",
+        "sub2api_effective_temporary",
+        "sub2api_owned_relation_count",
+        "sub2api_owned_schema_count",
+        "sub2api_public_connect",
+        "public_connect_exception_recorded"
+      ],
+      "properties": {
+        "control_database_acl_sha256": { "$ref": "#/$defs/sha256" },
+        "control_owned_relation_count": { "type": "integer", "minimum": 0 },
+        "control_owned_schema_count": { "type": "integer", "minimum": 0 },
+        "control_relation_acl_sha256": { "$ref": "#/$defs/sha256" },
+        "control_schema_acl_sha256": { "$ref": "#/$defs/sha256" },
+        "database": { "const": "codex_control" },
+        "database_owner": { "const": "codex_control" },
+        "role": { "const": "codex_control" },
+        "role_bypass_rls": { "const": false },
+        "role_create_db": { "const": false },
+        "role_create_role": { "const": false },
+        "role_inherit": { "const": false },
+        "role_login": { "const": true },
+        "role_membership_count": { "const": 0 },
+        "role_replication": { "const": false },
+        "role_superuser": { "const": false },
+        "sub2api_database": { "const": "sub2api" },
+        "sub2api_database_acl_sha256": { "$ref": "#/$defs/sha256" },
+        "sub2api_direct_database_acl_privilege_count": { "const": 0 },
+        "sub2api_direct_relation_acl_privilege_count": { "const": 0 },
+        "sub2api_direct_schema_acl_privilege_count": { "const": 0 },
+        "sub2api_effective_connect": { "type": "boolean" },
+        "sub2api_effective_create": { "const": false },
+        "sub2api_effective_relation_privilege_count": { "const": 0 },
+        "sub2api_effective_schema_create_privilege_count": { "const": 0 },
+        "sub2api_effective_sequence_privilege_count": { "const": 0 },
+        "sub2api_effective_temporary": { "const": false },
+        "sub2api_owned_relation_count": { "const": 0 },
+        "sub2api_owned_schema_count": { "const": 0 },
+        "sub2api_public_connect": { "type": "boolean" },
+        "public_connect_exception_recorded": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["public_connect_exception_recorded"],
+            "properties": {
+              "public_connect_exception_recorded": { "const": true }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "sub2api_public_connect": { "const": true },
+              "sub2api_effective_connect": { "const": true }
+            }
+          },
+          "else": {
+            "type": "object",
+            "properties": {
+              "sub2api_public_connect": { "const": false },
+              "sub2api_effective_connect": { "const": false }
+            }
+          }
+        }
+      ]
+    },
+    "recordInvariantRedisNamespace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_count", "channel_count", "within_bounds"],
+      "properties": {
+        "key_count": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "channel_count": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "within_bounds": { "const": true }
+      }
+    },
+    "recordInvariantRedis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "auth_mode",
+        "configuration_projection_sha256",
+        "configuration_projection_unchanged",
+        "default_acl_sha256",
+        "default_acl_unchanged",
+        "max_channel_count",
+        "max_key_count",
+        "namespace_after",
+        "namespace_before",
+        "namespace_mutation_attributed_to_rollout",
+        "prefix",
+        "runtime_acl_sha256",
+        "runtime_acl_unchanged",
+        "runtime_user"
+      ],
+      "properties": {
+        "auth_mode": { "const": "none" },
+        "configuration_projection_sha256": { "$ref": "#/$defs/sha256" },
+        "configuration_projection_unchanged": { "const": true },
+        "default_acl_sha256": { "$ref": "#/$defs/sha256" },
+        "default_acl_unchanged": { "const": true },
+        "max_channel_count": { "const": 10000 },
+        "max_key_count": { "const": 10000 },
+        "namespace_after": { "$ref": "#/$defs/recordInvariantRedisNamespace" },
+        "namespace_before": { "$ref": "#/$defs/recordInvariantRedisNamespace" },
+        "namespace_mutation_attributed_to_rollout": { "const": false },
+        "prefix": { "const": "codex-control:" },
+        "runtime_acl_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_acl_unchanged": { "const": true },
+        "runtime_user": { "const": "default" }
+      }
+    },
+    "recordInvariants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "after_sha256",
+        "baseline_sha256",
+        "before_sha256",
+        "command",
+        "containers",
+        "format_version",
+        "listeners",
+        "migration",
+        "nginx",
+        "postgres",
+        "projection_sha256",
+        "redis",
+        "status",
+        "ufw",
+        "unchanged"
+      ],
+      "properties": {
+        "after_sha256": { "$ref": "#/$defs/sha256" },
+        "baseline_sha256": { "$ref": "#/$defs/sha256" },
+        "before_sha256": { "$ref": "#/$defs/sha256" },
+        "command": { "const": "invariants" },
+        "containers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["postgres", "redis", "sub2api"],
+          "properties": {
+            "postgres": { "$ref": "#/$defs/recordInvariantContainer" },
+            "redis": { "$ref": "#/$defs/recordInvariantContainer" },
+            "sub2api": { "$ref": "#/$defs/recordInvariantContainer" }
+          }
+        },
+        "format_version": { "const": 2 },
+        "listeners": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "migration": { "$ref": "#/$defs/recordInvariantMigration" },
+        "nginx": { "$ref": "#/$defs/recordInvariantNginx" },
+        "postgres": { "$ref": "#/$defs/recordInvariantPostgres" },
+        "projection_sha256": { "$ref": "#/$defs/sha256" },
+        "redis": { "$ref": "#/$defs/recordInvariantRedis" },
+        "status": { "const": "admitted" },
+        "ufw": { "$ref": "#/$defs/recordInvariantUfw" },
+        "unchanged": { "const": true }
+      }
+    },
+    "smoke": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "status",
+        "started_at",
+        "completed_at",
+        "check_count",
+        "checks_passed",
+        "check_catalog_sha256",
+        "challenge_sha256",
+        "target_binding_sha256",
+        "result_sha256"
+      ],
+      "properties": {
+        "schema_version": { "const": "image-rollout-smoke-result-v1" },
+        "status": { "enum": ["passed", "failed", "not-run"] },
+        "started_at": { "$ref": "#/$defs/nullableTimestamp" },
+        "completed_at": { "$ref": "#/$defs/nullableTimestamp" },
+        "check_count": { "type": "integer", "minimum": 0 },
+        "checks_passed": { "type": "integer", "minimum": 0 },
+        "check_catalog_sha256": { "$ref": "#/$defs/nullableSha256" },
+        "challenge_sha256": { "$ref": "#/$defs/nullableSha256" },
+        "target_binding_sha256": { "$ref": "#/$defs/nullableSha256" },
+        "result_sha256": { "$ref": "#/$defs/nullableSha256" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "passed" }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "started_at": { "$ref": "#/$defs/timestamp" },
+              "completed_at": { "$ref": "#/$defs/timestamp" },
+              "check_count": { "const": 9 },
+              "checks_passed": { "const": 9 },
+              "check_catalog_sha256": { "$ref": "#/$defs/sha256" },
+              "challenge_sha256": { "$ref": "#/$defs/sha256" },
+              "target_binding_sha256": { "$ref": "#/$defs/sha256" },
+              "result_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "failed" }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "started_at": { "$ref": "#/$defs/timestamp" },
+              "completed_at": { "$ref": "#/$defs/timestamp" },
+              "check_count": { "const": 9 },
+              "checks_passed": { "type": "integer", "minimum": 0, "maximum": 8 },
+              "check_catalog_sha256": { "$ref": "#/$defs/sha256" },
+              "challenge_sha256": { "$ref": "#/$defs/sha256" },
+              "target_binding_sha256": { "$ref": "#/$defs/sha256" },
+              "result_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "not-run" }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "started_at": { "type": "null" },
+              "completed_at": { "type": "null" },
+              "check_count": { "const": 0 },
+              "checks_passed": { "const": 0 },
+              "check_catalog_sha256": { "type": "null" },
+              "challenge_sha256": { "type": "null" },
+              "target_binding_sha256": { "type": "null" },
+              "result_sha256": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "passedSmoke": {
+      "allOf": [
+        { "$ref": "#/$defs/smoke" },
+        {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "const": "passed" }
+          }
+        }
+      ]
+    },
+    "nullableSha256": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sha256" }
+      ]
+    },
+    "rollbackStepBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "order",
+        "service",
+        "status",
+        "started_at",
+        "completed_at",
+        "from_image_id",
+        "to_image_id",
+        "container_id_after",
+        "health_after",
+        "evidence"
+      ],
+      "properties": {
+        "order": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "service": {
+          "enum": ["codex-pwa", "control-api", "control-api-replica"]
+        },
+        "status": { "enum": ["succeeded", "failed"] },
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "from_image_id": { "$ref": "#/$defs/dockerImageId" },
+        "to_image_id": { "$ref": "#/$defs/dockerImageId" },
+        "container_id_after": { "$ref": "#/$defs/nullableContainerId" },
+        "health_after": { "enum": ["healthy", "unhealthy", "not-observed"] },
+        "evidence": { "$ref": "#/$defs/readinessEvidence" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "succeeded" }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "container_id_after": { "$ref": "#/$defs/containerId" },
+              "health_after": { "const": "healthy" },
+              "evidence": { "$ref": "#/$defs/fileEvidence" }
+            }
+          }
+        }
+      ]
+    },
+    "rollbackPwaStep": {
+      "allOf": [
+        { "$ref": "#/$defs/rollbackStepBase" },
+        {
+          "type": "object",
+          "required": ["order", "service"],
+          "properties": {
+            "order": { "const": 1 },
+            "service": { "const": "codex-pwa" }
+          }
+        }
+      ]
+    },
+    "rollbackPrimaryStepOrder1": {
+      "allOf": [
+        { "$ref": "#/$defs/rollbackStepBase" },
+        {
+          "type": "object",
+          "required": ["order", "service"],
+          "properties": {
+            "order": { "const": 1 },
+            "service": { "const": "control-api" }
+          }
+        }
+      ]
+    },
+    "rollbackPrimaryStepOrder2": {
+      "allOf": [
+        { "$ref": "#/$defs/rollbackStepBase" },
+        {
+          "type": "object",
+          "required": ["order", "service"],
+          "properties": {
+            "order": { "const": 2 },
+            "service": { "const": "control-api" }
+          }
+        }
+      ]
+    },
+    "rollbackReplicaStepOrder1": {
+      "allOf": [
+        { "$ref": "#/$defs/rollbackStepBase" },
+        {
+          "type": "object",
+          "required": ["order", "service"],
+          "properties": {
+            "order": { "const": 1 },
+            "service": { "const": "control-api-replica" }
+          }
+        }
+      ]
+    },
+    "rollbackReplicaStepOrder2": {
+      "allOf": [
+        { "$ref": "#/$defs/rollbackStepBase" },
+        {
+          "type": "object",
+          "required": ["order", "service"],
+          "properties": {
+            "order": { "const": 2 },
+            "service": { "const": "control-api-replica" }
+          }
+        }
+      ]
+    },
+    "rollbackReplicaStepOrder3": {
+      "allOf": [
+        { "$ref": "#/$defs/rollbackStepBase" },
+        {
+          "type": "object",
+          "required": ["order", "service"],
+          "properties": {
+            "order": { "const": 3 },
+            "service": { "const": "control-api-replica" }
+          }
+        }
+      ]
+    },
+    "rollbackSteps": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": false,
+          "maxItems": 0
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            { "$ref": "#/$defs/rollbackReplicaStepOrder1" }
+          ],
+          "items": false,
+          "minItems": 1,
+          "maxItems": 1
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            { "$ref": "#/$defs/rollbackPrimaryStepOrder1" },
+            { "$ref": "#/$defs/rollbackReplicaStepOrder2" }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            { "$ref": "#/$defs/rollbackPwaStep" },
+            { "$ref": "#/$defs/rollbackPrimaryStepOrder2" },
+            { "$ref": "#/$defs/rollbackReplicaStepOrder3" }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        }
+      ]
+    },
+    "successfulRollbackSteps": {
+      "allOf": [
+        { "$ref": "#/$defs/rollbackSteps" },
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/rollbackStatusSucceeded" }
+        }
+      ]
+    },
+    "failedRollbackSteps": {
+      "allOf": [
+        { "$ref": "#/$defs/rollbackSteps" },
+        { "type": "array", "minItems": 1 },
+        {
+          "oneOf": [
+            { "$ref": "#/$defs/rollbackFailure1F" },
+            { "$ref": "#/$defs/rollbackFailure2FS" },
+            { "$ref": "#/$defs/rollbackFailure2SF" },
+            { "$ref": "#/$defs/rollbackFailure2FF" },
+            { "$ref": "#/$defs/rollbackFailure3FSS" },
+            { "$ref": "#/$defs/rollbackFailure3SFS" },
+            { "$ref": "#/$defs/rollbackFailure3SSF" },
+            { "$ref": "#/$defs/rollbackFailure3FFS" },
+            { "$ref": "#/$defs/rollbackFailure3FSF" },
+            { "$ref": "#/$defs/rollbackFailure3SFF" },
+            { "$ref": "#/$defs/rollbackFailure3FFF" }
+          ]
+        }
+      ]
+    },
+    "rollbackFailure1F": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/rollbackStatusFailed" }
+      ],
+      "items": false,
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "rollbackFailure2FS": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/rollbackStatusFailed" },
+        { "$ref": "#/$defs/rollbackStatusSucceeded" }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "rollbackFailure2SF": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/rollbackStatusSucceeded" },
+        { "$ref": "#/$defs/rollbackStatusFailed" }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "rollbackFailure2FF": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/rollbackStatusFailed" },
+        { "$ref": "#/$defs/rollbackStatusFailed" }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "rollbackFailure3FSS": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/rollbackStatusFailed" },
+        { "$ref": "#/$defs/rollbackStatusSucceeded" },
+        { "$ref": "#/$defs/rollbackStatusSucceeded" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "rollbackFailure3SFS": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/rollbackStatusSucceeded" },
+        { "$ref": "#/$defs/rollbackStatusFailed" },
+        { "$ref": "#/$defs/rollbackStatusSucceeded" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "rollbackFailure3SSF": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/rollbackStatusSucceeded" },
+        { "$ref": "#/$defs/rollbackStatusSucceeded" },
+        { "$ref": "#/$defs/rollbackStatusFailed" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "rollbackFailure3FFS": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/rollbackStatusFailed" },
+        { "$ref": "#/$defs/rollbackStatusFailed" },
+        { "$ref": "#/$defs/rollbackStatusSucceeded" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "rollbackFailure3FSF": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/rollbackStatusFailed" },
+        { "$ref": "#/$defs/rollbackStatusSucceeded" },
+        { "$ref": "#/$defs/rollbackStatusFailed" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "rollbackFailure3SFF": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/rollbackStatusSucceeded" },
+        { "$ref": "#/$defs/rollbackStatusFailed" },
+        { "$ref": "#/$defs/rollbackStatusFailed" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "rollbackFailure3FFF": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/rollbackStatusFailed" },
+        { "$ref": "#/$defs/rollbackStatusFailed" },
+        { "$ref": "#/$defs/rollbackStatusFailed" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "rollbackStatusSucceeded": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "const": "succeeded" }
+      }
+    },
+    "rollbackStatusFailed": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "const": "failed" }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "trigger_stage",
+        "started_at",
+        "completed_at",
+        "steps",
+        "invariants_restored",
+        "evidence"
+      ],
+      "properties": {
+        "status": { "enum": ["not-required", "succeeded", "failed"] },
+        "trigger_stage": { "$ref": "#/$defs/stageToken" },
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "steps": { "$ref": "#/$defs/rollbackSteps" },
+        "invariants_restored": { "type": "boolean" },
+        "evidence": { "$ref": "#/$defs/nullableFileEvidence" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "not-required" }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "steps": { "type": "array", "maxItems": 0 },
+              "invariants_restored": { "const": true },
+              "evidence": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "succeeded" }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "steps": { "$ref": "#/$defs/successfulRollbackSteps" },
+              "invariants_restored": { "const": true },
+              "evidence": { "$ref": "#/$defs/fileEvidence" }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": { "const": "failed" }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "evidence": { "$ref": "#/$defs/fileEvidence" }
+            },
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["steps", "invariants_restored"],
+                "properties": {
+                  "steps": { "$ref": "#/$defs/failedRollbackSteps" },
+                  "invariants_restored": { "const": true }
+                }
+              },
+              {
+                "type": "object",
+                "required": ["steps", "invariants_restored"],
+                "properties": {
+                  "steps": {
+                    "allOf": [
+                      { "$ref": "#/$defs/rollbackSteps" },
+                      { "type": "array", "minItems": 1 }
+                    ]
+                  },
+                  "invariants_restored": { "const": false }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "executedRollback1": {
+      "allOf": [
+        { "$ref": "#/$defs/rollback" },
+        {
+          "type": "object",
+          "required": ["status", "steps"],
+          "properties": {
+            "status": { "enum": ["succeeded", "failed"] },
+            "steps": { "type": "array", "minItems": 1, "maxItems": 1 }
+          }
+        }
+      ]
+    },
+    "executedRollback2": {
+      "allOf": [
+        { "$ref": "#/$defs/rollback" },
+        {
+          "type": "object",
+          "required": ["status", "steps"],
+          "properties": {
+            "status": { "enum": ["succeeded", "failed"] },
+            "steps": { "type": "array", "minItems": 2, "maxItems": 2 }
+          }
+        }
+      ]
+    },
+    "executedRollback3": {
+      "allOf": [
+        { "$ref": "#/$defs/rollback" },
+        {
+          "type": "object",
+          "required": ["status", "steps"],
+          "properties": {
+            "status": { "enum": ["succeeded", "failed"] },
+            "steps": { "type": "array", "minItems": 3, "maxItems": 3 }
+          }
+        }
+      ]
+    },
+    "failedState0": {
+      "type": "object",
+      "required": ["steps", "rollback"],
+      "properties": {
+        "steps": { "$ref": "#/$defs/failedForward0" },
+        "rollback": {
+          "allOf": [
+            { "$ref": "#/$defs/rollback" },
+            {
+              "type": "object",
+              "required": ["status"],
+              "properties": {
+                "status": { "const": "not-required" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "failedState1": {
+      "type": "object",
+      "required": ["steps", "rollback"],
+      "properties": {
+        "steps": { "$ref": "#/$defs/failedForward1" },
+        "rollback": { "$ref": "#/$defs/executedRollback1" }
+      }
+    },
+    "failedState2": {
+      "type": "object",
+      "required": ["steps", "rollback"],
+      "properties": {
+        "steps": { "$ref": "#/$defs/failedForward2" },
+        "rollback": { "$ref": "#/$defs/executedRollback2" }
+      }
+    },
+    "failedState3": {
+      "type": "object",
+      "required": ["steps", "rollback"],
+      "properties": {
+        "steps": { "$ref": "#/$defs/failedForward3" },
+        "rollback": { "$ref": "#/$defs/executedRollback3" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline",
+        "context",
+        "invariants",
+        "plan",
+        "running",
+        "smoke",
+        "smoke_challenge"
+      ],
+      "properties": {
+        "baseline": { "$ref": "#/$defs/nullableFileEvidence" },
+        "context": { "$ref": "#/$defs/fileEvidence" },
+        "invariants": { "$ref": "#/$defs/nullableFileEvidence" },
+        "plan": { "$ref": "#/$defs/nullableFileEvidence" },
+        "running": { "$ref": "#/$defs/nullableFileEvidence" },
+        "smoke": { "$ref": "#/$defs/nullableFileEvidence" },
+        "smoke_challenge": { "$ref": "#/$defs/nullableFileEvidence" }
+      }
+    },
+    "completeEvidence": {
+      "allOf": [
+        { "$ref": "#/$defs/evidence" },
+        {
+          "type": "object",
+          "properties": {
+            "baseline": { "$ref": "#/$defs/fileEvidence" },
+            "invariants": { "$ref": "#/$defs/fileEvidence" },
+            "plan": { "$ref": "#/$defs/fileEvidence" },
+            "running": { "$ref": "#/$defs/fileEvidence" },
+            "smoke": { "$ref": "#/$defs/fileEvidence" },
+            "smoke_challenge": { "$ref": "#/$defs/fileEvidence" }
+          }
+        }
+      ]
+    }
+  }
+}

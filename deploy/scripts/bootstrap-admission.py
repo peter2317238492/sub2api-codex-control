@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed admission checks for signed production deployments.
+"""Fail-closed admission checks for the unsigned first production bootstrap.
 
 This script deliberately has no project or third-party imports.  It consumes
 only already-captured evidence and emits one compact JSON object after every
@@ -19,7 +19,8 @@ import shutil
 import stat
 import subprocess
 import sys
-from datetime import UTC, datetime
+import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
@@ -41,6 +42,21 @@ MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_CHECKSUM_BYTES = 1024
 MAX_SECRET_BYTES = 65_536
 MAX_FRESH_BACKUP_AGE_SECONDS = 1800
+STALE_BACKUP_EXCEPTION_MAX_AGE_SECONDS = 691200
+STALE_BACKUP_EXCEPTION_TYPE = "stale-production-backup-exception-v1"
+STALE_BACKUP_EXCEPTION_SCOPE = "unsigned-first-deployment-only"
+STALE_BACKUP_EXCEPTION_REASON = "user-prohibited-repeat-backup"
+STALE_BACKUP_KNOWN_MISMATCHES = ["current_data_rpo", "current_sub2api_runtime"]
+STALE_BACKUP_FORBIDDEN_MUTATIONS = [
+    "existing_production_containers",
+    "nginx_configuration",
+    "postgresql_resources_except_codex_control",
+    "redis_acl_or_configuration",
+    "redis_outside_codex-control:*",
+    "sub2api_database",
+    "sub2api_runtime",
+    "ufw",
+]
 PLACEHOLDERS = {
     "dev",
     "development",
@@ -306,6 +322,252 @@ def parse_created_at(value: Any) -> datetime:
     return parsed.astimezone(UTC)
 
 
+def parse_utc_timestamp(value: Any, label: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        fail(f"{label} is missing")
+    try:
+        parsed = datetime.fromisoformat(
+            value.removesuffix("Z") + ("+00:00" if value.endswith("Z") else "")
+        )
+    except ValueError:
+        fail(f"{label} is invalid")
+    if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
+        fail(f"{label} must include a UTC offset")
+    return parsed.astimezone(UTC)
+
+
+def expected_stale_backup_resources(args: argparse.Namespace) -> dict[str, list[str]]:
+    pwa_network = args.expected_pwa_network
+    if not isinstance(pwa_network, str) or not pwa_network:
+        fail("stale backup exception requires the admitted PWA network name")
+    return {
+        "compose_services": [
+            "codex-pwa",
+            "control-api",
+            "control-api-replica",
+            "control-migrate",
+        ],
+        "docker_networks": [pwa_network],
+        "postgresql_databases": [args.expected_control_database],
+        "postgresql_roles": [args.expected_control_role],
+        "redis_channels": [f"{args.expected_redis_prefix}*"],
+        "redis_keys": [f"{args.expected_redis_prefix}*"],
+    }
+
+
+def stale_runtime_binding(path: Path) -> dict[str, Any]:
+    value = load_json(path, "current Sub2API runtime attestation", exact_mode=0o600)
+    if not isinstance(value, dict) or value.get("format_version") != 2:
+        fail("current Sub2API runtime attestation has an unsupported schema")
+    keys = (
+        "admission_profile",
+        "binary_sha256",
+        "container_id",
+        "contract_sha256",
+        "image_digest",
+        "image_id",
+        "runtime_built_at",
+        "runtime_commit",
+        "runtime_version",
+    )
+    result = {key: value.get(key) for key in keys}
+    if (
+        not isinstance(result["admission_profile"], str)
+        or result["admission_profile"]
+        not in {
+            "immutable-image-v1",
+            "legacy-self-updated-production-v1",
+        }
+        or not isinstance(result["runtime_version"], str)
+        or not result["runtime_version"]
+        or not isinstance(result["runtime_built_at"], str)
+        or not isinstance(result["runtime_commit"], str)
+        or re.fullmatch(r"[0-9a-f]{40}", result["runtime_commit"]) is None
+        or not isinstance(result["container_id"], str)
+        or CONTAINER_ID_RE.fullmatch(result["container_id"]) is None
+        or not isinstance(result["image_id"], str)
+        or IMAGE_ID_RE.fullmatch(result["image_id"]) is None
+        or not isinstance(result["image_digest"], str)
+        or re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", result["image_digest"]) is None
+        or any(
+            not isinstance(result[key], str) or SHA256_RE.fullmatch(result[key]) is None
+            for key in ("binary_sha256", "contract_sha256")
+        )
+    ):
+        fail("current Sub2API runtime attestation has an invalid binding tuple")
+    parse_utc_timestamp(result["runtime_built_at"], "current Sub2API runtime built_at")
+    return result
+
+
+def validate_stale_backup_exception_value(
+    value: Any,
+    *,
+    args: argparse.Namespace,
+    exception_sha256: str,
+    backup_created_at: datetime,
+    snapshot_directory: str,
+    manifest_sha256: str,
+    now: datetime,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        fail("stale production backup exception is not an object")
+    require_keys(
+        value,
+        {
+            "schema_version",
+            "type",
+            "status",
+            "exception_id",
+            "deployment_id",
+            "issued_at",
+            "reason",
+            "scope",
+            "receipt_path",
+            "receipt_sha256",
+            "snapshot_directory",
+            "manifest_sha256",
+            "backup_created_at",
+            "max_age_seconds",
+            "expires_at",
+            "known_mismatches",
+            "rollback_strategy",
+            "automatic_restore",
+            "allowed_resources",
+            "forbidden_mutations",
+            "current_sub2api_runtime",
+        },
+        "stale production backup exception",
+    )
+    if (
+        type(value.get("schema_version")) is not int
+        or value.get("schema_version") != SCHEMA_VERSION
+        or value.get("type") != STALE_BACKUP_EXCEPTION_TYPE
+        or value.get("status") != "approved"
+        or value.get("scope") != STALE_BACKUP_EXCEPTION_SCOPE
+        or value.get("reason") != STALE_BACKUP_EXCEPTION_REASON
+    ):
+        fail("stale production backup exception type, status, or scope is invalid")
+    try:
+        exception_id = str(uuid.UUID(value.get("exception_id"), version=4))
+    except (AttributeError, TypeError, ValueError):
+        fail("stale production backup exception ID must be one canonical UUIDv4")
+    if exception_id != value.get("exception_id"):
+        fail("stale production backup exception ID must be one canonical UUIDv4")
+    if (
+        not isinstance(args.deployment_id, str)
+        or value.get("deployment_id") != args.deployment_id
+    ):
+        fail("stale production backup exception names a different deployment")
+    try:
+        canonical_deployment_id = str(uuid.UUID(args.deployment_id, version=4))
+    except (AttributeError, TypeError, ValueError):
+        fail("stale production backup deployment ID must be one canonical UUIDv4")
+    if canonical_deployment_id != args.deployment_id:
+        fail("stale production backup deployment ID must be one canonical UUIDv4")
+    issued_at = parse_utc_timestamp(
+        value.get("issued_at"), "stale production backup exception issued_at"
+    )
+    if issued_at > now:
+        fail("stale production backup exception was issued in the future")
+    if value.get("receipt_path") != str(args.result_file):
+        fail("stale production backup exception names a different receipt")
+    if value.get("receipt_sha256") != args.receipt_sha256:
+        fail("stale production backup exception names different receipt content")
+    if value.get("snapshot_directory") != snapshot_directory:
+        fail("stale production backup exception names a different snapshot")
+    if value.get("manifest_sha256") != manifest_sha256:
+        fail("stale production backup exception names a different manifest")
+    expected_created_at = backup_created_at.isoformat().replace("+00:00", "Z")
+    if value.get("backup_created_at") != expected_created_at:
+        fail("stale production backup exception names a different backup creation time")
+    if value.get("max_age_seconds") != STALE_BACKUP_EXCEPTION_MAX_AGE_SECONDS:
+        fail("stale production backup exception has an invalid maximum age")
+    expires_at = parse_utc_timestamp(
+        value.get("expires_at"), "stale production backup exception expires_at"
+    )
+    latest_expiry = backup_created_at + timedelta(
+        seconds=STALE_BACKUP_EXCEPTION_MAX_AGE_SECONDS
+    )
+    if expires_at > latest_expiry:
+        fail("stale production backup exception expires after its hard backup deadline")
+    if now >= expires_at:
+        fail("stale production backup exception has expired")
+    if expires_at - issued_at > timedelta(seconds=3600):
+        fail("stale production backup exception validity exceeds one hour")
+    age = (now - backup_created_at).total_seconds()
+    if age > STALE_BACKUP_EXCEPTION_MAX_AGE_SECONDS:
+        fail("production backup exceeds the stale exception hard age limit")
+    if value.get("known_mismatches") != STALE_BACKUP_KNOWN_MISMATCHES:
+        fail("stale production backup exception has unexpected known mismatches")
+    if value.get("rollback_strategy") != "delete-only-new-control-resources":
+        fail("stale production backup exception has an invalid rollback strategy")
+    if value.get("automatic_restore") is not False:
+        fail("stale production backup exception must prohibit automatic restore")
+    if value.get("allowed_resources") != expected_stale_backup_resources(args):
+        fail("stale production backup exception has unexpected allowed resources")
+    if value.get("forbidden_mutations") != STALE_BACKUP_FORBIDDEN_MUTATIONS:
+        fail("stale production backup exception has unexpected forbidden mutations")
+    runtime_binding = stale_runtime_binding(args.current_runtime_attestation)
+    if value.get("current_sub2api_runtime") != runtime_binding:
+        fail(
+            "stale production backup exception names a different current Sub2API runtime"
+        )
+    return {
+        "automatic_restore": False,
+        "exception_file": str(args.stale_exception_file),
+        "exception_sha256": exception_sha256,
+        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+        "exception_id": exception_id,
+        "deployment_id": args.deployment_id,
+        "issued_at": issued_at.isoformat().replace("+00:00", "Z"),
+        "known_mismatches": STALE_BACKUP_KNOWN_MISMATCHES,
+        "max_age_seconds": STALE_BACKUP_EXCEPTION_MAX_AGE_SECONDS,
+        "rollback_strategy": "delete-only-new-control-resources",
+        "scope": STALE_BACKUP_EXCEPTION_SCOPE,
+        "type": STALE_BACKUP_EXCEPTION_TYPE,
+        "current_sub2api_runtime": runtime_binding,
+    }
+
+
+def load_stale_backup_exception(
+    args: argparse.Namespace,
+    *,
+    backup_created_at: datetime,
+    snapshot_directory: str,
+    manifest_sha256: str,
+    now: datetime,
+) -> dict[str, Any] | None:
+    if args.stale_exception_file is None:
+        return None
+    if not args.deployment_id or args.current_runtime_attestation is None:
+        fail(
+            "stale production backup exception requires deployment and runtime binding"
+        )
+    raw, metadata = read_regular_bytes(
+        args.stale_exception_file,
+        "stale production backup exception",
+        max_bytes=MAX_SECRET_BYTES,
+        exact_mode=0o600,
+        expected_uid=0,
+        require_absolute_path=True,
+    )
+    if metadata.st_nlink != 1:
+        fail("stale production backup exception must have exactly one hard link")
+    try:
+        value = strict_json_bytes(raw, "stale production backup exception")
+    except UnicodeDecodeError:
+        fail("stale production backup exception is not valid UTF-8 JSON")
+    return validate_stale_backup_exception_value(
+        value,
+        args=args,
+        exception_sha256=sha256_bytes(raw),
+        backup_created_at=backup_created_at,
+        snapshot_directory=snapshot_directory,
+        manifest_sha256=manifest_sha256,
+        now=now,
+    )
+
+
 def parse_manifest(raw: bytes) -> dict[str, str]:
     if not raw or not raw.endswith(b"\n"):
         fail("backup manifest is empty or not newline terminated")
@@ -390,6 +652,7 @@ def backup_receipt(args: argparse.Namespace) -> dict[str, Any]:
         "production backup result",
         max_bytes=MAX_JSON_BYTES,
         exact_mode=0o600,
+        expected_uid=args.expected_owner_uid,
         require_absolute_path=True,
     )
     result = ready_object(
@@ -408,7 +671,10 @@ def backup_receipt(args: argparse.Namespace) -> dict[str, Any]:
         fail("production backup result has no valid manifest hash")
     snapshot = Path(snapshot_text)
     directory_descriptor, directory_metadata = open_directory(
-        snapshot, "production backup snapshot", exact_mode=0o700
+        snapshot,
+        "production backup snapshot",
+        exact_mode=0o700,
+        expected_uid=args.expected_owner_uid,
     )
     descriptors: list[int] = []
     try:
@@ -430,7 +696,7 @@ def backup_receipt(args: argparse.Namespace) -> dict[str, Any]:
             descriptors.append(descriptor)
             if (
                 not stat.S_ISREG(metadata.st_mode)
-                or not allowed_owner(metadata, None)
+                or not allowed_owner(metadata, args.expected_owner_uid)
                 or stat.S_IMODE(metadata.st_mode) != 0o600
             ):
                 fail("production backup snapshot entries must be private regular files")
@@ -486,10 +752,15 @@ def backup_receipt(args: argparse.Namespace) -> dict[str, Any]:
                 "snapshot_directory",
                 "containers",
                 "sources",
+                "release_evidence",
+                "docker_networks",
+                "owner_uid",
                 "redis",
                 "artifacts",
             },
         )
+        if record.get("owner_uid") != args.expected_owner_uid:
+            fail("backup-record.json owner UID differs from admission policy")
         if record.get("snapshot_directory") != snapshot.name:
             fail("backup-record.json names a different snapshot")
         created_at = parse_created_at(record.get("created_at"))
@@ -498,7 +769,16 @@ def backup_receipt(args: argparse.Namespace) -> dict[str, Any]:
         if age < -60:
             fail("production backup creation time is in the future")
         fresh = age <= args.max_age_seconds
-        if not fresh:
+        stale_exception = load_stale_backup_exception(
+            args,
+            backup_created_at=created_at,
+            snapshot_directory=str(snapshot),
+            manifest_sha256=manifest_sha256,
+            now=now,
+        )
+        if fresh and stale_exception is not None:
+            fail("stale production backup exception is not valid for a fresh backup")
+        if not fresh and stale_exception is None:
             fail("production backup is stale")
 
         artifact_values = record.get("artifacts")
@@ -536,6 +816,76 @@ def backup_receipt(args: argparse.Namespace) -> dict[str, Any]:
                 fail("backup artifact inventory differs from the snapshot")
             assert_stable(descriptor, metadata, f"backup artifact {name}")
 
+        required_recovery_artifacts = {
+            "docker-container-inspect.json",
+            "docker-network-inspect.json",
+            "docker-networks.json",
+            "release-records.tar.gz",
+            "release-records.contents.txt",
+            "release-records-inventory.json",
+            "release-evidence-inventory.json",
+            "sub2api-postgres.dump",
+            "postgres-additional-databases.json",
+            "redis-logical.rdb",
+        }
+        if not required_recovery_artifacts.issubset(artifact_inventory):
+            fail("production backup omits a required recovery domain")
+        release_evidence = record.get("release_evidence")
+        if not isinstance(release_evidence, list) or len(release_evidence) < 2:
+            fail("production backup has incomplete signed release evidence")
+        release_artifacts: set[str] = set()
+        for item in release_evidence:
+            if not isinstance(item, dict):
+                fail("production backup release evidence is invalid")
+            require_keys(
+                item,
+                {"source", "artifact", "sha256", "size"},
+                "production backup release evidence",
+            )
+            artifact = item.get("artifact")
+            if (
+                not isinstance(artifact, str)
+                or not artifact.startswith("release-evidence-")
+                or artifact in release_artifacts
+                or artifact not in artifact_inventory
+                or item.get("sha256") != artifact_inventory[artifact]["sha256"]
+                or item.get("size") != artifact_inventory[artifact]["size"]
+            ):
+                fail("production backup release evidence differs from the snapshot")
+            release_artifacts.add(artifact)
+        networks = record.get("docker_networks")
+        if not isinstance(networks, list) or not networks:
+            fail("production backup Docker network inventory is invalid")
+        network_names: set[str] = set()
+        for network in networks:
+            if not isinstance(network, dict):
+                fail("production backup Docker network inventory is invalid")
+            required_network_keys = {
+                "name",
+                "id",
+                "driver",
+                "scope",
+                "internal",
+                "attachable",
+                "ingress",
+                "enable_ipv6",
+                "ipam",
+                "options",
+                "containers",
+            }
+            require_keys(network, required_network_keys, "backup Docker network")
+            name = network.get("name")
+            identifier = network.get("id")
+            if (
+                not isinstance(name, str)
+                or name in network_names
+                or not isinstance(identifier, str)
+                or CONTAINER_ID_RE.fullmatch(identifier) is None
+                or not isinstance(network.get("containers"), list)
+            ):
+                fail("production backup Docker network inventory is invalid")
+            network_names.add(name)
+
         container_values = record.get("containers")
         if not isinstance(container_values, dict) or set(container_values) != {
             "sub2api",
@@ -557,7 +907,11 @@ def backup_receipt(args: argparse.Namespace) -> dict[str, Any]:
             directory_descriptor, directory_metadata, "production backup snapshot"
         )
         return {
-            "admission_mode": "fresh-production-backup",
+            "admission_mode": (
+                STALE_BACKUP_EXCEPTION_TYPE
+                if stale_exception is not None
+                else "fresh-production-backup"
+            ),
             "format_version": SCHEMA_VERSION,
             "fresh": fresh,
             "status": "admitted",
@@ -567,6 +921,9 @@ def backup_receipt(args: argparse.Namespace) -> dict[str, Any]:
             "receipt_path": str(args.result_file),
             "receipt_sha256": args.receipt_sha256,
             "max_age_seconds": args.max_age_seconds,
+            "owner_uid": args.expected_owner_uid,
+            "artifacts": artifact_inventory,
+            "docker_networks": networks,
             "containers": {
                 role: {
                     "name": value["name"],
@@ -575,6 +932,7 @@ def backup_receipt(args: argparse.Namespace) -> dict[str, Any]:
                 }
                 for role, value in identities.items()
             },
+            "stale_exception": stale_exception,
             "admission_binding_sha256": sha256_bytes(
                 json.dumps(
                     {
@@ -586,6 +944,7 @@ def backup_receipt(args: argparse.Namespace) -> dict[str, Any]:
                         "receipt_path": str(args.result_file),
                         "receipt_sha256": args.receipt_sha256,
                         "snapshot_directory": str(snapshot),
+                        "stale_exception": stale_exception,
                     },
                     sort_keys=True,
                     separators=(",", ":"),
@@ -596,6 +955,119 @@ def backup_receipt(args: argparse.Namespace) -> dict[str, Any]:
         for descriptor in descriptors:
             os.close(descriptor)
         os.close(directory_descriptor)
+
+
+def stale_backup_exception_template(args: argparse.Namespace) -> dict[str, Any]:
+    try:
+        deployment_id = str(uuid.UUID(args.deployment_id, version=4))
+    except (AttributeError, TypeError, ValueError):
+        fail("stale production backup deployment ID must be one canonical UUIDv4")
+    if deployment_id != args.deployment_id:
+        fail("stale production backup deployment ID must be one canonical UUIDv4")
+    if not 0 < args.valid_for_seconds <= 3600:
+        fail(
+            "stale production backup exception validity must be between 1 and 3600 seconds"
+        )
+
+    result_raw, _ = read_regular_bytes(
+        args.result_file,
+        "production backup result",
+        max_bytes=MAX_JSON_BYTES,
+        exact_mode=0o600,
+        require_absolute_path=True,
+    )
+    result = ready_object(
+        strict_json_bytes(result_raw, "production backup result"),
+        "production backup result",
+        {"schema_version", "status", "snapshot_directory", "manifest_sha256"},
+    )
+    snapshot_text = result.get("snapshot_directory")
+    manifest_sha256 = result.get("manifest_sha256")
+    if not isinstance(snapshot_text, str) or not Path(snapshot_text).is_absolute():
+        fail("production backup result has no absolute snapshot directory")
+    if (
+        not isinstance(manifest_sha256, str)
+        or SHA256_RE.fullmatch(manifest_sha256) is None
+    ):
+        fail("production backup result has no valid manifest hash")
+    snapshot = Path(snapshot_text)
+    directory_descriptor, directory_metadata = open_directory(
+        snapshot, "production backup snapshot", exact_mode=0o700
+    )
+    try:
+        manifest_raw, _ = read_regular_bytes(
+            snapshot / "manifest.sha256",
+            "backup manifest",
+            max_bytes=MAX_MANIFEST_BYTES,
+            exact_mode=0o600,
+        )
+        if sha256_bytes(manifest_raw) != manifest_sha256:
+            fail("production backup manifest differs from its result receipt")
+        record = ready_object(
+            load_json(
+                snapshot / "backup-record.json", "backup record", exact_mode=0o600
+            ),
+            "backup-record.json",
+            {
+                "schema_version",
+                "status",
+                "created_at",
+                "snapshot_directory",
+                "containers",
+                "sources",
+                "redis",
+                "artifacts",
+            },
+        )
+        if record.get("snapshot_directory") != snapshot.name:
+            fail("backup record names a different snapshot")
+        backup_created_at = parse_created_at(record.get("created_at"))
+        assert_stable(
+            directory_descriptor, directory_metadata, "production backup snapshot"
+        )
+    finally:
+        os.close(directory_descriptor)
+
+    now = datetime.now(UTC)
+    age = (now - backup_created_at).total_seconds()
+    if age <= MAX_FRESH_BACKUP_AGE_SECONDS:
+        fail("production backup is still fresh and does not need a stale exception")
+    hard_deadline = backup_created_at + timedelta(
+        seconds=STALE_BACKUP_EXCEPTION_MAX_AGE_SECONDS
+    )
+    expires_at = min(now + timedelta(seconds=args.valid_for_seconds), hard_deadline)
+    if expires_at <= now:
+        fail("production backup already exceeds the stale exception hard age limit")
+    runtime = stale_runtime_binding(args.current_runtime_attestation)
+    expected_args = argparse.Namespace(
+        expected_control_database=args.expected_control_database,
+        expected_control_role=args.expected_control_role,
+        expected_redis_prefix=args.expected_redis_prefix,
+        expected_pwa_network=args.expected_pwa_network,
+    )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "type": STALE_BACKUP_EXCEPTION_TYPE,
+        "status": "approved",
+        "exception_id": str(uuid.uuid4()),
+        "deployment_id": deployment_id,
+        "issued_at": now.isoformat().replace("+00:00", "Z"),
+        "reason": STALE_BACKUP_EXCEPTION_REASON,
+        "scope": STALE_BACKUP_EXCEPTION_SCOPE,
+        "receipt_path": str(args.result_file),
+        "receipt_sha256": sha256_bytes(result_raw),
+        "snapshot_directory": str(snapshot),
+        "manifest_sha256": manifest_sha256,
+        "backup_created_at": backup_created_at.isoformat().replace("+00:00", "Z"),
+        "max_age_seconds": STALE_BACKUP_EXCEPTION_MAX_AGE_SECONDS,
+        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+        "known_mismatches": STALE_BACKUP_KNOWN_MISMATCHES,
+        "rollback_strategy": "delete-only-new-control-resources",
+        "automatic_restore": False,
+        "allowed_resources": expected_stale_backup_resources(expected_args),
+        "forbidden_mutations": STALE_BACKUP_FORBIDDEN_MUTATIONS,
+        "current_sub2api_runtime": runtime,
+    }
 
 
 def service(config: dict[str, Any], name: str) -> dict[str, Any]:
@@ -952,7 +1424,7 @@ def compose_plan(args: argparse.Namespace) -> dict[str, Any]:
     }
     if (
         not isinstance(sub2api_network, dict)
-        or sub2api_network.get("name") != "sub2api-network"
+        or sub2api_network.get("name") != "sub2api-deploy_sub2api-network"
         or sub2api_network.get("external") is not True
         or sub2api_network.get("internal") not in (None, False)
     ):
@@ -2009,7 +2481,7 @@ def control_backup(args: argparse.Namespace) -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate signed production deployment evidence."
+        description="Validate unsigned first-bootstrap production evidence."
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -2017,7 +2489,34 @@ def parse_args() -> argparse.Namespace:
     backup_parser.add_argument("--result-file", type=Path, required=True)
     backup_parser.add_argument("--max-age-seconds", type=int, required=True)
     backup_parser.add_argument("--current-identities", type=Path, required=True)
+    backup_parser.add_argument("--expected-owner-uid", type=int, default=0)
+    backup_parser.add_argument("--stale-exception-file", type=Path)
+    backup_parser.add_argument("--expected-control-database", default="codex_control")
+    backup_parser.add_argument("--expected-control-role", default="codex_control")
+    backup_parser.add_argument("--expected-redis-prefix", default="codex-control:")
+    backup_parser.add_argument("--expected-pwa-network")
+    backup_parser.add_argument("--deployment-id")
+    backup_parser.add_argument("--current-runtime-attestation", type=Path)
     backup_parser.set_defaults(handler=backup_receipt)
+
+    stale_template_parser = commands.add_parser("stale-backup-exception-template")
+    stale_template_parser.add_argument("--result-file", type=Path, required=True)
+    stale_template_parser.add_argument("--deployment-id", required=True)
+    stale_template_parser.add_argument(
+        "--current-runtime-attestation", type=Path, required=True
+    )
+    stale_template_parser.add_argument("--valid-for-seconds", type=int, default=1800)
+    stale_template_parser.add_argument(
+        "--expected-control-database", default="codex_control"
+    )
+    stale_template_parser.add_argument(
+        "--expected-control-role", default="codex_control"
+    )
+    stale_template_parser.add_argument(
+        "--expected-redis-prefix", default="codex-control:"
+    )
+    stale_template_parser.add_argument("--expected-pwa-network", required=True)
+    stale_template_parser.set_defaults(handler=stale_backup_exception_template)
 
     compose_parser = commands.add_parser("compose-plan")
     compose_parser.add_argument("--compose-config", type=Path, required=True)

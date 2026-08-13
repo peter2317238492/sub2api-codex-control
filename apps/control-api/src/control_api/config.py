@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     sub2api_auth_me_path: str = "/api/v1/auth/me"
     sub2api_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     sub2api_verify_tls: bool = True
-    sub2api_expected_version: Literal["0.1.175"] = "0.1.175"
-    sub2api_expected_commit: Literal["93c32fa"] = "93c32fa"
+    sub2api_expected_version: Literal["0.1.176"] = "0.1.176"
+    sub2api_expected_commit: Literal["e803e38"] = "e803e38"
     sub2api_contract_marker: str = ""
 
     connector_expected_version: Literal["0.1.0"] = "0.1.0"

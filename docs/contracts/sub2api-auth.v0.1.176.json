@@ -1,0 +1,90 @@
+{
+  "format_version": 1,
+  "runtime": {
+    "version": "0.1.176",
+    "commit": "e803e3851c0a7e222cfadeafad7b8636ab959d11"
+  },
+  "source": {
+    "repository": "https://github.com/Wei-Shaw/sub2api",
+    "path": "frontend/src/api/auth.ts",
+    "url": "https://github.com/Wei-Shaw/sub2api/blob/e803e3851c0a7e222cfadeafad7b8636ab959d11/frontend/src/api/auth.ts",
+    "auth_middleware_path": "backend/internal/server/middleware/jwt_auth.go",
+    "auth_middleware_url": "https://github.com/Wei-Shaw/sub2api/blob/e803e3851c0a7e222cfadeafad7b8636ab959d11/backend/internal/server/middleware/jwt_auth.go",
+    "session_binding_middleware_path": "backend/internal/server/middleware/session_binding.go",
+    "session_binding_middleware_url": "https://github.com/Wei-Shaw/sub2api/blob/e803e3851c0a7e222cfadeafad7b8636ab959d11/backend/internal/server/middleware/session_binding.go",
+    "refresh_handler_path": "backend/internal/handler/auth_handler.go",
+    "refresh_handler_url": "https://github.com/Wei-Shaw/sub2api/blob/e803e3851c0a7e222cfadeafad7b8636ab959d11/backend/internal/handler/auth_handler.go#L675-L709",
+    "response_wrapper_path": "backend/internal/pkg/response/response.go",
+    "response_wrapper_url": "https://github.com/Wei-Shaw/sub2api/blob/e803e3851c0a7e222cfadeafad7b8636ab959d11/backend/internal/pkg/response/response.go#L14-L38"
+  },
+  "local_storage": {
+    "access_token": "auth_token",
+    "refresh_token": "refresh_token",
+    "expires_at": "token_expires_at"
+  },
+  "endpoints": {
+    "identity": {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "authorization": "bearer_access_token",
+      "disabled_user_error": {
+        "status": 401,
+        "code": "USER_INACTIVE"
+      },
+      "revoked_token_error": {
+        "status": 401,
+        "code": "TOKEN_REVOKED"
+      },
+      "session_binding_mismatch_error": {
+        "status": 401,
+        "code": "SESSION_BINDING_MISMATCH"
+      },
+      "session_binding_request": {
+        "client_ip_header": "X-Forwarded-For",
+        "user_agent_header": "User-Agent"
+      }
+    },
+    "refresh": {
+      "method": "POST",
+      "path": "/api/v1/auth/refresh",
+      "request_required": [
+        "refresh_token"
+      ],
+      "response_envelope": {
+        "required": [
+          "code",
+          "message",
+          "data"
+        ],
+        "code": 0,
+        "message": "success",
+        "data_required": [
+          "access_token",
+          "refresh_token",
+          "expires_in",
+          "token_type"
+        ]
+      },
+      "token_type": "Bearer",
+      "rotates_refresh_token": true
+    },
+    "logout": {
+      "method": "POST",
+      "path": "/api/v1/auth/logout",
+      "authorization": "optional_bearer_access_token",
+      "request_required": [
+        "refresh_token"
+      ]
+    }
+  },
+  "control_boundary": {
+    "exchange_method": "POST",
+    "exchange_path": "/codex-api/v1/session/exchange",
+    "accepted_sub2api_fields": [
+      "access_token"
+    ],
+    "forbidden_sub2api_fields": [
+      "refresh_token"
+    ]
+  }
+}

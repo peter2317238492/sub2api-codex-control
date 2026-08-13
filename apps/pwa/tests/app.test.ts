@@ -32,6 +32,10 @@ class MockWebSocket {
   serverClose(code: number): void {
     this.close(code);
   }
+
+  message(event: Record<string, unknown>): void {
+    this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent);
+  }
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -382,6 +386,120 @@ describe("App session recovery", () => {
     expect(claimCalls).toBe(2);
     expect(bootstrapCalls).toBe(2);
     expect(useSessionStore(pinia).session?.id).toBe("session-reauthenticated");
+  });
+
+  it("keeps a claimed pairing pending until the Connector comes online", async () => {
+    const offlineDevice = {
+      id: "device-pairing",
+      name: "New device",
+      status: "offline",
+      connector_version: "0.1.0",
+      codex_version: "0.147.0",
+      last_seen_at: null,
+      workspace_roots: ["/work"],
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/session") && !init?.method) return Promise.resolve(jsonResponse(sessionSnapshot()));
+      if (url.endsWith("/bootstrap")) return Promise.resolve(jsonResponse(controlBootstrap()));
+      if (url.endsWith("/pairings/claim")) {
+        return Promise.resolve(
+          jsonResponse({
+            pairing_id: "pairing-1",
+            device_id: "device-pairing",
+            device_name: "New device",
+            status: "claimed",
+          }),
+        );
+      }
+      if (url.endsWith("/devices/device-pairing/threads/sync") || url.endsWith("/devices/device-pairing/models/sync")) {
+        return Promise.resolve(jsonResponse({ state: "queued" }));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const pinia = createPinia();
+    wrapper = mount(App, { global: { plugins: [pinia] } });
+    await settle();
+
+    await wrapper.get(".device-rail .pair-existing-button").trigger("click");
+    await wrapper.get(".pair-code-field input").setValue("2345-6789-ABCD-EFGH");
+    await wrapper.get(".pair-dialog form, .pair-dialog").trigger("submit");
+    await settle();
+
+    expect(wrapper.get(".pair-waiting").text()).toContain("配对码已认领");
+    expect(wrapper.find(".pair-dialog").exists()).toBe(true);
+
+    MockWebSocket.instances.at(-1)?.message({
+      cursor: "1",
+      type: "device.updated",
+      occurred_at: "2026-08-13T00:00:00Z",
+      data: offlineDevice,
+    });
+    await settle();
+
+    expect(wrapper.get(".pair-waiting").text()).toContain("设备已完成配对");
+    expect(wrapper.get(".pair-waiting").text()).toContain("等待 Connector 上线");
+    expect(wrapper.find(".pair-dialog").exists()).toBe(true);
+
+    MockWebSocket.instances.at(-1)?.message({
+      cursor: "2",
+      type: "device.updated",
+      occurred_at: "2026-08-13T00:00:00Z",
+      data: { ...offlineDevice, status: "online" },
+    });
+    await settle();
+
+    expect(wrapper.find(".pair-dialog").exists()).toBe(false);
+    expect(useControlStore(pinia).selectedDeviceId).toBe("device-pairing");
+    expect(wrapper.get(".app-shell").attributes("data-mobile-panel")).toBe("threads");
+  });
+
+  it("opens the fail-closed setup flow and lets an existing Connector continue to pairing", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/session") && !init?.method) return Promise.resolve(jsonResponse(sessionSnapshot()));
+      if (url.endsWith("/bootstrap")) return Promise.resolve(jsonResponse(controlBootstrap()));
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const pinia = createPinia();
+    wrapper = mount(App, { global: { plugins: [pinia] } });
+    await settle();
+
+    await wrapper.get(".setup-connector-button").trigger("click");
+    expect(wrapper.get(".setup-dialog").text()).toContain("正式安装包暂不可用");
+    expect(wrapper.find(".asset-download").exists()).toBe(false);
+
+    await wrapper.get(".existing-pair-button").trigger("click");
+    expect(wrapper.find(".setup-dialog").exists()).toBe(false);
+    expect(wrapper.find(".pair-dialog").exists()).toBe(true);
+  });
+
+  it("maps pairing failures to recovery guidance and opens device management", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/session") && !init?.method) return Promise.resolve(jsonResponse(sessionSnapshot()));
+      if (url.endsWith("/bootstrap")) return Promise.resolve(jsonResponse(controlBootstrap()));
+      if (url.endsWith("/pairings/claim")) {
+        return Promise.resolve(jsonResponse({ detail: "device_capacity_exceeded" }, 409));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const pinia = createPinia();
+    wrapper = mount(App, { global: { plugins: [pinia] } });
+    await settle();
+
+    await wrapper.get(".device-rail .pair-existing-button").trigger("click");
+    await wrapper.get(".pair-code-field input").setValue("2345-6789-ABCD-EFGH");
+    await wrapper.get(".pair-dialog form, .pair-dialog").trigger("submit");
+    await settle();
+
+    expect(wrapper.get(".form-error").text()).toContain("设备数量已达上限");
+    await wrapper.get(".pair-manage-button").trigger("click");
+    expect(wrapper.find(".pair-dialog").exists()).toBe(false);
+    expect(wrapper.get(".app-shell").attributes("data-mobile-panel")).toBe("devices");
   });
 
   it("confirms local archive, reports unsafe conflicts, and removes the thread after success", async () => {

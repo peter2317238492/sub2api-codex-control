@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Check, Clock3, LoaderCircle, ShieldAlert, X, XCircle } from "@lucide/vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 
 import type { ApprovalItem } from "@/types";
 
@@ -9,8 +10,26 @@ const props = defineProps<{
   decidingApprovalIds: string[];
 }>();
 
+const now = ref(Date.now());
+let clock: number | null = null;
+
+onMounted(() => {
+  clock = window.setInterval(() => {
+    now.value = Date.now();
+  }, 1_000);
+});
+
+onBeforeUnmount(() => {
+  if (clock !== null) window.clearInterval(clock);
+});
+
 function isDeciding(approvalId: string): boolean {
   return props.decidingApprovalIds.includes(approvalId);
+}
+
+function isExpired(approval: ApprovalItem): boolean {
+  const expiresAt = Date.parse(approval.expires_at);
+  return !Number.isFinite(expiresAt) || expiresAt <= now.value;
 }
 
 defineEmits<{
@@ -39,7 +58,10 @@ defineEmits<{
         <li v-for="approval in approvals" :key="approval.approval_id" class="approval-item">
           <div class="approval-heading">
             <span class="approval-kind"><ShieldAlert :size="16" />{{ approval.kind }}</span>
-            <span class="approval-expiry"><Clock3 :size="14" />{{ new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(approval.expires_at)) }}</span>
+            <span class="approval-expiry">
+              <Clock3 :size="14" />
+              {{ isExpired(approval) ? "已过期" : new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(approval.expires_at)) }}
+            </span>
           </div>
           <strong>{{ approval.summary }}</strong>
           <p>{{ approval.device_name }}</p>
@@ -48,7 +70,7 @@ defineEmits<{
             <button
               class="deny-button"
               type="button"
-              :disabled="isDeciding(approval.approval_id)"
+              :disabled="isDeciding(approval.approval_id) || isExpired(approval)"
               @click="$emit('decide', approval.approval_id, 'deny')"
             >
               <LoaderCircle v-if="isDeciding(approval.approval_id)" class="spin" :size="17" />
@@ -57,7 +79,7 @@ defineEmits<{
             <button
               class="approve-button"
               type="button"
-              :disabled="isDeciding(approval.approval_id)"
+              :disabled="isDeciding(approval.approval_id) || isExpired(approval)"
               @click="$emit('decide', approval.approval_id, 'approve')"
             >
               <LoaderCircle v-if="isDeciding(approval.approval_id)" class="spin" :size="17" />

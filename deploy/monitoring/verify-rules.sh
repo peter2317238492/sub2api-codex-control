@@ -11,7 +11,8 @@ fi
 
 "$PROMTOOL_BIN" check rules \
   "$SCRIPT_DIR/prometheus/native-alerts.yml" \
-  "$SCRIPT_DIR/prometheus/external-alerts.yml"
+  "$SCRIPT_DIR/prometheus/external-alerts.yml" \
+  "$SCRIPT_DIR/prometheus/production-integrity.yml"
 (
   cd "$SCRIPT_DIR/prometheus"
   "$PROMTOOL_BIN" test rules tests/alerts.test.yml

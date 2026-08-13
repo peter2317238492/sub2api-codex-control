@@ -1,18 +1,15 @@
 # Connector release pipeline
 
-This directory preserves the reviewed design for a future Connector binary
-release. The initial public snapshot is source-only: `connector-v*` tags do not
-trigger a workflow, and manual dispatch of `connector-release.yml` always stops
-at an unconditional source-only guard before any build, signing, or publication
-step. Runtime code does not import this directory. The intended matrix and exact
-Go/Cosign versions live in `release-config.json`.
+This directory is the executable release boundary for the Connector. Runtime
+code does not import it. The admitted matrix and exact Go/Cosign versions live
+in `release-config.json`.
 
 ## Trust boundary
 
-No production Connector release is enabled in this snapshot. Before a later
-release re-enables the reviewed workflow, maintainers must complete an
-independent binary-license/SBOM review and configure all controls below. The
-future design uses an annotated `connector-v<exact Connector version>` tag:
+Production releases are created only by the annotated tag
+`connector-v<exact Connector version>` in
+`.github/workflows/connector-release.yml`. Configure these controls before the
+first tag is pushed:
 
 1. A repository tag rule for `connector-v*` that blocks updates/deletion and
    restricts creation to release maintainers.
@@ -58,10 +55,9 @@ record. Never use `.*`, a branch identity, or an identity/SHA/Apple value
 learned only from `manifest.json`, the release assets, or the tag being verified
 as the verifier's trust policy.
 
-## Future release flow (disabled)
+## Release flow
 
-After the source-only guard is removed in a separately reviewed change, the
-protected workflow is intended to perform these operations in order:
+The protected workflow performs these operations in order:
 
 1. Validate the exact annotated tag, clean source commit, pinned constants,
    complete target matrix, Go `1.26.5`, and Cosign `v3.0.6`.
@@ -90,21 +86,24 @@ protected workflow is intended to perform these operations in order:
    source/workflow SHA, and `push` trigger, including native `codesign`
    verification. Transfer the verified set to a fourth job with publication
    permission but no OIDC. Publish all assets through a draft only after
-   repository immutability is confirmed, then assert that the published release
-   is immutable.
+   repository immutability and the remote peeled tag SHA are confirmed, then
+   assert that the published release is immutable. A final protected read-only
+   macOS job anonymously downloads every public asset into a new empty directory,
+   verifies GitHub's immutable-release attestation for the release and each
+   asset, and re-runs the complete Sigstore, inventory, provenance, and native
+   `codesign` consumer verifier on those downloaded bytes.
 
 This emits SLSA v1-compatible provenance. It does not claim a SLSA build level:
 the hosted runner and workflow controls must be assessed separately.
 
-## Future consumer verification
+## Consumer verification
 
-There is no supported prebuilt Connector artifact in the initial source-only
-snapshot. Once binary publication is separately enabled, select the artifact
-being installed. The verifier then authenticates the full manifest, signed
-checksums, and exact release inventory before deeply verifying the selected
-artifact's SBOM, provenance, signatures, and attestation. Run `release.py` from
-a separately trusted, reviewed source checkout, never from files bundled beside
-an untrusted download.
+Select the artifact being installed. The verifier always authenticates the full
+manifest, signed checksums, and exact release inventory, then deeply verifies
+the selected artifact's SBOM, provenance, signatures, and attestation. This lets
+a Linux host verify a Linux artifact even though the same release also contains
+macOS assets. Run `release.py` from a separately trusted, reviewed source
+checkout, never from files bundled beside an untrusted download.
 
 ```sh
 python3 connector/release/release.py verify \

@@ -13,6 +13,7 @@ pg_restore_validator="$script_dir/pg-restore-via-container.sh"
 release_verifier="$repo_root/deploy/release/verify-control-images.sh"
 source_bundle_verifier="$repo_root/deploy/release/source_bundle.py"
 smoke_test="$repo_root/tests/e2e/smoke.py"
+backup_admission="$script_dir/bootstrap-admission.py"
 
 env_file=${CONTROL_COMPOSE_ENV_FILE:-}
 record_root=${CONTROL_DEPLOYMENT_RECORD_DIR:-}
@@ -36,6 +37,7 @@ auth_probe_user_id=
 auth_probe_base_url=http://127.0.0.1:8080
 auth_contract_file=
 production_backup_root=${CONTROL_PRODUCTION_BACKUP_ROOT:-}
+production_backup_max_age=${CONTROL_PRODUCTION_BACKUP_MAX_AGE_SECONDS:-1800}
 sub2api_postgres_container=${SUB2API_POSTGRES_CONTAINER:-sub2api-postgres}
 sub2api_postgres_user=${SUB2API_POSTGRES_USER:-sub2api}
 sub2api_postgres_database=${SUB2API_DB_NAME:-sub2api}
@@ -59,6 +61,9 @@ fail() {
 
 case "$backup_max_age" in
   ''|*[!0-9]*|0) fail "CONTROL_PREMIGRATION_BACKUP_MAX_AGE_SECONDS must be positive" ;;
+esac
+case "$production_backup_max_age" in
+  ''|*[!0-9]*|0) fail "CONTROL_PRODUCTION_BACKUP_MAX_AGE_SECONDS must be positive" ;;
 esac
 case "$wait_timeout" in
   ''|*[!0-9]*|0) fail "CONTROL_DEPLOYMENT_WAIT_TIMEOUT_SECONDS must be positive" ;;
@@ -226,7 +231,16 @@ run_production_state_backup() {
     --sub2api-config "$sub2api_config_path" \
     --sub2api-compose "$sub2api_compose_file" \
     --sub2api-environment "$sub2api_environment_file" \
-    --nginx-config "$nginx_config_path"
+    --nginx-config "$nginx_config_path" \
+    --release-records "$record_root" \
+    --release-record-exclude "$(basename "$deployment_dir")" \
+    --release-record-exclude "$(basename "$lock_dir")" \
+    --release-evidence "$deployment_dir/release-verification.json" \
+    --release-evidence "$deployment_dir/source-verification.json" \
+    --release-evidence "$deployment_dir/versions-lock-input.json" \
+    --docker-network "$sub2api_network" \
+    --docker-network "$pwa_network" \
+    --expected-owner-uid 0
   if [ -n "$sub2api_postgres_password_file" ]; then
     set -- "$@" --postgres-password-file "$sub2api_postgres_password_file"
   fi
@@ -346,6 +360,7 @@ compose_dir="$repo_root/deploy/docker-compose"
 compose_file="$compose_dir/compose.yaml"
 production_overlay="$compose_dir/compose.production.yaml"
 checks="$script_dir/deployment-admission.py"
+backup_admission="$script_dir/bootstrap-admission.py"
 runtime_verifier="$script_dir/verify-sub2api-runtime.sh"
 production_state_backup="$script_dir/backup-production-state.py"
 pg_restore_validator="$script_dir/pg-restore-via-container.sh"
@@ -402,6 +417,18 @@ control_database=$(
 stage=create-production-state-backup
 write_status "in-progress:$stage"
 run_production_state_backup
+docker inspect \
+  "$sub2api_container" \
+  "$sub2api_postgres_container" \
+  "$sub2api_redis_container" \
+  > "$deployment_dir/production-state-current-containers.json"
+chmod 0600 "$deployment_dir/production-state-current-containers.json"
+atomic_json "$deployment_dir/production-state-backup-admission.json" \
+  python3 "$backup_admission" backup-receipt \
+  --result-file "$deployment_dir/production-state-backup.json" \
+  --max-age-seconds "$production_backup_max_age" \
+  --expected-owner-uid 0 \
+  --current-identities "$deployment_dir/production-state-current-containers.json"
 
 stage=pull-release-images
 write_status "in-progress:$stage"

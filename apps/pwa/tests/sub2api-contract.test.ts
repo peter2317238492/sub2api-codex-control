@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { logoutSub2Api, refreshAndPersistSub2ApiAuth, Sub2ApiRefreshError } from "@/api/sub2api";
 import { readSub2ApiAccessToken } from "@/api/token";
 import { useSessionStore } from "@/stores/session";
-import contract from "../../../docs/contracts/sub2api-auth.v0.1.175.json";
+import contract from "../../../docs/contracts/sub2api-auth.v0.1.176.json";
 import { MemoryStorage } from "./storage";
 
 class SharedMemoryStorage implements Storage {
