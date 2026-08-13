@@ -552,8 +552,8 @@ def validate(root: Path) -> list[str]:
     ):
         errors.append("Sub2API must be identified as LGPL-3.0-or-later")
     elif sub2api.get("license_declaration") != {
-        "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/93c32fa1a2450351561abc46156d2e28cb5f74ca/README.md",
-        "source_sha256": "9763f66acba04a47692219bc8fa5a9da1d6e487cdab647cd6a2c58c09b574b00",
+        "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/e803e3851c0a7e222cfadeafad7b8636ab959d11/README.md",
+        "source_sha256": "1c29e6c1e85681a8945ac1ade191e119b3c937e973f0ee367c0bed51be69ecf5",
         "text": "GNU Lesser General Public License v3.0 (or later)",
     }:
         errors.append("Sub2API or-later declaration evidence is missing or changed")

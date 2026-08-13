@@ -1,7 +1,9 @@
 name: Control images protected release
 
 on:
-  workflow_dispatch:
+  push:
+    tags:
+      - "control-v*"
 
 permissions: {}
 
@@ -15,19 +17,10 @@ env:
   COSIGN_EXPERIMENTAL: "1"
 
 jobs:
-  source-only-guard:
-    name: Binary release disabled in the source-only publication
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Fail closed until binary license evidence is complete
-        run: |
-          echo "Binary image publication is disabled for the source-only release." >&2
-          exit 1
-
   validate:
     name: Validate exact source and run release gates
-    needs: source-only-guard
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -42,10 +35,6 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: |
-            apps/control-api/pyproject.toml
-            deploy/constraints/control-api.txt
 
       - name: Install the pinned Node runtime
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -62,10 +51,13 @@ jobs:
             --ref "$GITHUB_REF" \
             --commit "$GITHUB_SHA"
 
-      - name: Test the release verifier and its fail-closed cases
+      - name: Verify public source and licensing before release gates
         run: |
-          python3 -m unittest discover -s deploy/release/tests -v
           python3 scripts/check-public-tree.py
+          python3 scripts/check-licenses.py
+
+      - name: Test the release verifier and its fail-closed cases
+        run: python3 -m unittest discover -s deploy/release/tests -v
 
       - name: Verify runtime constraints, then test and lint the Control API
         shell: bash
@@ -82,6 +74,8 @@ jobs:
             --editable 'apps/control-api[dev]'
           .release-venv/bin/python -m ruff check apps/control-api migrations deploy/release
           .release-venv/bin/python -m pytest apps/control-api/tests
+          .release-venv/bin/python -m unittest \
+            deploy.scripts.tests.test_record_authenticated_smoke_closure
           .release-venv/bin/python -m pytest tests/e2e/test_smoke_secret.py
 
       - name: Test, type-check, and build the PWA and protocol
@@ -91,7 +85,6 @@ jobs:
           corepack enable
           corepack prepare pnpm@11.7.0+sha512.19cc852c120c7125760f2443ee6be0ca5b40f9f50598de1a09a1f177503e010e57c23c77646e01e761de59bf874fb22a3398c33ab9691fc13eb946b6f0f4d620 --activate
           pnpm install --frozen-lockfile
-          npm install --global @openai/codex@0.147.0
           pnpm contracts:check
           pnpm test
           pnpm check
@@ -101,6 +94,7 @@ jobs:
     name: Build the immutable image set and evidence
     needs: validate
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -191,7 +185,7 @@ jobs:
           push: true
           provenance: false
           sbom: false
-          tags: ${{ steps.names.outputs.api_repository }}:${{ github.ref_name }}
+          tags: ${{ steps.names.outputs.api_repository }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}
           build-args: |
             CONTROL_RELEASE=${{ steps.names.outputs.release }}
             VCS_REF=${{ github.sha }}
@@ -211,7 +205,7 @@ jobs:
           push: true
           provenance: false
           sbom: false
-          tags: ${{ steps.names.outputs.pwa_repository }}:${{ github.ref_name }}
+          tags: ${{ steps.names.outputs.pwa_repository }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}
           build-args: |
             CONTROL_RELEASE=${{ steps.names.outputs.release }}
             VCS_REF=${{ github.sha }}
@@ -232,7 +226,7 @@ jobs:
           push: true
           provenance: false
           sbom: false
-          tags: ${{ steps.names.outputs.postgres_tools_repository }}:${{ github.ref_name }}
+          tags: ${{ steps.names.outputs.postgres_tools_repository }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}
           build-args: |
             CONTROL_RELEASE=${{ steps.names.outputs.release }}
             VCS_REF=${{ github.sha }}
@@ -240,6 +234,9 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.names.outputs.release }}
+
+      - name: Create the fixed release evidence directory
+        run: mkdir -p "$RELEASE_DIR"
 
       - name: Generate the Control API SPDX SBOM from the pushed digest
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
@@ -348,6 +345,7 @@ jobs:
     name: Keylessly sign and independently verify the image set
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     environment: control-images-release-sigstore
     permissions:
       contents: read
@@ -385,6 +383,9 @@ jobs:
         with:
           cosign-release: "v3.0.6"
 
+      - name: Set up the pinned read-only Buildx client
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
       - name: Log in for OCI signature and attestation uploads
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -393,12 +394,24 @@ jobs:
           password: ${{ github.token }}
 
       - name: Sign all digests and attach signed SBOM and SLSA v1 evidence
+        env:
+          API_DIGEST: ${{ needs.build.outputs.api_digest }}
+          POSTGRES_TOOLS_DIGEST: ${{ needs.build.outputs.postgres_tools_digest }}
+          PWA_DIGEST: ${{ needs.build.outputs.pwa_digest }}
         shell: bash
         run: |
           set -euo pipefail
-          api_ref="${{ needs.build.outputs.api_repository }}@${{ needs.build.outputs.api_digest }}"
-          pwa_ref="${{ needs.build.outputs.pwa_repository }}@${{ needs.build.outputs.pwa_digest }}"
-          postgres_tools_ref="${{ needs.build.outputs.postgres_tools_repository }}@${{ needs.build.outputs.postgres_tools_digest }}"
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          [[ "$owner" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]
+          API_REPOSITORY="ghcr.io/${owner}/sub2api-codex-control-api"
+          PWA_REPOSITORY="ghcr.io/${owner}/sub2api-codex-control-pwa"
+          POSTGRES_TOOLS_REPOSITORY="ghcr.io/${owner}/sub2api-codex-postgres-tools"
+          [[ "$API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$PWA_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$POSTGRES_TOOLS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          api_ref="${API_REPOSITORY}@${API_DIGEST}"
+          pwa_ref="${PWA_REPOSITORY}@${PWA_DIGEST}"
+          postgres_tools_ref="${POSTGRES_TOOLS_REPOSITORY}@${POSTGRES_TOOLS_DIGEST}"
           for component in control-api pwa postgres-tools; do
             case "$component" in
               control-api) image_ref=$api_ref ;;
@@ -431,6 +444,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          [[ "$owner" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]
+          API_REPOSITORY="ghcr.io/${owner}/sub2api-codex-control-api"
+          PWA_REPOSITORY="ghcr.io/${owner}/sub2api-codex-control-pwa"
+          POSTGRES_TOOLS_REPOSITORY="ghcr.io/${owner}/sub2api-codex-postgres-tools"
           source_repository="https://github.com/${GITHUB_REPOSITORY}"
           identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
           deploy/release/verify-control-images.sh \
@@ -444,9 +462,73 @@ jobs:
             --expected-source-repository "$source_repository" \
             --expected-source-commit "$GITHUB_SHA" \
             --expected-release-tag "$GITHUB_REF_NAME" \
-            --expected-api-repository "${{ needs.build.outputs.api_repository }}" \
-            --expected-pwa-repository "${{ needs.build.outputs.pwa_repository }}" \
-            --expected-postgres-tools-repository "${{ needs.build.outputs.postgres_tools_repository }}"
+            --expected-api-repository "$API_REPOSITORY" \
+            --expected-pwa-repository "$PWA_REPOSITORY" \
+            --expected-postgres-tools-repository "$POSTGRES_TOOLS_REPOSITORY"
+
+      - name: Promote only the signed and verified digests to the final image tags
+        env:
+          API_DIGEST: ${{ needs.build.outputs.api_digest }}
+          POSTGRES_TOOLS_DIGEST: ${{ needs.build.outputs.postgres_tools_digest }}
+          PWA_DIGEST: ${{ needs.build.outputs.pwa_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          assert_remote_tag() {
+            remote_tags=$(git ls-remote --tags \
+              "https://github.com/${GITHUB_REPOSITORY}.git" \
+              "refs/tags/${GITHUB_REF_NAME}" "refs/tags/${GITHUB_REF_NAME}^{}")
+            direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}" '$2 == ref {print $1}')
+            peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}^{}" '$2 == ref {print $1}')
+            test -n "$direct"
+            test -n "$peeled"
+            test "$direct" != "$peeled"
+            test "$peeled" = "$GITHUB_SHA"
+          }
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          [[ "$owner" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]
+          [[ "$GITHUB_REF_NAME" =~ ^control-v[0-9A-Za-z.-]+$ ]]
+          API_REPOSITORY="ghcr.io/${owner}/sub2api-codex-control-api"
+          PWA_REPOSITORY="ghcr.io/${owner}/sub2api-codex-control-pwa"
+          POSTGRES_TOOLS_REPOSITORY="ghcr.io/${owner}/sub2api-codex-postgres-tools"
+          [[ "$API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$PWA_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$POSTGRES_TOOLS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          assert_remote_tag
+          for component in control-api pwa postgres-tools; do
+            case "$component" in
+              control-api)
+                repository=$API_REPOSITORY
+                digest=$API_DIGEST
+                ;;
+              pwa)
+                repository=$PWA_REPOSITORY
+                digest=$PWA_DIGEST
+                ;;
+              postgres-tools)
+                repository=$POSTGRES_TOOLS_REPOSITORY
+                digest=$POSTGRES_TOOLS_DIGEST
+                ;;
+              *) exit 1 ;;
+            esac
+            existing_digest=""
+            if existing=$(
+              docker buildx imagetools inspect "${repository}:${GITHUB_REF_NAME}" 2>/dev/null
+            ); then
+              existing_digest=$(printf '%s\n' "$existing" | awk '$1 == "Digest:" {print $2; exit}')
+              test "$existing_digest" = "$digest"
+            else
+              docker buildx imagetools create \
+                --tag "${repository}:${GITHUB_REF_NAME}" \
+                "${repository}@${digest}"
+            fi
+            promoted_digest=$(
+              docker buildx imagetools inspect "${repository}:${GITHUB_REF_NAME}" |
+                awk '$1 == "Digest:" {print $2; exit}'
+            )
+            test "$promoted_digest" = "$digest"
+          done
+          assert_remote_tag
 
       - name: Transfer the signed and verified atomic release
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -461,6 +543,7 @@ jobs:
     name: Publish immutable release evidence
     needs: attest
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     environment: control-images-release-publish
     permissions:
       contents: write
@@ -507,15 +590,196 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          assert_remote_tag() {
+            tag_object=$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}")
+            object_type=$(printf '%s' "$tag_object" | jq -r .object.type)
+            object_sha=$(printf '%s' "$tag_object" | jq -r .object.sha)
+            while [ "$object_type" = tag ]; do
+              tag_object=$(gh api \
+                -H 'Accept: application/vnd.github+json' \
+                -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")
+              object_type=$(printf '%s' "$tag_object" | jq -r .object.type)
+              object_sha=$(printf '%s' "$tag_object" | jq -r .object.sha)
+            done
+            test "$object_type" = commit
+            test "$object_sha" = "$GITHUB_SHA"
+          }
+          assert_remote_tag
           gh release create "$GITHUB_REF_NAME" "$RELEASE_DIR"/* \
             --draft \
             --verify-tag \
+            --target "$GITHUB_SHA" \
             --latest=false \
             --title "Control images ${GITHUB_REF_NAME#control-v}" \
             --notes "Atomic Control API/PWA/PostgreSQL-tools digest lock with exact-workflow Sigstore signatures, SPDX SBOMs, and SLSA v1 provenance. Use independently fixed trust inputs and deploy/release/verify-control-images.sh before deployment."
+          assert_remote_tag
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false
+          assert_remote_tag
           immutable=$(gh release view "$GITHUB_REF_NAME" --json isImmutable --jq .isImmutable)
           if [ "$immutable" != true ]; then
             echo '::error::Published release is mutable; its images and evidence are not admitted.'
             exit 1
           fi
+
+  verify-public-release:
+    name: Re-download and verify the public immutable release
+    needs:
+      - build
+      - publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the independently trusted verifier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Set up the pinned read-only Buildx client for public tag checks
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Download every asset without authentication and recheck the public tag
+        id: public
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^control-v[0-9A-Za-z.-]+$ ]]
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${RELEASE_REPOSITORY}.git" \
+            "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${RELEASE_TAG}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$EXPECTED_COMMIT"
+
+          download_dir=$(mktemp -d "$RUNNER_TEMP/control-public.XXXXXX")
+          response="$RUNNER_TEMP/control-release.json"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 \
+            "https://api.github.com/repos/${RELEASE_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+            --output "$response"
+          jq -e --arg tag "$RELEASE_TAG" '
+            .tag_name == $tag and
+            .draft == false and
+            .prerelease == false and
+            .immutable == true and
+            (.assets | length > 0) and
+            all(.assets[]; .state == "uploaded")
+          ' "$response" >/dev/null
+          jq -r '.assets[] | [.name, .browser_download_url] | @tsv' "$response" > "$RUNNER_TEMP/control-assets.tsv"
+          while IFS=$'\t' read -r name url; do
+            [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            test "$url" = "https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}/${name}"
+            test ! -e "$download_dir/$name"
+            curl --fail --silent --show-error --location --retry 3 \
+              --proto '=https' --tlsv1.2 \
+              "$url" --output "$download_dir/$name"
+          done < "$RUNNER_TEMP/control-assets.tsv"
+          test "$(find "$download_dir" -type f | wc -l | tr -d ' ')" = "$(jq '.assets | length' "$response")"
+          printf 'path=%s\n' "$download_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Verify GitHub's immutable-release attestation for every downloaded asset
+        env:
+          DOWNLOAD_DIR: ${{ steps.public.outputs.path }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_attestation="$RUNNER_TEMP/control-release-attestation.json"
+          gh release verify "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" \
+            --format json > "$release_attestation"
+          jq -e \
+            --arg commit "$GITHUB_SHA" \
+            --arg repository "$RELEASE_REPOSITORY" \
+            --arg tag "$RELEASE_TAG" '
+              .verificationResult.statement
+              | .predicate.repository == $repository
+                and .predicate.tag == $tag
+                and any(.subject[];
+                  .uri == ("pkg:github/" + $repository + "@" + $tag)
+                  and .digest.sha1 == $commit)
+            ' "$release_attestation" >/dev/null
+          for asset in "$DOWNLOAD_DIR"/*; do
+            gh release verify-asset "$RELEASE_TAG" "$asset" --repo "$RELEASE_REPOSITORY"
+          done
+
+      - name: Re-run the fail-closed consumer verifier on the public bytes
+        env:
+          DOWNLOAD_DIR: ${{ steps.public.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          [[ "$owner" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]
+          API_REPOSITORY="ghcr.io/${owner}/sub2api-codex-control-api"
+          PWA_REPOSITORY="ghcr.io/${owner}/sub2api-codex-control-pwa"
+          POSTGRES_TOOLS_REPOSITORY="ghcr.io/${owner}/sub2api-codex-postgres-tools"
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
+          verified="$RUNNER_TEMP/control-public-verified.json"
+          deploy/release/verify-control-images.sh \
+            --release-dir "$DOWNLOAD_DIR" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" \
+            --expected-source-repository "$source_repository" \
+            --expected-source-commit "$GITHUB_SHA" \
+            --expected-release-tag "$GITHUB_REF_NAME" \
+            --expected-api-repository "$API_REPOSITORY" \
+            --expected-pwa-repository "$PWA_REPOSITORY" \
+            --expected-postgres-tools-repository "$POSTGRES_TOOLS_REPOSITORY" \
+            > "$verified"
+          for component in control-api pwa postgres-tools; do
+            case "$component" in
+              control-api)
+                repository=$API_REPOSITORY
+                key=CONTROL_API_IMAGE
+                ;;
+              pwa)
+                repository=$PWA_REPOSITORY
+                key=CONTROL_PWA_IMAGE
+                ;;
+              postgres-tools)
+                repository=$POSTGRES_TOOLS_REPOSITORY
+                key=CONTROL_POSTGRES_TOOLS_IMAGE
+                ;;
+              *) exit 1 ;;
+            esac
+            authenticated_ref=$(jq -er --arg key "$key" '.[$key]' "$verified")
+            case "$authenticated_ref" in
+              "$repository"@sha256:*) ;;
+              *) exit 1 ;;
+            esac
+            authenticated_digest=${authenticated_ref#*@}
+            [[ "$authenticated_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            public_digest=$(
+              docker buildx imagetools inspect "${repository}:${GITHUB_REF_NAME}" |
+                awk '$1 == "Digest:" {print $2; exit}'
+            )
+            test "$public_digest" = "$authenticated_digest"
+          done

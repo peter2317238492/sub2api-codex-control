@@ -17,9 +17,9 @@ def test_production_requires_the_exact_frozen_sub2api_marker() -> None:
         "allowed_origins_csv": "https://control.example.test",
     }
     with pytest.raises(ValidationError):
-        Settings(**common, sub2api_contract_marker="0.1.175/wrong")
+        Settings(**common, sub2api_contract_marker="0.1.176/wrong")
 
-    settings = Settings(**common, sub2api_contract_marker="0.1.175/93c32fa")
+    settings = Settings(**common, sub2api_contract_marker="0.1.176/e803e38")
     assert settings.sub2api_contract_ready is True
 
 
@@ -47,7 +47,7 @@ def test_production_requires_the_frozen_internal_sub2api_origin(
             metrics_bearer_token="production-metrics-token-that-is-longer-than-32-bytes",
             cookie_secure=True,
             allowed_origins_csv="https://control.example.test",
-            sub2api_contract_marker="0.1.175/93c32fa",
+            sub2api_contract_marker="0.1.176/e803e38",
             sub2api_base_url=sub2api_base_url,
         )
 
@@ -124,7 +124,7 @@ def test_production_rejects_lax_control_cookies() -> None:
             cookie_secure=True,
             cookie_samesite="lax",
             allowed_origins_csv="https://control.example.test",
-            sub2api_contract_marker="0.1.175/93c32fa",
+            sub2api_contract_marker="0.1.176/e803e38",
         )
 
 

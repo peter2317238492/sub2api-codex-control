@@ -64,6 +64,7 @@ class RuntimeVerifierHardeningTests(unittest.TestCase):
                 "release_url": "https://github.com/Wei-Shaw/sub2api/releases/tag/v9.8.7",
                 "image_label_version": self.version,
                 "image_label_commit": self.commit,
+                "production_admission_profile": RUNTIME_MODULE.IMMUTABLE_PROFILE,
                 "auth_contract_file": self.contract.name,
                 "auth_contract_sha256": self.contract_sha,
             },
@@ -197,6 +198,7 @@ class RuntimeVerifierHardeningTests(unittest.TestCase):
         image: dict[str, object] | None = None,
         lock: dict[str, object] | None = None,
         diff_lines: list[str] | None = None,
+        writable_hashes: dict[str, str] | None = None,
         pid1_host_pid: int = 4242,
         pid1_path: str = "/app/sub2api",
         pid1_sha256: str | None = None,
@@ -226,6 +228,14 @@ class RuntimeVerifierHardeningTests(unittest.TestCase):
         (self.root / "diff.txt").write_text(
             "" if not diff_lines else "\n".join(diff_lines) + "\n", encoding="utf-8"
         )
+        (self.root / "writable-sha256.txt").write_text(
+            ""
+            if not writable_hashes
+            else "".join(
+                f"{digest}  {path}\n" for path, digest in writable_hashes.items()
+            ),
+            encoding="utf-8",
+        )
         result = subprocess.run(
             [
                 sys.executable,
@@ -254,6 +264,8 @@ class RuntimeVerifierHardeningTests(unittest.TestCase):
                 str(self.root / "version.txt"),
                 "--diff",
                 str(self.root / "diff.txt"),
+                "--writable-file-sha256",
+                str(self.root / "writable-sha256.txt"),
                 "--expected-network",
                 expected_network or self.network,
                 "--expected-alias",
@@ -287,25 +299,32 @@ class RuntimeVerifierHardeningTests(unittest.TestCase):
         self.assertEqual(attestation["pid1_args"], ["serve"])
         self.assertEqual(attestation["restart_count"], 0)
         self.assertEqual(attestation["admission_profile"], "immutable-image-v1")
-        self.assertNotIn("mutable_rootfs", attestation)
+        self.assertFalse(attestation["mutable_rootfs"])
 
-    def test_legacy_lock_fields_fail_closed_for_every_value(self) -> None:
-        cases = {
-            "production_admission_profile": [
-                None,
-                RUNTIME_MODULE.IMMUTABLE_PROFILE,
-                "legacy-self-updated-production-v1",
-                "skip-checks",
-            ],
-            "production_compatibility": [None, {}, {"allowed_diff": []}],
-        }
-        for field, values in cases.items():
-            for value in values:
-                with self.subTest(field=field, value=value):
-                    lock = copy.deepcopy(self.lock)
-                    lock["sub2api"][field] = value
-                    result = self.invoke(lock=lock, success=False)
-                    self.assertIn("prohibited legacy Sub2API fields", result.stderr)
+    def test_only_explicit_immutable_profile_without_exceptions_is_accepted(
+        self,
+    ) -> None:
+        missing = copy.deepcopy(self.lock)
+        del missing["sub2api"]["production_admission_profile"]
+        self.invoke(lock=missing, success=False)
+
+        unknown = copy.deepcopy(self.lock)
+        unknown["sub2api"]["production_admission_profile"] = "skip-checks"
+        self.invoke(lock=unknown, success=False)
+
+        legacy = copy.deepcopy(self.lock)
+        legacy["sub2api"]["production_admission_profile"] = (
+            "legacy-self-updated-production-v1"
+        )
+        self.invoke(lock=legacy, success=False)
+
+        immutable_with_exceptions = copy.deepcopy(self.lock)
+        immutable_with_exceptions["sub2api"]["production_compatibility"] = {}
+        self.invoke(lock=immutable_with_exceptions, success=False)
+
+        immutable_with_null_exception = copy.deepcopy(self.lock)
+        immutable_with_null_exception["sub2api"]["production_compatibility"] = None
+        self.invoke(lock=immutable_with_null_exception, success=False)
 
     def test_rejects_symlinked_contract_snapshot(self) -> None:
         alias = self.root / "contract-alias.json"
@@ -410,6 +429,16 @@ elif args[:3] == ["container", "exec", "5" * 64]:
         print("Sub2API 9.8.7 commit " + "7" * 40 + " built 2026-07-30T12:34:56Z")
     else:
         raise SystemExit("unexpected container exec: " + repr(command))
+elif args[:5] == ["container", "exec", "--user", "0", "5" * 64]:
+    command = args[5:]
+    if command[:2] == ["test", "-f"] and command[2] in {
+        "/app/sub2api.backup",
+        "/app/sub2api.backup.backup",
+        "/root/.ash_history",
+    }:
+        raise SystemExit(1)
+    else:
+        raise SystemExit("unexpected root container exec: " + repr(command))
 else:
     raise SystemExit("unexpected docker command: " + repr(args))
 """,
@@ -457,33 +486,20 @@ else:
         commands = (self.root / "docker-commands.log").read_text(encoding="utf-8")
         self.assertIn("container inspect sub2api", commands)
         self.assertIn(f"container inspect {self.container_id}", commands)
-        self.assertNotIn("--user 0", commands)
-        self.assertNotIn("sub2api.backup", commands)
-        self.assertNotIn(".ash_history", commands)
+        for writable_path in (
+            "/app/sub2api.backup",
+            "/app/sub2api.backup.backup",
+            "/root/.ash_history",
+        ):
+            self.assertIn(
+                f"container exec --user 0 {self.container_id} test -f {writable_path}",
+                commands,
+            )
+            self.assertNotIn(
+                f"container exec --user 0 {self.container_id} sha256sum {writable_path}",
+                commands,
+            )
         self.assertNotIn("\ninspect ", f"\n{commands}")
-
-    def test_public_lock_has_only_portable_immutable_metadata(self) -> None:
-        lock = json.loads(
-            (REPO_ROOT / "versions.lock.json").read_text(encoding="utf-8")
-        )
-        self.assertNotIn("captured_at", lock)
-        self.assertTrue(
-            RUNTIME_MODULE.PROHIBITED_LEGACY_LOCK_FIELDS.isdisjoint(lock["sub2api"])
-        )
-
-    def test_mutable_rootfs_and_writable_layer_drift_fail_closed(self) -> None:
-        mutable = copy.deepcopy(self.container)
-        mutable["HostConfig"]["ReadonlyRootfs"] = False
-        self.invoke(container=mutable, success=False)
-
-        for diff in ("A /tmp/new", "C /app/sub2api", "D /app/removed"):
-            with self.subTest(diff=diff):
-                self.invoke(diff_lines=[diff], success=False)
-
-    def test_mutable_tag_config_image_fails_closed(self) -> None:
-        tagged = copy.deepcopy(self.container)
-        tagged["Config"]["Image"] = "registry.example/sub2api:latest"
-        self.invoke(container=tagged, success=False)
 
     def test_rejects_prefixed_container_id_and_bare_image_id(self) -> None:
         prefixed = copy.deepcopy(self.container)

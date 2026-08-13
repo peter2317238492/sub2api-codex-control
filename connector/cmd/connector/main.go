@@ -27,7 +27,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "print connector version and exit")
 	flag.Parse()
 	if *showVersion {
-		fmt.Println(config.DefaultConnectorVersion)
+		fmt.Println(connectorBinaryVersion())
 		return
 	}
 	if err := run(*configPath, *pairOnly); shouldReportTerminalError(err) {

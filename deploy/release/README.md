@@ -1,21 +1,15 @@
 # Control image-set release
 
-This directory contains the design and verifier for a future Control API, PWA,
-and PostgreSQL backup-tools release. The initial public repository is source-only:
-both binary workflows are manual-only and an unconditional guard fails before
-any build, registry login, signing, or publication step. Do not create a
-`control-v*` tag expecting a supported release.
-
-When binary publication is enabled after a separate license and supply-chain
-review, production must never admit one image independently:
+This directory is the executable trust boundary for the Control API, PWA, and
+PostgreSQL backup-tools images. Production never admits one image independently:
 `control-images.lock.json` binds all three immutable OCI digests to one annotated
 tag, full source commit, migration head, contract/schema locks, dependency lock
-inputs, Dockerfiles, SPDX SBOMs, SLSA provenance predicates, and a deterministic
-source archive with its manifest and attestation.
+inputs, Dockerfiles, a deterministic full-source archive and manifest, SPDX
+SBOMs, and SLSA provenance predicates.
 
 ## Repository controls
 
-Before enabling binary release, complete and audit all of these controls:
+Before creating a release, configure all of these controls:
 
 1. Protect `control-v*` tags from update/deletion and allow creation only by
    release maintainers. The workflow rejects lightweight tags.
@@ -38,25 +32,36 @@ publication job receives no OIDC and executes no checked-out repository code.
 
 ## Release flow
 
-The disabled workflow documents these intended fail-closed stages. They are not
-reachable in the initial source-only publication:
+An annotated `control-v<package version>` tag triggers these fail-closed stages:
 
-1. Verify the annotated tag, exact clean commit, release version, tests,
-   contracts, digest-pinned base images, the exact Hatchling build backend, and
-   the SHA-512-bound pnpm/Corepack distribution.
-2. Build each Linux/amd64 image once from its pinned Dockerfile and push it to
-   GHCR. All later operations use the returned digest, never the tag.
-3. Scan those exact digests with pinned Syft and create SPDX JSON SBOMs. Create
+1. Verify the annotated tag, exact clean commit, release version, public-source
+   and license policy, tests, contracts, digest-pinned base images, the exact
+   Hatchling build backend, and the SHA-512-bound pnpm/Corepack distribution.
+2. Build `source.tar`, `source-files.manifest`, and
+   `source-attestation.json` deterministically from the committed Git tree,
+   then independently verify their paths, modes, hashes, metadata, and required
+   release-source inventory before any registry credential is used.
+3. Build each Linux/amd64 image once from its pinned Dockerfile and push it to
+   GHCR under a run-scoped candidate locator. All later operations use the
+   returned digest, never that mutable locator.
+4. Scan those exact digests with pinned Syft and create SPDX JSON SBOMs. Create
    SLSA v1 predicates whose materials include the exact Git commit and every
-   digest-pinned base image. Build an atomic image-set lock and reject any extra,
-   missing, symlinked, or mutated evidence file.
-4. In the protected OIDC job, keylessly sign all three image digests, attach
+   digest-pinned base image. Build an atomic image-set lock that binds the three
+   source-bundle assets and reject any extra, missing, symlinked, or mutated
+   evidence file.
+5. In the protected OIDC job, keylessly sign all three image digests, attach
    signed SPDX and SLSA v1 attestations, sign the image-set lock as a blob, and
    immediately run the consumer verifier with exact issuer/workflow/SHA/ref
-   claims.
-5. Re-read the remote tag through the GitHub API, require it still resolves to
-   the event commit, require immutable releases, and publish only the verified
-   evidence set.
+   claims. Only after that verification succeeds, promote the three digests to
+   their final `control-v*` image tags and read each tag back to require the
+   expected digest.
+6. Re-read the remote annotated tag through the GitHub API immediately before
+   draft creation, before publication, and after publication; require it still
+   resolves to the event commit and require immutable releases.
+7. In a new read-only job, resolve the tag anonymously, download every asset
+   through its public `browser_download_url` into a new empty directory, verify
+   GitHub's immutable-release attestation for the release and each asset, then
+   re-run the exact-identity Cosign consumer verifier on those public bytes.
 
 This is SLSA v1-compatible provenance. It does not claim a SLSA build level;
 runner isolation, branch/tag policy, environment review, and registry retention
@@ -68,21 +73,22 @@ digest and platform-specific SBOM before expanding the matrix.
 
 ## Independent verification
 
-After binary release is separately enabled, download all eleven immutable
-release assets into one otherwise empty, owner-controlled directory:
+The workflow performs this check automatically after publication. Independent
+consumers should also download all eleven immutable release assets into one
+otherwise empty directory:
 
 ```text
 control-images.lock.json
 control-images.lock.sigstore.json
+source.tar
+source-files.manifest
+source-attestation.json
 control-api.spdx.json
 control-api.provenance.json
 pwa.spdx.json
 pwa.provenance.json
 postgres-tools.spdx.json
 postgres-tools.provenance.json
-source.tar
-source-files.manifest
-source-attestation.json
 ```
 
 Run the verifier from a separately trusted checkout. Every expected value below
@@ -109,14 +115,14 @@ deploy/release/verify-control-images.sh \
 
 Verification first authenticates the lock bundle before parsing the lock. It
 then requires the exact file inventory and hashes, the source archive/manifest/
-attestation binding, atomic release inputs,
-immutable repository digests, exact certificate claims, image signatures, and
-remote attestation predicates byte-for-JSON equivalent to the immutable local
-evidence. Missing Cosign, network/registry failure, malformed output, a tag in
-place of a digest, or any mismatch is fatal. Success emits authenticated image,
-release, source, migration, contract, release-input, and evidence digest values.
-Failure never emits deployable values. The deployment wrapper consumes those
-values, independently verifies the source assets with the trusted checkout's
+attestation binding, atomic release inputs, immutable repository digests, exact
+certificate claims, image signatures, and remote attestation predicates
+byte-for-JSON equivalent to the immutable local evidence. Missing Cosign,
+network/registry failure, malformed output, a tag in place of a digest, or any
+mismatch is fatal. Success emits authenticated image, release, source,
+migration, contract, release-input, and evidence digest values. Failure never
+emits deployable values. The deployment wrapper consumes those values,
+independently verifies the source assets with the trusted checkout's
 `source_bundle.py`, extracts a new root-owned read-only staging tree, and uses
 that tree for Compose and contract admission. It never executes a verifier from
 inside the downloaded archive.
@@ -146,10 +152,8 @@ container inspection.
 
 ## Remaining external controls
 
-No supported binary release exists in this source snapshot. Enabling one first
-requires complete binary artifact license data and independent review, then a
-real reviewed Git commit and annotated protected tag. Keyless signing requires the protected environments,
+No release can exist until the repository has a real reviewed Git commit and
+annotated protected tag. Keyless signing requires the protected environments,
 GitHub OIDC, public Sigstore services, and registry write/retention policy.
-Production admission also requires the exact immutable Sub2API image and
-runtime contract in `versions.lock.json`; mutable tags, a writable root,
-writable-layer drift, or an unverified authentication contract fail closed.
+Production admission also remains blocked by the independently tracked mutable
+Sub2API image/runtime drift and must not be weakened to admit that state.

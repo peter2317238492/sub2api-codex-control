@@ -1,0 +1,71 @@
+#!/bin/sh
+set -eu
+
+fail() {
+  printf '%s\n' "connector-package: $*" >&2
+  exit 1
+}
+
+[ "$(id -u)" -eq 0 ] || fail "package lifecycle operations require root"
+
+case "$(uname -s)" in
+  Linux)
+    installed=/usr/bin/sub2api-codex-connector
+    rollback_root=/var/lib/sub2api-codex-connector/package-rollback
+    ;;
+  Darwin)
+    installed=/usr/local/bin/sub2api-codex-connector
+    rollback_root="/Library/Application Support/Sub2API Codex Connector/package-rollback"
+    ;;
+  *) fail "unsupported operating system" ;;
+esac
+
+backup=$rollback_root/previous
+
+prepare_upgrade() {
+  [ "$#" -eq 0 ] || fail "prepare-upgrade takes no arguments"
+  [ -e "$installed" ] || exit 0
+  [ -f "$installed" ] && [ ! -L "$installed" ] || fail "installed Connector is not a regular file"
+  install -d -m 0700 "$rollback_root"
+  temporary=$rollback_root/.previous.$$
+  trap 'rm -f -- "$temporary"' EXIT HUP INT TERM
+  cp -p -- "$installed" "$temporary"
+  chmod 0755 "$temporary"
+  mv -f -- "$temporary" "$backup"
+  trap - EXIT HUP INT TERM
+}
+
+verify_install() {
+  [ "$#" -eq 1 ] || fail "verify-install requires the expected version"
+  [ -x "$installed" ] && [ ! -L "$installed" ] || fail "installed Connector is missing or unsafe"
+  actual=$($installed -version)
+  [ "$actual" = "$1" ] || fail "installed Connector version is $actual, expected $1"
+}
+
+rollback() {
+  [ "$#" -eq 0 ] || fail "rollback takes no arguments"
+  [ -f "$backup" ] && [ ! -L "$backup" ] || fail "no package rollback candidate is available"
+  failed=$rollback_root/failed-current
+  temporary=${installed}.rollback.$$
+  trap 'rm -f -- "$temporary"' EXIT HUP INT TERM
+  cp -p -- "$backup" "$temporary"
+  chmod 0755 "$temporary"
+  if [ -f "$installed" ] && [ ! -L "$installed" ]; then
+    cp -p -- "$installed" "$failed"
+  fi
+  mv -f -- "$temporary" "$installed"
+  trap - EXIT HUP INT TERM
+  "$installed" -version
+  printf '%s\n' "Connector binary restored. Reinstall the matching verified native package to reconcile package metadata."
+}
+
+case "${1:-}" in
+  prepare-upgrade) shift; prepare_upgrade "$@" ;;
+  verify-install) shift; verify_install "$@" ;;
+  rollback) shift; rollback "$@" ;;
+  uninstall)
+    [ "$#" -eq 1 ] || fail "uninstall takes no arguments"
+    printf '%s\n' "Connector user configuration, pairing credentials, and state are preserved by default."
+    ;;
+  *) fail "usage: $0 prepare-upgrade | verify-install VERSION | rollback | uninstall" ;;
+esac

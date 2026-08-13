@@ -7,7 +7,7 @@ its original copyright and license terms.
 This source distribution includes generated Codex app-server schemas and
 embedded contract copies derived from OpenAI Codex 0.147.0, which is licensed
 under Apache-2.0. It also includes a compatibility contract recording public
-Sub2API 0.1.175 interfaces; Sub2API is licensed under LGPL-3.0-or-later. No
+Sub2API 0.1.176 interfaces; Sub2API is licensed under LGPL-3.0-or-later. No
 upstream source code from Sub2API is vendored here.
 
 The project depends on packages obtained separately by the package managers.
@@ -18,7 +18,7 @@ package's own distribution remains authoritative for its complete notices.
 | Component | Version | Relationship | License |
 | --- | --- | --- | --- |
 | OpenAI Codex | 0.147.0 | Generated protocol material | Apache-2.0 |
-| Sub2API | 0.1.175 | Compatibility contract | LGPL-3.0-or-later |
+| Sub2API | 0.1.176 | Compatibility contract | LGPL-3.0-or-later |
 | Alembic | 1.18.5 | Python runtime dependency | MIT |
 | Vue | 3.5.39 | PWA runtime dependency | MIT |
 | Pinia | 3.0.4 | PWA runtime dependency | MIT |

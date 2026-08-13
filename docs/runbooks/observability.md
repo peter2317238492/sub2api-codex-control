@@ -1,10 +1,5 @@
 # Observability
 
-The first public repository version is source-only. The metrics implementation
-and rule files can be tested from source, but production monitoring remains a
-release gate until signed artifacts, real target reachability, and controlled
-alert delivery have all been verified for one admitted revision.
-
 ## Health and availability
 
 Use these signals independently:
@@ -27,8 +22,8 @@ The Control API exposes a database-backed Prometheus snapshot at
 `http://127.0.0.1:18090/internal/metrics` on the loopback API port. The supplied
 Nginx policy returns `404` for `/codex-api/internal/*`, so this endpoint is not
 part of the public same-origin surface. Scrape it from the host or a trusted
-local collector using the bearer token derived by the container entrypoint from
-the file-backed session secret. Keep the published API port loopback-only even
+local collector using a pre-derived dedicated metrics bearer consumed through a
+secret-file interface. Keep the published API port loopback-only even
 though the endpoint also requires this token. It combines durable aggregate
 state with process-local bounded counters, gauges, and histograms for HTTP,
 session exchange, pairing, WebSockets, command transitions and latency,
@@ -41,38 +36,126 @@ when a restart must not erase state. The database snapshot is cached for 15
 seconds and aborted after 3 seconds by default; scrape no more frequently than
 the cache interval.
 
-For a one-time local verification, derive the bearer token without printing the
-session secret, place the header in a private temporary curl configuration, and
-remove it immediately afterward. Substitute the admitted external secret path;
-never read production secrets from the source checkout:
+Derive each bearer once in a root-only provisioning context directly into a new
+owner-only file. The supplied tool refuses an existing or symlink output,
+creates with `O_EXCL`/`O_NOFOLLOW`, fsyncs the file and parent directory, and
+never writes the bearer to stdout, argv, or an environment variable:
 
 ```sh
-umask 077
-metrics_curl_config=$(mktemp "${TMPDIR:-/tmp}/codex-control-metrics.XXXXXX")
-trap 'rm -f -- "$metrics_curl_config"' EXIT HUP INT TERM
-CONTROL_SESSION_HMAC_SECRET_FILE=/secure/codex-control/secrets/control_session_hmac_secret \
-METRICS_CURL_CONFIG="$metrics_curl_config" python3 -c '
-import hashlib
-import hmac
-import os
-import pathlib
-
-secret = pathlib.Path(os.environ["CONTROL_SESSION_HMAC_SECRET_FILE"]).read_bytes().rstrip(b"\r\n")
-token = hmac.new(secret, b"control-metrics-v1", hashlib.sha256).hexdigest()
-quote = chr(34)
-pathlib.Path(os.environ["METRICS_CURL_CONFIG"]).write_text(
-    f"header = {quote}Authorization: Bearer {token}{quote}\n", encoding="utf-8"
-)
-'
-curl --config "$metrics_curl_config" --fail --silent --show-error \
-  http://127.0.0.1:18090/internal/metrics
-rm -f -- "$metrics_curl_config"
-trap - EXIT HUP INT TERM
-unset metrics_curl_config
+install -d -o 65532 -g 65532 -m 0700 \
+  /var/lib/codex-control-monitoring/secrets
+python3 deploy/monitoring/derive-metrics-bearer.py \
+  --root-secret-file deploy/docker-compose/secrets/control_session_hmac_secret \
+  --output-file /var/lib/codex-control-monitoring/secrets/control_metrics_bearer \
+  --domain control-metrics \
+  --owner-uid 65532 --owner-gid 65532
+python3 deploy/monitoring/derive-metrics-bearer.py \
+  --root-secret-file /root/provisioning/monitoring_root_secret \
+  --output-file /var/lib/codex-control-monitoring/secrets/alertmanager_proxy_bearer \
+  --domain alertmanager-proxy \
+  --owner-uid 65532 --owner-gid 65532
+python3 deploy/monitoring/derive-metrics-bearer.py \
+  --root-secret-file /root/provisioning/monitoring_root_secret \
+  --output-file /var/lib/codex-control-monitoring/secrets/evidence_receiver_bearer \
+  --domain evidence-receiver \
+  --owner-uid 65532 --owner-gid 65532
 ```
 
-For continuous scraping, provision an equivalent private token file directly
-to the trusted local collector instead of deriving it for every scrape.
+The production monitoring stack reads only those derived files. It must never
+mount, open, or derive from `control_session_hmac_secret` at runtime. The exact
+Control release must also consume the matching pre-derived metrics credential
+through its secret-file interface; an entrypoint that exports the bearer into
+the process environment is not production-admissible. Do not probe by putting a
+bearer in `curl -H`, a curl config, an environment variable, a shell variable,
+or command output. Prometheus and Alertmanager `credentials_file` are the
+supported consumers. Compromise of monitoring must not disclose either root
+secret.
+
+## Hardened production stack
+
+`deploy/monitoring/compose.yaml` is an independent Compose project.
+It does not modify the application Compose, UFW, PostgreSQL, Redis, Sub2API,
+Control API, or backup/restore implementation. Prometheus `3.13.2` and
+Alertmanager `0.33.1` are pinned to the audited linux/amd64 manifest digests in
+that file. Every service runs nonroot with a read-only root filesystem, all
+capabilities dropped, `no-new-privileges`, bounded tmpfs, CPU, memory, and PID
+limits. All containers use the dedicated uid/gid `65532`; strict admission must
+prove the host has no account, group, or process using that identity. It
+publishes no Compose ports and has no Docker socket or privileged access.
+
+Host networking is used by Prometheus and the collector, and by the narrow
+Alertmanager auth proxy. Host listeners are `127.0.0.1:19090` (Prometheus),
+`:19091` (collector), and `:19093` (authenticated proxy). Raw Alertmanager
+`127.0.0.1:9093`, the relay, and authenticated receiver `127.0.0.1:19094` share
+an isolated network namespace and have no host listener. The proxy allows only
+Prometheus alert submission, metrics, and readiness over a stable owner-only
+Unix socket; it cannot reach silence or other management routes. Before
+starting, run:
+
+```sh
+deploy/monitoring/verify-stack.sh --strict
+docker compose --env-file /var/lib/codex-control-monitoring/monitoring.env \
+  -f deploy/monitoring/compose.yaml config --quiet
+```
+
+The default verifier mode is developer-only and may skip missing tools.
+Production accepts only `--strict`, where missing Ruff, promtool, Docker,
+Compose, a failed image/container validation, or a uid collision is fatal.
+After starting, prove with `ss -lntp` that only the three documented loopback
+ports exist on the host and neither `9093` nor `19094` is host-bound. Query
+`http://127.0.0.1:19090/api/v1/targets` and require
+the `codex-control-api` job to contain exactly and only
+`127.0.0.1:18090` and `127.0.0.1:18093`, both healthy.
+
+### Release and VCS identity
+
+The monitoring environment's `CONTROL_RELEASE` and `CONTROL_VCS_REF` must come
+from the same immutable release admission record as the two Control API
+replicas. The collector publishes that exact expected pair, and
+`production-integrity.yml` fails admission if either API target omits
+`codex_control_build_info`, reports any different version or VCS revision, or
+the configured two-target set is incomplete. `unknown`, `unborn`, `dirty`,
+placeholder VCS values, and non-hex VCS revisions fail closed.
+
+No monitoring source-identity manifest is valid in this working tree. Generate
+one only after these sources are committed at the final public HEAD and its
+public source asset is built and independently hashed. Do not bind to an older
+`READY.json`, `.10` candidate, pre-freeze commit, or helper image tag.
+Production remains **BLOCKED** until the final public HEAD/source asset and its
+new identity manifest exist.
+
+### Fail-closed evidence collection
+
+The loopback collector is not a probe simulator. It accepts a small allowlist of
+pre-produced Prometheus text files only after verifying regular-file type,
+non-symlink access, uid ownership, exact `0600` mode, size, freshness, family,
+labels, and bounded label values. See `deploy/monitoring/README.md` for the
+per-file contract.
+
+Missing Connector evidence, missing authenticated session-exchange synthetic,
+missing backup success/checksum evidence, and missing restore-rehearsal success
+must stay absent or explicitly failing. Do not initialize these metrics to `1`,
+reuse old timestamps, copy evidence from another host, or silence their absence
+alerts. A green value may be published only by its real producer after the
+corresponding operation completes successfully.
+
+### Local firing and resolved evidence
+
+The bundled Alertmanager receiver authenticates every POST with an independent
+derived bearer, then writes a bounded subset to a local `O_APPEND`/fsync JSONL
+file. Use the short-lived `delivery-test.prom` procedure in
+`deploy/monitoring/README.md` to capture both `firing` and `resolved` records
+with the same fingerprint and the freshly generated controlled nonce. The
+verifier requires owner `0600`, one link, a stable ancestor/fd/name identity,
+strict schema and size, and `start < firing receipt < end <= resolved receipt`.
+
+This is local pipeline evidence only. It proves Prometheus rule evaluation,
+Alertmanager routing, webhook delivery, and resolution to the same host. It is
+not evidence that an external operator received, acknowledged, or acted on an
+alert. `CodexControlExternalOperatorDeliveryUnconfigured` therefore remains
+firing by design. Keep the production release gate open until a separately
+configured, credentialed external receiver has controlled firing/resolved and
+operator-delivery evidence; never treat the local receiver as satisfying it.
 
 Release-required signals are listed below. The native `/internal/metrics`
 snapshot now supplies HTTP rates and latency, session/pairing/approval outcomes,

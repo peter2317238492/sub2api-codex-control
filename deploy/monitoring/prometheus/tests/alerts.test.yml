@@ -1,10 +1,82 @@
 rule_files:
   - ../native-alerts.yml
   - ../external-alerts.yml
+  - ../production-integrity.yml
 
 evaluation_interval: 1m
 
 tests:
+  - name: absent external operator delivery remains a release gate
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: CodexControlExternalOperatorDeliveryUnconfigured
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlExternalOperatorDeliveryUnconfigured
+              component: alert-delivery
+              release_gate: external-operator-delivery
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: External operator alert delivery is not configured
+              description: The bundled receiver proves only a local authenticated firing and resolved pair; production operator delivery remains unverified.
+              runbook: docs/runbooks/observability.md#local-firing-and-resolved-evidence
+
+  - name: generated timestamp absence is evaluated per API target
+    interval: 1m
+    input_series:
+      - series: 'up{job="codex-control-api",instance="api-complete"}'
+        values: '1+0x4'
+      - series: 'up{job="codex-control-api",instance="api-missing"}'
+        values: '1+0x4'
+      - series: 'codex_control_metrics_generated_timestamp_seconds{job="codex-control-api",instance="api-complete"}'
+        values: '0+60x4'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CodexControlMetricsSnapshotStale
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlMetricsSnapshotStale
+              component: control-api
+              instance: api-missing
+              job: codex-control-api
+              release_gate: observability
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: Control API metrics snapshot is stale
+              description: The database-backed metrics snapshot has not advanced for more than two minutes.
+              runbook: docs/runbooks/observability.md#alert-catalog
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: ""
+              correlation: ""
+
+  - name: initialized native telemetry absence is evaluated per API target
+    interval: 1m
+    input_series:
+      - series: 'up{job="codex-control-api",instance="api-missing"}'
+        values: '1+0x7'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CodexControlNativeStateTelemetryMissing
+        exp_alerts:
+          - exp_labels:
+              alertname: CodexControlNativeStateTelemetryMissing
+              component: control-api
+              instance: api-missing
+              job: codex-control-api
+              release_gate: observability
+              service: codex-control
+              severity: critical
+            exp_annotations:
+              summary: Required native state telemetry is missing
+              description: One or more initialized realtime, maintenance, dependency, or database-pool gauges are absent.
+              runbook: docs/runbooks/observability.md#native-metric-contract
+              release_matrix: docs/runbooks/version-matrix.md#feature-admission
+              deploy_event: ""
+              correlation: ""
+
   - name: retained Connector up value is unhealthy when its textfile heartbeat is stale
     interval: 1m
     external_labels:

@@ -1,0 +1,177 @@
+name: codex-control-monitoring
+
+x-hardened-service: &hardened-service
+  platform: linux/amd64
+  read_only: true
+  user: "65532:65532"
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=65532,gid=65532,mode=0700
+  pids_limit: 128
+  mem_limit: 512m
+  mem_reservation: 128m
+  cpus: 1.0
+  restart: unless-stopped
+
+x-helper-build: &helper-build
+  context: .
+  dockerfile: helper.Dockerfile
+  args:
+    CONTROL_MONITORING_HELPER_SOURCE_SHA256: ${CONTROL_MONITORING_HELPER_SOURCE_SHA256:?set the verified helper source closure SHA-256}
+
+services:
+  prometheus:
+    <<: *hardened-service
+    network_mode: host
+    image: prom/prometheus:v3.13.2@sha256:1147c92841726a6fef55fe6124491d6f85480f8de204f7d420304ca5bbd0a8f7
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=8GB
+      - --web.listen-address=127.0.0.1:19090
+      - --web.enable-lifecycle=false
+      - --web.enable-admin-api=false
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - ${CONTROL_MONITORING_METRICS_BEARER_FILE:?set a pre-derived dedicated 0600 metrics bearer}:/run/secrets/control_metrics_bearer:ro
+      - ${CONTROL_MONITORING_ALERTMANAGER_PROXY_BEARER_FILE:?set a dedicated 0600 Alertmanager proxy bearer}:/run/secrets/alertmanager_proxy_bearer:ro
+      - ${CONTROL_MONITORING_PROMETHEUS_DATA_DIR:?set a 65532-owned 0700 data directory}:/prometheus
+    pids_limit: 256
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 2.0
+
+  collector:
+    <<: *hardened-service
+    network_mode: host
+    build: *helper-build
+    image: codex-control-monitoring-helper:${CONTROL_MONITORING_HELPER_SOURCE_SHA256:?set the verified helper source closure SHA-256}
+    command:
+      - python3
+      - /opt/monitoring/collector.py
+    environment:
+      CONTROL_MONITORING_EXPECTED_RELEASE: ${CONTROL_RELEASE:?set the exact admitted Control release}
+      CONTROL_MONITORING_EXPECTED_VCS_REF: ${CONTROL_VCS_REF:?set the exact admitted Control VCS revision}
+      CONTROL_MONITORING_EVIDENCE_DIR: /evidence
+    volumes:
+      - ${CONTROL_MONITORING_EVIDENCE_DIR:?set a 65532-owned 0700 evidence directory}:/evidence:ro
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
+    pids_limit: 64
+
+  alertmanager:
+    <<: *hardened-service
+    image: prom/alertmanager:v0.33.1@sha256:a89f8d4520954079275441eecdb71444328bd90633dd4eddfc33b9ed657f349b
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.listen-address=127.0.0.1:9093
+      - --cluster.listen-address=
+    volumes:
+      - ${CONTROL_MONITORING_ALERTMANAGER_CONFIG:?set the admitted host-private Alertmanager config}:/etc/alertmanager/alertmanager.yml:ro
+      - ${CONTROL_MONITORING_RECEIVER_BEARER_FILE:?set a dedicated 0600 receiver bearer}:/run/secrets/evidence_receiver_bearer:ro
+      - ${CONTROL_MONITORING_ALERTMANAGER_DATA_DIR:?set a 65532-owned 0700 data directory}:/alertmanager
+    networks:
+      - alertmanager-private
+
+  external-delivery-relay:
+    <<: *hardened-service
+    build: *helper-build
+    image: codex-control-monitoring-helper:${CONTROL_MONITORING_HELPER_SOURCE_SHA256:?set the verified helper source closure SHA-256}
+    command:
+      - python3
+      - /opt/monitoring/external-delivery-relay.py
+      - --delivery-config
+      - /run/config/external-delivery.json
+      - --bearer-file
+      - /run/secrets/external_operator_delivery_bearer
+    volumes:
+      - ${CONTROL_MONITORING_EXTERNAL_OPERATOR_CONFIG:?set the admitted host-private external delivery config}:/run/config/external-delivery.json:ro
+      - ${CONTROL_MONITORING_EXTERNAL_OPERATOR_BEARER_FILE:?set a dedicated 0600 external operator bearer}:/run/secrets/external_operator_delivery_bearer:ro
+    networks:
+      - alertmanager-private
+      - external-operator-egress
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
+    pids_limit: 64
+
+  alertmanager-auth-proxy:
+    <<: *hardened-service
+    network_mode: host
+    build: *helper-build
+    image: codex-control-monitoring-helper:${CONTROL_MONITORING_HELPER_SOURCE_SHA256:?set the verified helper source closure SHA-256}
+    depends_on:
+      alertmanager-relay:
+        condition: service_started
+    command:
+      - python3
+      - /opt/monitoring/alertmanager-proxy.py
+      - proxy
+      - --socket
+      - /bridge/alertmanager.sock
+      - --bearer-file
+      - /run/secrets/alertmanager_proxy_bearer
+    volumes:
+      - ${CONTROL_MONITORING_ALERTMANAGER_PROXY_BEARER_FILE:?set a dedicated 0600 Alertmanager proxy bearer}:/run/secrets/alertmanager_proxy_bearer:ro
+      - ${CONTROL_MONITORING_ALERTMANAGER_BRIDGE_DIR:?set a 65532-owned 0700 bridge directory}:/bridge:ro
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
+    pids_limit: 64
+
+  alertmanager-relay:
+    <<: *hardened-service
+    network_mode: service:alertmanager
+    build: *helper-build
+    image: codex-control-monitoring-helper:${CONTROL_MONITORING_HELPER_SOURCE_SHA256:?set the verified helper source closure SHA-256}
+    depends_on:
+      alertmanager:
+        condition: service_started
+    command:
+      - python3
+      - /opt/monitoring/alertmanager-proxy.py
+      - relay
+      - --socket
+      - /bridge/alertmanager.sock
+    volumes:
+      - ${CONTROL_MONITORING_ALERTMANAGER_BRIDGE_DIR:?set a 65532-owned 0700 bridge directory}:/bridge
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
+    pids_limit: 64
+
+  evidence-receiver:
+    <<: *hardened-service
+    network_mode: service:alertmanager
+    build: *helper-build
+    image: codex-control-monitoring-helper:${CONTROL_MONITORING_HELPER_SOURCE_SHA256:?set the verified helper source closure SHA-256}
+    depends_on:
+      alertmanager:
+        condition: service_started
+    command:
+      - python3
+      - /opt/monitoring/receiver.py
+      - serve
+      - --evidence-file
+      - /evidence/alert-delivery.jsonl
+      - --bearer-file
+      - /run/secrets/evidence_receiver_bearer
+    volumes:
+      - ${CONTROL_MONITORING_DELIVERY_EVIDENCE_DIR:?set a 65532-owned 0700 delivery directory}:/evidence
+      - ${CONTROL_MONITORING_RECEIVER_BEARER_FILE:?set a dedicated 0600 receiver bearer}:/run/secrets/evidence_receiver_bearer:ro
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
+    pids_limit: 64
+
+networks:
+  alertmanager-private:
+    internal: true
+  external-operator-egress:
+    internal: false

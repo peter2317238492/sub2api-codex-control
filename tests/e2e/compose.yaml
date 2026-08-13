@@ -174,7 +174,7 @@ services:
       CONTROL_APPROVAL_TTL_SECONDS: "5"
       CONTROL_REDIS_USER: codex_control
       CONTROL_SUB2API_VERIFY_TLS: "false"
-      CONTROL_SUB2API_CONTRACT_MARKER: 0.1.175/93c32fa
+      CONTROL_SUB2API_CONTRACT_MARKER: 0.1.176/e803e38
     depends_on:
       postgres:
         condition: service_healthy
@@ -194,7 +194,7 @@ services:
       CONTROL_APPROVAL_TTL_SECONDS: "5"
       CONTROL_REDIS_USER: codex_control
       CONTROL_SUB2API_VERIFY_TLS: "false"
-      CONTROL_SUB2API_CONTRACT_MARKER: 0.1.175/93c32fa
+      CONTROL_SUB2API_CONTRACT_MARKER: 0.1.176/e803e38
 
   control-api-replica:
     ports: !reset []
@@ -207,7 +207,7 @@ services:
       CONTROL_APPROVAL_TTL_SECONDS: "5"
       CONTROL_REDIS_USER: codex_control
       CONTROL_SUB2API_VERIFY_TLS: "false"
-      CONTROL_SUB2API_CONTRACT_MARKER: 0.1.175/93c32fa
+      CONTROL_SUB2API_CONTRACT_MARKER: 0.1.176/e803e38
 
   smoke-edge:
     ports: !override

@@ -27,15 +27,16 @@ def fail(message: str) -> NoReturn:
     raise BackupError(message)
 
 
-def private_directory(path: Path, label: str) -> None:
+def private_directory(path: Path, label: str, *, expected_uid: int | None = None) -> None:
     try:
         info = path.lstat()
     except OSError:
         fail(f"{label} is not accessible")
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         fail(f"{label} must be a real directory")
-    if info.st_uid != os.geteuid():
-        fail(f"{label} must be owned by the runtime UID")
+    owner_uid = os.geteuid() if expected_uid is None else expected_uid
+    if info.st_uid != owner_uid:
+        fail(f"{label} must be owned by UID {owner_uid}")
     if stat.S_IMODE(info.st_mode) != 0o700:
         fail(f"{label} mode must be exactly 0700")
 
@@ -154,6 +155,207 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def stat_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_uid,
+        value.st_gid,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def stable_copy(source: Path, destination: Path, label: str) -> dict[str, object]:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(source, flags)
+        before = os.fstat(descriptor)
+    except OSError:
+        fail(f"{label} is not accessible")
+    try:
+        if not stat.S_ISREG(before.st_mode) or before.st_size > 32 * 1024 * 1024:
+            fail(f"{label} must be one bounded regular file")
+        digest = hashlib.sha256()
+        size = 0
+        with open_private(destination) as output:
+            for block in iter(lambda: os.read(descriptor, 1024 * 1024), b""):
+                digest.update(block)
+                size += len(block)
+                output.write(block)
+            output.flush()
+            os.fsync(output.fileno())
+        if stat_identity(os.fstat(descriptor)) != stat_identity(before):
+            fail(f"{label} changed while it was copied")
+    finally:
+        os.close(descriptor)
+    return {
+        "source": str(source),
+        "artifact": destination.name,
+        "sha256": digest.hexdigest(),
+        "size": size,
+    }
+
+
+def release_record_inventory(
+    root: Path, excluded_top_level: set[str]
+) -> tuple[dict[str, object], list[str]]:
+    entries: list[dict[str, object]] = []
+    top_level: list[str] = []
+    try:
+        root_info = root.lstat()
+        children = sorted(root.iterdir(), key=lambda item: item.name)
+    except OSError:
+        fail("release record path cannot be inventoried")
+    for child in children:
+        if (
+            child.name in excluded_top_level
+            or child.name.startswith(".")
+            or child.name == "auth-probe-inputs"
+        ):
+            continue
+        if "\n" in child.name or "\r" in child.name:
+            fail("one release record name is invalid")
+        top_level.append(child.name)
+        pending = [child]
+        while pending:
+            path = pending.pop()
+            relative = path.relative_to(root)
+            if "auth-probe-inputs" in relative.parts:
+                fail("release records retain sensitive authentication probe inputs")
+            if any(part.startswith(".") for part in relative.parts):
+                fail("release records retain one nested temporary entry")
+            try:
+                info = path.lstat()
+            except OSError:
+                fail("one release record changed while it was inventoried")
+            if stat.S_ISLNK(info.st_mode):
+                fail("release records must not contain symlinks")
+            item: dict[str, object] = {
+                "path": relative.as_posix(),
+                "mode": f"{stat.S_IMODE(info.st_mode):04o}",
+                "uid": info.st_uid,
+                "gid": info.st_gid,
+                "mtime_ns": info.st_mtime_ns,
+            }
+            if stat.S_ISDIR(info.st_mode):
+                item["type"] = "directory"
+                try:
+                    pending.extend(
+                        sorted(path.iterdir(), key=lambda value: value.name, reverse=True)
+                    )
+                except OSError:
+                    fail("one release record directory changed while it was inventoried")
+            elif stat.S_ISREG(info.st_mode):
+                item.update(type="file", size=info.st_size, sha256=sha256(path))
+            else:
+                fail("release records contain an unsupported file type")
+            entries.append(item)
+    entries.sort(key=lambda item: str(item["path"]))
+    return (
+        {
+            "root": str(root),
+            "root_mode": f"{stat.S_IMODE(root_info.st_mode):04o}",
+            "root_uid": root_info.st_uid,
+            "excluded_top_level": sorted(excluded_top_level),
+            "excluded_transient_names": [".*", ".tmp*", "auth-probe-inputs"],
+            "entries": entries,
+        },
+        top_level,
+    )
+
+
+def normalize_docker_networks(
+    raw_networks: bytes,
+    raw_containers: bytes,
+    expected_names: list[str],
+) -> list[dict[str, object]]:
+    try:
+        network_values = json.loads(raw_networks.decode("utf-8"))
+        container_values = json.loads(raw_containers.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        fail("Docker network metadata is not valid JSON")
+    if not isinstance(network_values, list) or not isinstance(container_values, list):
+        fail("Docker network metadata has an unexpected shape")
+    networks: dict[str, dict[str, object]] = {}
+    for value in network_values:
+        if not isinstance(value, dict) or not isinstance(value.get("Name"), str):
+            fail("one Docker network inspection is invalid")
+        name = value["Name"]
+        identifier = value.get("Id")
+        members = value.get("Containers")
+        if (
+            name in networks
+            or not isinstance(identifier, str)
+            or re.fullmatch(r"[0-9a-f]{64}", identifier) is None
+            or not isinstance(members, dict)
+        ):
+            fail("one Docker network inspection is invalid")
+        normalized_members: list[dict[str, str]] = []
+        for container_id, member in sorted(members.items()):
+            if (
+                not isinstance(container_id, str)
+                or re.fullmatch(r"[0-9a-f]{64}", container_id) is None
+                or not isinstance(member, dict)
+                or not isinstance(member.get("Name"), str)
+                or not isinstance(member.get("EndpointID"), str)
+            ):
+                fail("one Docker network member is invalid")
+            normalized_members.append(
+                {
+                    "container_id": container_id,
+                    "name": member["Name"],
+                    "endpoint_id": member["EndpointID"],
+                }
+            )
+        networks[name] = {
+            "name": name,
+            "id": identifier,
+            "driver": value.get("Driver"),
+            "scope": value.get("Scope"),
+            "internal": value.get("Internal"),
+            "attachable": value.get("Attachable"),
+            "ingress": value.get("Ingress"),
+            "enable_ipv6": value.get("EnableIPv6"),
+            "ipam": value.get("IPAM"),
+            "options": value.get("Options") or {},
+            "containers": normalized_members,
+        }
+    if set(networks) != set(expected_names):
+        fail("Docker network inspection differs from the requested networks")
+
+    attached_names: set[str] = set()
+    expected_container_ids: set[str] = set()
+    for value in container_values:
+        if not isinstance(value, dict) or not isinstance(value.get("Id"), str):
+            fail("one Docker container inspection is invalid")
+        container_id = value["Id"]
+        expected_container_ids.add(container_id)
+        settings = value.get("NetworkSettings")
+        attached = settings.get("Networks") if isinstance(settings, dict) else None
+        if not isinstance(attached, dict) or not attached:
+            fail("one production container has no inspected Docker network")
+        for name, endpoint in attached.items():
+            if name not in networks or not isinstance(endpoint, dict):
+                fail("one production container uses an unrecorded Docker network")
+            if endpoint.get("NetworkID") != networks[name]["id"]:
+                fail("one production container has a mismatched Docker network ID")
+            attached_names.add(name)
+    if not attached_names or not attached_names.issubset(set(expected_names)):
+        fail("production container attachments are not covered by the requested networks")
+    recorded_ids = {
+        item["container_id"]
+        for network in networks.values()
+        for item in network["containers"]
+        if isinstance(item, dict)
+    }
+    if not expected_container_ids.issubset(recorded_ids):
+        fail("Docker network membership omits one production container")
+    return [networks[name] for name in sorted(networks)]
 
 
 def require_nonempty(path: Path, label: str) -> None:
@@ -340,7 +542,11 @@ exec redis-check-rdb "$temporary"
 
 SUB2API_RUNTIME_ARCHIVE_SCRIPT = r"""
 set -eu
-exec tar -C / -cf - app/sub2api
+set -- app/sub2api
+for candidate in app/sub2api.backup app/sub2api.backup.backup; do
+  if [ -e "/$candidate" ]; then set -- "$@" "$candidate"; fi
+done
+exec tar -C / -cf - "$@"
 """
 
 
@@ -470,6 +676,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sub2api-compose", required=True, type=Path)
     parser.add_argument("--sub2api-environment", required=True, type=Path)
     parser.add_argument("--nginx-config", required=True, type=Path)
+    parser.add_argument("--release-records", required=True, type=Path)
+    parser.add_argument("--release-record-exclude", action="append", default=[])
+    parser.add_argument("--release-evidence", action="append", required=True, type=Path)
+    parser.add_argument("--docker-network", action="append", required=True)
+    parser.add_argument("--expected-owner-uid", type=int, default=0)
     parser.add_argument("--proc-root", type=Path, default=Path("/proc"))
     parser.add_argument("--docker", default="docker")
     parser.add_argument("--pg-restore")
@@ -482,10 +693,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     arguments = build_parser().parse_args()
     os.umask(0o077)
+    if arguments.expected_owner_uid < 0:
+        fail("expected owner UID is invalid")
+    if os.geteuid() != arguments.expected_owner_uid:
+        fail(f"production backup must run as UID {arguments.expected_owner_uid}")
     backup_root: Path = arguments.backup_root
     if not backup_root.is_absolute():
         fail("backup root must be absolute")
-    private_directory(backup_root, "backup root")
+    private_directory(
+        backup_root, "backup root", expected_uid=arguments.expected_owner_uid
+    )
     if arguments.result_file is not None and not arguments.result_file.is_absolute():
         fail("result file must be absolute")
     if not (1 <= arguments.redis_port <= 65_535):
@@ -511,6 +728,7 @@ def main() -> int:
         "sub2api_compose": arguments.sub2api_compose,
         "sub2api_environment": arguments.sub2api_environment,
         "nginx_config": arguments.nginx_config,
+        "release_records": arguments.release_records,
     }
     source_path(arguments.sub2api_data, "Sub2API data path", directory=True)
     source_path(arguments.sub2api_config, "Sub2API config path")
@@ -519,6 +737,9 @@ def main() -> int:
         arguments.sub2api_environment, "Sub2API environment file", directory=False
     )
     source_path(arguments.nginx_config, "Nginx config path", directory=True)
+    source_path(arguments.release_records, "release record path", directory=True)
+    for evidence in arguments.release_evidence:
+        source_path(evidence, "release evidence", directory=False)
     source_path(arguments.proc_root, "host procfs root", directory=True)
     root_resolved = backup_root.resolve()
     for value in sources.values():
@@ -527,6 +748,23 @@ def main() -> int:
         except ValueError:
             continue
         fail("a production source path is inside the backup root")
+    evidence_names = [path.name for path in arguments.release_evidence]
+    if len(set(evidence_names)) != len(evidence_names) or any(
+        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name) is None
+        for name in evidence_names
+    ):
+        fail("release evidence file names are invalid or duplicated")
+    excluded_release_records = set(arguments.release_record_exclude)
+    if any(
+        not name
+        or name in {".", ".."}
+        or "/" in name
+        or "\x00" in name
+        or "\n" in name
+        or "\r" in name
+        for name in excluded_release_records
+    ):
+        fail("release record exclusions must be top-level names")
 
     docker = require_command(arguments.docker, "docker")
     pg_restore = (
@@ -537,6 +775,12 @@ def main() -> int:
     tar = require_command(arguments.tar, "tar")
     nginx = require_command(arguments.nginx, "nginx")
     openssl = require_command(arguments.openssl, "openssl")
+    docker_networks = sorted(set(arguments.docker_network))
+    if not docker_networks or any(
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name)
+        for name in docker_networks
+    ):
+        fail("Docker network names are invalid")
 
     postgres_password = password_input(
         arguments.postgres_password_file, "PostgreSQL password file"
@@ -590,6 +834,34 @@ def main() -> int:
             stage="full Docker image inspection",
         )
         require_nonempty(image_inspect, "full Docker image inspection")
+        network_inspect = incomplete / "docker-network-inspect.json"
+        run_capture(
+            [docker, "network", "inspect", *docker_networks],
+            output=network_inspect,
+            stage="Docker network inspection",
+        )
+        require_nonempty(network_inspect, "Docker network inspection")
+        normalized_networks = normalize_docker_networks(
+            network_inspect.read_bytes(),
+            container_inspect.read_bytes(),
+            docker_networks,
+        )
+        write_json(incomplete / "docker-networks.json", normalized_networks)
+        initial_release_inventory, release_record_names = release_record_inventory(
+            arguments.release_records, excluded_release_records
+        )
+        write_json(incomplete / "release-records-inventory.json", initial_release_inventory)
+        release_evidence_inventory = [
+            stable_copy(
+                source,
+                incomplete / f"release-evidence-{source.name}",
+                f"release evidence {source.name}",
+            )
+            for source in arguments.release_evidence
+        ]
+        write_json(
+            incomplete / "release-evidence-inventory.json", release_evidence_inventory
+        )
         running_executable = running_executable_evidence(
             arguments.proc_root, int(identities["sub2api"]["pid"])
         )
@@ -835,6 +1107,42 @@ def main() -> int:
         require_nonempty(sub2api_files_contents, "Sub2API host files tar listing")
         tar_listing_is_safe(sub2api_files_contents)
 
+        release_records = incomplete / "release-records.tar.gz"
+        if release_record_names:
+            run_capture(
+                [
+                    tar,
+                    "-C",
+                    str(arguments.release_records),
+                    "-czf",
+                    str(release_records),
+                    *release_record_names,
+                ],
+                stage="release records archive",
+            )
+        else:
+            run_capture(
+                [
+                    tar,
+                    "-C",
+                    str(arguments.release_records),
+                    "-czf",
+                    str(release_records),
+                    "-T",
+                    "/dev/null",
+                ],
+                stage="release records archive",
+            )
+        require_nonempty(release_records, "release records archive")
+        release_records_contents = incomplete / "release-records.contents.txt"
+        run_capture(
+            [tar, "-tzf", str(release_records)],
+            output=release_records_contents,
+            stage="release records tar validation",
+        )
+        require_nonempty(release_records_contents, "release records tar listing")
+        tar_listing_is_safe(release_records_contents)
+
         sub2api_runtime = incomplete / "sub2api-runtime.txt"
         run_capture(
             [
@@ -989,6 +1297,27 @@ def main() -> int:
         }
         if ending_identities != identities:
             fail("one production container changed during the backup")
+        ending_network_inspect = incomplete / ".docker-network-inspect-after.json"
+        run_capture(
+            [docker, "network", "inspect", *docker_networks],
+            output=ending_network_inspect,
+            stage="ending Docker network inspection",
+        )
+        if normalize_docker_networks(
+            ending_network_inspect.read_bytes(),
+            container_inspect.read_bytes(),
+            docker_networks,
+        ) != normalized_networks:
+            fail("one production Docker network changed during the backup")
+        ending_network_inspect.unlink()
+        ending_release_inventory, ending_release_names = release_record_inventory(
+            arguments.release_records, excluded_release_records
+        )
+        if (
+            ending_release_inventory != initial_release_inventory
+            or ending_release_names != release_record_names
+        ):
+            fail("one release record changed during the backup")
         if (
             running_executable_evidence(
                 arguments.proc_root, int(identities["sub2api"]["pid"])
@@ -1024,6 +1353,9 @@ def main() -> int:
                 for role, identity in identities.items()
             },
             "sources": {key: str(value) for key, value in sorted(sources.items())},
+            "release_evidence": release_evidence_inventory,
+            "docker_networks": normalized_networks,
+            "owner_uid": arguments.expected_owner_uid,
             "redis": {
                 "logical_rdb_validator": redis_validator,
                 "persistence_path": arguments.redis_data_path,
@@ -1074,7 +1406,11 @@ def main() -> int:
         }
         if arguments.result_file is not None:
             result_parent = arguments.result_file.parent
-            private_directory(result_parent, "result file parent")
+            private_directory(
+                result_parent,
+                "result file parent",
+                expected_uid=arguments.expected_owner_uid,
+            )
             temporary_result = (
                 result_parent / f".{arguments.result_file.name}.tmp-{os.getpid()}"
             )

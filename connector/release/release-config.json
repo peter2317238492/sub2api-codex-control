@@ -26,25 +26,45 @@
       "id": "linux-amd64",
       "goos": "linux",
       "goarch": "amd64",
-      "native_signature": "none"
+      "native_signature": "none",
+      "packages": [
+        { "format": "deb", "native_signature": "none" },
+        { "format": "rpm", "native_signature": "rpm-openpgp" }
+      ]
     },
     {
       "id": "linux-arm64",
       "goos": "linux",
       "goarch": "arm64",
-      "native_signature": "none"
+      "native_signature": "none",
+      "packages": [
+        { "format": "deb", "native_signature": "none" },
+        { "format": "rpm", "native_signature": "rpm-openpgp" }
+      ]
     },
     {
       "id": "darwin-amd64",
       "goos": "darwin",
       "goarch": "amd64",
-      "native_signature": "apple-developer-id-and-notarization"
+      "native_signature": "apple-developer-id-and-notarization",
+      "packages": [
+        {
+          "format": "pkg",
+          "native_signature": "apple-developer-id-installer-notarized-stapled"
+        }
+      ]
     },
     {
       "id": "darwin-arm64",
       "goos": "darwin",
       "goarch": "arm64",
-      "native_signature": "apple-developer-id-and-notarization"
+      "native_signature": "apple-developer-id-and-notarization",
+      "packages": [
+        {
+          "format": "pkg",
+          "native_signature": "apple-developer-id-installer-notarized-stapled"
+        }
+      ]
     }
   ]
 }

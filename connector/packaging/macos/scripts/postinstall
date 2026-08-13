@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+"/usr/local/libexec/sub2api-codex-connector/package-lifecycle" verify-install "@VERSION@"
+printf '%s\n' "Run sub2api-codex-connector-ctl init as the Connector user; no Codex files were changed."

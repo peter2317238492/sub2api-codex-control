@@ -17,7 +17,7 @@
     "versions.lock.json",
     "packages/control-protocol/schema/control-envelope.schema.json",
     "packages/appserver-schema/generated/json-schema/codex_app_server_protocol.v2.schemas.json",
-    "docs/contracts/sub2api-auth.v0.1.175.json",
+    "docs/contracts/sub2api-auth.v0.1.176.json",
     "pnpm-lock.yaml",
     "deploy/constraints/control-api.txt",
     "deploy/scripts/backup-control-db.sh",

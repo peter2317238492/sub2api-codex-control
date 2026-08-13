@@ -29,6 +29,30 @@ export interface PairingClaim {
   status: "claimed";
 }
 
+export type ConnectorOperatingSystem = "linux" | "darwin";
+export type ConnectorArchitecture = "amd64" | "arm64";
+export type ConnectorPackageFormat = "deb" | "rpm" | "pkg";
+
+export interface ConnectorReleaseAsset {
+  os: ConnectorOperatingSystem;
+  arch: ConnectorArchitecture;
+  package_format: ConnectorPackageFormat;
+  download_url: string;
+  sha256: string;
+}
+
+export interface ConnectorReleaseMetadata {
+  release_mode: "release";
+  releasable: true;
+  version: string;
+  tag: string;
+  codex_version: string;
+  schema_digest: string;
+  config_path_hint: string;
+  start_command: string;
+  assets: ConnectorReleaseAsset[];
+}
+
 export interface ModelOption {
   id: string;
   display_name: string;
@@ -60,6 +84,7 @@ export interface ControlBootstrapSnapshot {
   threads: ManagedThreadSummary[];
   approvals: ApprovalItem[];
   models_by_device: Record<string, ModelOption[]>;
+  connector_release?: ConnectorReleaseMetadata | null;
 }
 
 export interface ThreadDetailSnapshot {

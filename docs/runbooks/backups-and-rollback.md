@@ -1,108 +1,216 @@
 # Backups and rollback
 
-## Recovery policy
+## Backup policy
 
-The Control PostgreSQL database is authoritative for sessions, devices,
-commands, approvals, managed threads, event history, and audit records. Back it
-up independently of the Sub2API database. Redis contains short-lived
-coordination and rate-limit state; persistence helps continuity but does not
-replace PostgreSQL recovery.
+The Control PostgreSQL database is authoritative for sessions, device
+ownership, commands, approvals, thread bindings, event history, and audit
+records. Back it up independently from the Sub2API database. Redis contains
+short-lived coordination and rate-limit state; persistence is useful for
+continuity but is not a substitute for PostgreSQL backup.
 
-Store recovery material encrypted at rest outside the source checkout. Apply a
-schedule appropriate to the operator's recovery objectives, retain an encrypted
-off-host copy, alert on age and checksum failures, and rehearse restore into an
-isolated environment. A dump that only passes `pg_restore --list` is not a
-complete restore rehearsal.
+Minimum schedule:
 
-## Change-window checkpoint
+- PostgreSQL custom-format dump every 6 hours into encrypted-at-rest storage;
+- daily encrypted off-host copy with immutable retention;
+- 30 daily and 12 monthly recovery points, adjusted to policy;
+- quarterly restore rehearsal into an isolated database;
+- immediate backup before every schema migration or secret rotation.
 
-Use one coordinated change window and avoid duplicate snapshots of unchanged
-state. The future signed deployment entry point records:
+Create a backup with the `ops` profile. The host directory must exist and be
+writable by the image's `postgres` user:
 
-1. one comprehensive pre-change recovery point covering Sub2API and Control
-   PostgreSQL state, required Redis persistence/ACL metadata, private host
-   integration, Nginx configuration, and release/deployment identity;
-2. one narrow Control PostgreSQL dump at the actual migration boundary.
+```sh
+cd deploy/docker-compose
+sudo install -d -o 70 -g 70 -m 0700 backups
+docker compose --env-file .env -f compose.yaml --profile ops \
+  run --rm control-backup
+```
 
-The second record protects the immediately pre-migration Control schema; it is
-not a duplicate of the broader host recovery point. Do not separately run the
-same full-snapshot tool immediately before the deployment wrapper. Never
-overwrite a ready record or claim an old recovery point belongs to a new state.
+If the image's `postgres` UID/GID differs, set `CONTROL_BACKUP_UID_GID` and make
+the host directory owned by the same numeric pair before running the job.
+For production, set `CONTROL_BACKUP_DIR` to an encrypted path outside the source
+checkout; the in-repository directory is only a Git-ignored local staging area.
 
-Every ready recovery record must bind immutable artifact identities, contain a
-complete checksum manifest, be mode-restricted, and be copied to protected
-off-host storage. If state changed after capture, the attempt partially
-mutated services, or validation is incomplete, start a new identified change
-window and capture new evidence.
+Each run writes an unencrypted custom-format dump, a `pg_restore --list`
+manifest, and a SHA-256 file with mode `0600`. The destination filesystem must
+provide encryption at rest; additionally encrypt the artifact before any
+off-host transfer unless the transport and destination provide an equivalent
+approved envelope. Never place dumps in a public object-store prefix; audit and
+identity records are sensitive even though raw Sub2API keys are forbidden.
+The job syncs all three temporary files before rename, then syncs the final files
+and containing filesystem before reporting success. Production admission reads
+the artifacts relative to one no-follow directory descriptor, streams the dump
+hash, bounds metadata reads, and gives the same inherited dump descriptor to
+`pg_restore`; pathname replacement cannot substitute a different artifact.
 
-## Scheduled Control database backup
+Verify every scheduled run by checking the checksum, parsing the manifest, and
+alerting on age. A restore rehearsal must run migrations and the smoke test
+against the restored database, not merely execute `pg_restore --list`.
 
-The `control-backup` Compose profile writes a PostgreSQL custom-format dump,
-`pg_restore --list` manifest, and SHA-256 record through temporary files and
-atomic rename. Production must use the signed PostgreSQL-tools image by digest
-and an encrypted host destination outside the checkout. The directory owner
-must match the image's configured backup UID/GID.
+The disposable local rehearsal is available independently:
 
-For every scheduled run:
+```sh
+tests/e2e/run-backup-restore.sh
+```
 
-- recompute the dump checksum;
-- reproduce and compare the table-of-contents;
-- check age, ownership, mode, hard-link count, and expected directory identity;
-- copy the encrypted artifact off host;
-- periodically restore into a fresh private database, run migrations, compare
-  core records and ACLs, and execute session and logout checks.
+It provisions a dedicated role/database, inserts a sentinel, creates the
+custom-format dump, verifies its manifest and checksum, restores into a fresh
+randomly named database, runs migrations to packaged Alembic head, compares
+core table/row snapshots and ownership/ACLs, then runs the release Control API
+image against that restored database through readiness, session exchange,
+session read, bootstrap, and logout before dropping the restore database.
+The full `tests/e2e/run-local.sh` acceptance run invokes the same helper after
+real Connector traffic has populated the source database.
 
-The isolated `tests/e2e/run-backup-restore.sh` exercises the repository's
-backup/restore path with disposable infrastructure. It is development evidence,
-not proof that an operator's production recovery storage works.
+## Pre-release checkpoint
+
+There are two required checkpoints. Before any datastore provision, Nginx
+change, authentication probe, or deployment wrapper, run
+`deploy/scripts/backup-production-state.py` as described in
+[deployment.md](deployment.md#mandatory-pre-mutation-snapshot). It captures the
+existing Sub2API PostgreSQL and Redis state, host data/config/Compose/environment
+files, mutable runtime binaries, full Docker inspection evidence, Nginx config,
+and TLS recovery material. It creates a timestamped mode-`0700` snapshot and
+`READY.json` only after the PostgreSQL, Redis, tar, procfs, TLS, and SHA-256
+checks all pass. Existing Control data is included when the database exists;
+absence on a first deployment is recorded rather than mistaken for a backup.
+
+`deploy/scripts/deploy-production.sh` creates a fresh full snapshot again before
+its authentication probe and then creates the narrower Control PostgreSQL
+checkpoint immediately before migration. It will not run a migration unless it
+can identify exactly one new Control dump from the current admission window,
+validate private file/directory modes, recompute its SHA-256, and reproduce its
+stored table-of-contents with `pg_restore --list`. When the host has no
+PostgreSQL client, the dump descriptor is streamed to `pg_restore` in the
+immutable PostgreSQL-tools image with no network. The production Compose overlay
+requires that image by immutable digest and removes its local build definition.
+
+The resulting mode-`0600` admission record includes:
+
+- current API, PWA, and PostgreSQL backup-tools image digests and OCI identity;
+- signed release values, source commit, migration head, and release-file hash;
+- resolved production Compose hash;
+- `alembic current` revision and target revision;
+- PostgreSQL backup path, size, checksum, and manifest hash;
+- Sub2API runtime, mount, OCI, binary, and authentication evidence;
+- production smoke-input identity/hash and, after deployment, running container
+  identity plus the smoke-output hash.
+
+It also binds the signed release source commit and signed migration head to the
+head packaged inside the admitted API image, and records the Sub2API container
+ID, image ID/digest, binary hash, OCI tuple, mount policy, and authentication
+fixture digest. Keep the record next to the backup in encrypted,
+access-controlled storage outside the source checkout.
+
+The comprehensive snapshot contains raw database and Redis data, environment
+files, Docker inspect output, and TLS private keys. It must remain root-only and
+encrypted at rest. Copy it to the encrypted off-host recovery location and
+verify `manifest.sha256` there before accepting a destructive cutover step.
+
+Do not start a migration unless the previous application can tolerate the new
+schema or a tested restore window is available. Destructive column/table
+changes require an expand-migrate-contract sequence across separate releases.
 
 ## Application rollback
 
-1. Stop the rollout and preserve logs, request IDs, deployment records, and
-   exact failed artifact identities.
-2. Confirm the database schema remains compatible with the prior admitted API.
-3. Restore only the prior signed image digests; do not run an older migration
-   image against a newer schema.
-4. Restore Nginx files only when routing changed, test the complete
-   configuration, then reload and verify log reopen.
-5. Repeat authenticated HTTP, browser/device WSS, Connector, approval,
-   idempotency, reconnect, revocation, logout, and monitoring checks.
+1. Stop rollout and preserve logs, request IDs, and the failed image digest.
+2. If the schema remains backward compatible, set the prior immutable API and
+   PWA image digests in `.env` and run:
 
-Do not run an Alembic downgrade by default. A downgrade is allowed only when
-that exact revision has a reviewed downgrade path and a successful isolated
-restore rehearsal.
+```sh
+docker compose --env-file .env -f compose.yaml up -d --no-build --no-deps control-api codex-pwa
+```
+
+`--no-deps` is mandatory here: `control-api` depends on `control-migrate`, and
+rolling an application image back must never execute an older migration image
+against the newer database. Re-enable normal dependency startup only after the
+schema compatibility check and rollback rehearsal have passed.
+
+3. Restore the previous Nginx files only if routing changed, then run
+   `nginx -t` before reload.
+4. Run the unauthenticated smoke test, authenticated session exchange, device
+   reconnect, command idempotency, and approval-expiry checks.
+
+Do not run `alembic downgrade` by default. A downgrade is allowed only when the
+specific revision has a reviewed downgrade path and was restored successfully
+in rehearsal.
 
 ## Database restore
 
-A restore is destructive. Announce a write freeze, stop API writers, retain the
-failed database under a separate name, and restore into a fresh private
-database owned by the dedicated Control role. Reassert that `PUBLIC` has no
-database or schema privileges and that the application role owns the schema,
-tables, sequences, and migration objects.
+A database restore is destructive and requires an announced write freeze.
+Revoke or stop API writers, retain the failed database under a new name, then
+create a fresh empty database with the same private database boundary:
 
-Before cutover, verify checksums, migration revision, core row counts and
-constraints, database/schema ownership, negative access to the Sub2API
-database, readiness, session exchange, pairing, WSS, and logout through a
-single canary API. Keep the failed database and incident evidence until review
-is complete.
+```sql
+CREATE DATABASE codex_control_restore OWNER codex_control;
+REVOKE ALL ON DATABASE codex_control_restore FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE codex_control_restore TO codex_control;
+```
+
+Restore while connected as a PostgreSQL administrator that may `SET ROLE` to
+`codex_control`:
+
+```sh
+pg_restore \
+  --exit-on-error \
+  --no-owner \
+  --no-acl \
+  --role=codex_control \
+  --dbname=codex_control_restore \
+  /secure/path/codex-control-TIMESTAMP.dump
+```
+
+Because the backup deliberately uses `--no-acl`, reassert the private schema
+boundary after restore:
+
+```sql
+-- Run in codex_control_restore as a PostgreSQL administrator.
+ALTER SCHEMA public OWNER TO codex_control;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+GRANT USAGE, CREATE ON SCHEMA public TO codex_control;
+```
+
+Before admitting a canary, verify that `codex_control` owns the database,
+schema, tables, sequences, and migration objects; that `PUBLIC` has neither
+database `CONNECT`/`TEMPORARY` nor schema privileges; and that the application
+role can connect and run the Alembic and core-table queries. For example, the
+database-owner and public-ACL checks can be inspected from the administrator
+database with:
+
+```sql
+SELECT datname, pg_get_userbyid(datdba) AS owner, datacl
+FROM pg_database
+WHERE datname = 'codex_control_restore';
+```
+
+Point a single canary API instance at the restored database, verify migration
+revision and row counts, then run the full smoke suite. Cut over only after the
+canary succeeds. Keep the failed database and incident evidence until review is
+complete.
 
 ## Secret rotation
 
-Rotate one dependency at a time. Write the new value to a new private file,
-atomically replace the Compose secret source, recreate only affected services,
-verify the complete auth and WSS path, and revoke the old credential only after
-old containers have exited.
+Rotate one dependency at a time:
 
-Rotating the Control session HMAC invalidates Control sessions, CSRF state,
-pairing and poll credentials, device refresh credentials, and unconsumed device
-access tokens. It also changes the derived internal metrics token. Treat this
-as a user-visible logout and mandatory Connector re-pairing. It must not modify
-Codex configuration or credentials.
+1. Create a second PostgreSQL or Redis credential with the same restricted
+   privileges, or update the password during a maintenance window.
+2. Write the new value to a new mode-`0600` file and atomically replace the
+   Compose secret source.
+3. Recreate API and migration containers; verify readiness and session flow.
+4. Revoke the old credential after all old containers have exited.
+
+Rotating `control_session_hmac_secret` invalidates every digest derived from it:
+Control sessions and CSRF tokens, active pairing codes and poll tokens, device
+refresh credentials, and unconsumed short-lived device access tokens. It also
+changes the derived internal metrics bearer token. Treat this as a user-visible
+logout plus mandatory Connector re-pairing, and update trusted scrapers at the
+same time. Device Ed25519 key files and Codex configuration or credentials
+remain untouched.
 
 ## Connector rollback
 
-Connector rollback is independent of server rollback. Retain the last admitted
-binary, stop only the ordinary user's Connector, verify the old artifact and
-platform signature again, atomically restore it, and restart it with the
-unchanged private configuration and state directory. Never roll back by
-rewriting Codex account, provider, plugin, auth, or configuration files.
+Connector releases are independent of the server image rollback. Retain the
+last signed binary, stop only the Connector process, atomically restore that
+binary, verify its signature and version, and start it with the unchanged
+private config/state directory. Never roll back by restoring or rewriting the
+user's Codex `config.toml`, provider, auth, or plugin files.

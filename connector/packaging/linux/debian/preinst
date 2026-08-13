@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+helper=/usr/libexec/sub2api-codex-connector/package-lifecycle
+if [ -x "$helper" ]; then
+  "$helper" prepare-upgrade
+elif [ -f /usr/bin/sub2api-codex-connector ] && [ ! -L /usr/bin/sub2api-codex-connector ]; then
+  install -d -m 0700 /var/lib/sub2api-codex-connector/package-rollback
+  cp -p /usr/bin/sub2api-codex-connector /var/lib/sub2api-codex-connector/package-rollback/previous
+  chmod 0755 /var/lib/sub2api-codex-connector/package-rollback/previous
+fi

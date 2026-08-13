@@ -27,6 +27,10 @@ SCRIPT_PATH = Path(__file__).resolve()
 RELEASE_DIR = SCRIPT_PATH.parent
 CONNECTOR_DIR = RELEASE_DIR.parent
 REPO_ROOT = CONNECTOR_DIR.parent
+PACKAGING_DIR = CONNECTOR_DIR / "packaging"
+LINUX_PACKAGE_BUILDER = PACKAGING_DIR / "build-linux-packages.sh"
+PACKAGE_CONTENT_VERIFIER = PACKAGING_DIR / "verify-package-contents.sh"
+THIRD_PARTY_DIR = REPO_ROOT / "third_party"
 DEFAULT_CONFIG = RELEASE_DIR / "release-config.json"
 WORK_STATE = ".release-work.json"
 LOCAL_MARKER = "RELEASE-NOT-FOR-DISTRIBUTION"
@@ -40,6 +44,7 @@ HEX_SHA1 = re.compile(r"^[0-9a-f]{40}$")
 HEX_GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 APPLE_TEAM_ID = re.compile(r"^[A-Z0-9]{10}$")
+RPM_FINGERPRINT = re.compile(r"^[A-F0-9]{40,64}$")
 PINNED_GO_ENV = {
     "CGO_ENABLED": "0",
     "GOAMD64": "v1",
@@ -162,6 +167,25 @@ def validate_apple_identity(team_id: str, signing_identity: str) -> None:
         )
 
 
+def validate_apple_installer_identity(team_id: str, signing_identity: str) -> None:
+    if (
+        not isinstance(signing_identity, str)
+        or "\n" in signing_identity
+        or not signing_identity.startswith("Developer ID Installer: ")
+        or not signing_identity.endswith(f" ({team_id})")
+    ):
+        raise ReleaseError(
+            "expected Apple installer identity must be the full Developer ID Installer identity"
+        )
+
+
+def validate_rpm_fingerprint(fingerprint: str) -> None:
+    if not isinstance(fingerprint, str) or not RPM_FINGERPRINT.fullmatch(fingerprint):
+        raise ReleaseError(
+            "expected RPM signing fingerprint must be 40 to 64 uppercase hexadecimal characters"
+        )
+
+
 def verify_codesign_identity(
     artifact: Path, team_id: str, signing_identity: str
 ) -> str:
@@ -200,22 +224,13 @@ def validate_native_evidence(
             "signing_identity",
             "team_identifier",
             "codesign_report",
-            "notarization",
         },
         "native-signature evidence",
     )
     validate_apple_identity(expected_team_id, expected_signing_identity)
     report = evidence["codesign_report"]
-    notary = evidence["notarization"]
-    if not isinstance(notary, dict):
-        raise ReleaseError(f"invalid notarization evidence for {target_id}")
-    require_exact_keys(
-        notary,
-        {"service", "status", "submission_id", "message"},
-        "notarization evidence",
-    )
     if (
-        evidence["format_version"] != 1
+        evidence["format_version"] != 2
         or evidence["target"] != target_id
         or evidence["artifact"] != artifact_name_value
         or evidence["artifact_sha256"] != artifact_sha256
@@ -225,11 +240,8 @@ def validate_native_evidence(
         or not all(isinstance(line, str) for line in report)
         or f"Authority={expected_signing_identity}" not in report
         or f"TeamIdentifier={expected_team_id}" not in report
-        or notary["service"] != "apple-notarytool"
-        or notary["status"] != "Accepted"
-        or not isinstance(notary["submission_id"], str)
-        or not notary["submission_id"]
-        or not isinstance(notary["message"], str)
+        or not any(re.match(r"^flags=.*\(runtime\)", line) for line in report)
+        or not any(line.startswith("Timestamp=") for line in report)
     ):
         raise ReleaseError(
             f"native-signature evidence does not match trust policy for {target_id}"
@@ -291,7 +303,9 @@ def load_config(path: Path) -> dict[str, Any]:
         if not isinstance(target, dict):
             raise ReleaseError("each target must be an object")
         require_exact_keys(
-            target, {"id", "goos", "goarch", "native_signature"}, "target"
+            target,
+            {"id", "goos", "goarch", "native_signature", "packages"},
+            "target",
         )
         expected_id = f"{target['goos']}-{target['goarch']}"
         if target["id"] != expected_id or not SAFE_NAME.fullmatch(expected_id):
@@ -307,6 +321,26 @@ def load_config(path: Path) -> dict[str, Any]:
         if target["native_signature"] != expected_native:
             raise ReleaseError(
                 f"target {target['id']} has an invalid native-signature policy"
+            )
+        packages = target["packages"]
+        if not isinstance(packages, list) or not packages:
+            raise ReleaseError(f"target {target['id']} has no native packages")
+        expected_packages = (
+            [
+                {"format": "deb", "native_signature": "none"},
+                {"format": "rpm", "native_signature": "rpm-openpgp"},
+            ]
+            if target["goos"] == "linux"
+            else [
+                {
+                    "format": "pkg",
+                    "native_signature": "apple-developer-id-installer-notarized-stapled",
+                }
+            ]
+        )
+        if packages != expected_packages:
+            raise ReleaseError(
+                f"target {target['id']} does not contain the complete native package matrix"
             )
     if target_ids != {"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"}:
         raise ReleaseError(
@@ -402,6 +436,10 @@ def source_snapshot_sha256() -> str:
         locked_repo_file(codex_lock.get("schema_file"), "Codex app-server schema"),
         REPO_ROOT / "versions.lock.json",
         REPO_ROOT / ".github/workflows/connector-release.yml",
+        REPO_ROOT / "LICENSE",
+        REPO_ROOT / "NOTICE",
+        REPO_ROOT / "THIRD_PARTY_NOTICES.md",
+        REPO_ROOT / "third_party",
     ]
     selected: list[Path] = []
     for root in roots:
@@ -409,12 +447,15 @@ def source_snapshot_sha256() -> str:
             selected.append(root)
             continue
         for path in root.rglob("*"):
-            if not path.is_file() or ".release-work" in path.parts:
+            if not path.is_file() or path.is_symlink() or ".release-work" in path.parts:
                 continue
-            if path.suffix in {
+            if PACKAGING_DIR in path.parents or THIRD_PARTY_DIR in path.parents or path.suffix in {
                 ".go",
                 ".json",
+                ".md",
+                ".plist",
                 ".py",
+                ".service",
                 ".sh",
                 ".yml",
                 ".yaml",
@@ -525,6 +566,12 @@ def build_environment(
 
 def artifact_name(config: dict[str, Any], target: dict[str, str]) -> str:
     return f"{config['product']}_{config['connector_version']}_{target['goos']}_{target['goarch']}"
+
+
+def package_name(
+    config: dict[str, Any], target: dict[str, Any], package_format: str
+) -> str:
+    return f"{artifact_name(config, target)}.{package_format}"
 
 
 def select_targets(
@@ -655,12 +702,84 @@ def prepare(args: argparse.Namespace) -> None:
         final = output / filename
         shutil.copyfile(candidates[0], final)
         final.chmod(0o755)
+        package_records: list[dict[str, Any]] = []
+        if mode == "release" and target["goos"] == "linux":
+            package_passes: list[Path] = []
+            for index, candidate in enumerate(candidates, start=1):
+                package_output = work / f"package-pass-{index}-{target['id']}"
+                package_output.mkdir()
+                run(
+                    [
+                        "sh",
+                        str(LINUX_PACKAGE_BUILDER),
+                        str(candidate),
+                        config["connector_version"],
+                        target["goarch"],
+                        str(args.source_date_epoch),
+                        str(package_output),
+                        str(index),
+                    ],
+                    cwd=REPO_ROOT,
+                    env=build_environment(
+                        goos=None,
+                        goarch=None,
+                        source_date_epoch=args.source_date_epoch,
+                        module_cache=module_cache,
+                        build_cache=work / f"package-build-cache-{index}-{target['id']}",
+                    ),
+                )
+                package_passes.append(package_output)
+            for package_config in target["packages"]:
+                package_format = package_config["format"]
+                package_filename = package_name(config, target, package_format)
+                first_package = package_passes[0] / package_filename
+                second_package = package_passes[1] / package_filename
+                if not first_package.is_file() or not second_package.is_file():
+                    raise ReleaseError(
+                        f"native package builder omitted {package_filename}"
+                    )
+                first_package_hash = sha256_file(first_package)
+                if (
+                    first_package_hash != sha256_file(second_package)
+                    or first_package.stat().st_size != second_package.stat().st_size
+                ):
+                    raise ReleaseError(
+                        f"non-reproducible {package_format} package for {target['id']}"
+                    )
+                packaged = output / package_filename
+                shutil.copyfile(first_package, packaged)
+                packaged.chmod(0o644)
+                package_records.append(
+                    {
+                        "format": package_format,
+                        "filename": package_filename,
+                        "native_signature": package_config["native_signature"],
+                        "reproducible_candidate_sha256": first_package_hash,
+                        "reproducible_candidate_size": packaged.stat().st_size,
+                        "native_evidence": None,
+                    }
+                )
+        elif mode == "release" and target["goos"] == "darwin":
+            package_config = target["packages"][0]
+            package_records.append(
+                {
+                    "format": package_config["format"],
+                    "filename": package_name(
+                        config, target, package_config["format"]
+                    ),
+                    "native_signature": package_config["native_signature"],
+                    "reproducible_candidate_sha256": None,
+                    "reproducible_candidate_size": None,
+                    "native_evidence": None,
+                }
+            )
         records.append(
             {
                 "target": target,
                 "filename": filename,
                 "unsigned_sha256": first_hash,
                 "unsigned_size": final.stat().st_size,
+                "packages": package_records,
             }
         )
     build_finished_at = (
@@ -709,15 +828,6 @@ def record_native_evidence(args: argparse.Namespace) -> None:
         raise ReleaseError("native signing evidence applies only to Darwin targets")
     artifact = safe_file(output, record["filename"], "Darwin artifact")
     validate_apple_identity(args.expected_team_id, args.expected_signing_identity)
-    notary = read_json(args.notary_json)
-    if (
-        not isinstance(notary, dict)
-        or notary.get("status") != "Accepted"
-        or not notary.get("id")
-    ):
-        raise ReleaseError(
-            "Apple notarization did not return Accepted with a submission id"
-        )
     report = args.codesign_report.read_text(encoding="utf-8")
     report_lines = report.splitlines()
     fresh_report_lines = verify_codesign_identity(
@@ -735,22 +845,164 @@ def record_native_evidence(args: argparse.Namespace) -> None:
             "codesign report does not match the externally pinned Apple identity"
         )
     evidence = {
-        "format_version": 1,
+        "format_version": 2,
         "target": record["target"]["id"],
         "artifact": record["filename"],
         "artifact_sha256": sha256_file(artifact),
         "signing_identity": args.expected_signing_identity,
         "team_identifier": args.expected_team_id,
         "codesign_report": fresh_report_lines,
-        "notarization": {
-            "service": "apple-notarytool",
-            "status": "Accepted",
-            "submission_id": str(notary["id"]),
-            "message": str(notary.get("message", "")),
-        },
     }
     evidence_name = f"native-{record['target']['id']}.json"
     write_json(output / evidence_name, evidence)
+    print(evidence_name)
+
+
+def package_record(record: dict[str, Any], package_format: str) -> dict[str, Any]:
+    for package in record["packages"]:
+        if package["format"] == package_format:
+            return package
+    raise ReleaseError(
+        f"target {record['target']['id']} has no {package_format} package"
+    )
+
+
+def report_lines(path: Path, context: str) -> list[str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ReleaseError(f"cannot read {context}: {exc}") from exc
+    if not lines or any("\x00" in line for line in lines):
+        raise ReleaseError(f"{context} is empty or invalid")
+    return lines
+
+
+def record_native_package_evidence(args: argparse.Namespace) -> None:
+    output = args.output.resolve()
+    state = read_json(output / WORK_STATE)
+    if state.get("release_mode") != "release":
+        raise ReleaseError("native package evidence is accepted only for release mode")
+    record = target_record(state, args.target)
+    package = package_record(record, args.package_format)
+    package_path = safe_file(output, package["filename"], "native package")
+    evidence_name = f"native-package-{args.target}-{args.package_format}.json"
+    if (output / evidence_name).exists() or package["native_evidence"] is not None:
+        raise ReleaseError("native package evidence already exists")
+
+    if args.package_format == "pkg":
+        if record["target"]["goos"] != "darwin":
+            raise ReleaseError("pkg evidence applies only to Darwin targets")
+        required_paths = (
+            args.candidate_package,
+            args.installer_report,
+            args.notary_json,
+            args.stapler_report,
+            args.gatekeeper_report,
+        )
+        if (
+            any(path is None for path in required_paths)
+            or not args.expected_team_id
+            or not args.expected_application_identity
+            or not args.expected_installer_identity
+        ):
+            raise ReleaseError("pkg evidence lacks required external trust inputs")
+        validate_apple_identity(args.expected_team_id, args.expected_application_identity)
+        validate_apple_installer_identity(
+            args.expected_team_id, args.expected_installer_identity
+        )
+        candidate = args.candidate_package.resolve()
+        if not candidate.is_file() or candidate.is_symlink():
+            raise ReleaseError("unsigned pkg candidate is missing or unsafe")
+        candidate_hash = sha256_file(candidate)
+        candidate_size = candidate.stat().st_size
+        installer = report_lines(args.installer_report, "Installer signature report")
+        notary = read_json(args.notary_json)
+        stapler = report_lines(args.stapler_report, "stapler report")
+        gatekeeper = report_lines(args.gatekeeper_report, "Gatekeeper report")
+        if (
+            args.expected_installer_identity
+            not in "\n".join(installer)
+            or not isinstance(notary, dict)
+            or notary.get("status") != "Accepted"
+            or not isinstance(notary.get("id"), str)
+            or not notary["id"]
+            or not any(
+                "validated" in line.lower() or "worked" in line.lower()
+                for line in stapler
+            )
+            or not any(
+                "accepted" in line.lower()
+                or "source=notarized developer id" in line.lower()
+                for line in gatekeeper
+            )
+        ):
+            raise ReleaseError("macOS installer trust evidence is incomplete")
+        evidence = {
+            "format_version": 2,
+            "target": args.target,
+            "format": "pkg",
+            "package": package["filename"],
+            "package_sha256": sha256_file(package_path),
+            "policy": package["native_signature"],
+            "team_identifier": args.expected_team_id,
+            "application_identity": args.expected_application_identity,
+            "installer_identity": args.expected_installer_identity,
+            "installer_report": installer,
+            "notarization": {
+                "service": "apple-notarytool",
+                "status": "Accepted",
+                "submission_id": notary["id"],
+                "message": str(notary.get("message", "")),
+            },
+            "stapling": {"status": "validated", "report": stapler},
+            "gatekeeper": {"status": "accepted", "report": gatekeeper},
+        }
+        package["reproducible_candidate_sha256"] = candidate_hash
+        package["reproducible_candidate_size"] = candidate_size
+    elif args.package_format == "rpm":
+        if record["target"]["goos"] != "linux":
+            raise ReleaseError("RPM evidence applies only to Linux targets")
+        if (
+            args.rpm_public_key is None
+            or args.rpm_report is None
+            or not args.expected_rpm_fingerprint
+        ):
+            raise ReleaseError("RPM evidence lacks required external trust inputs")
+        validate_rpm_fingerprint(args.expected_rpm_fingerprint)
+        public_key = args.rpm_public_key.resolve()
+        if not public_key.is_file() or public_key.is_symlink():
+            raise ReleaseError("RPM public key is missing or unsafe")
+        rpm_report = report_lines(args.rpm_report, "RPM signature report")
+        if not any(
+            "ok" in line.lower()
+            and ("pgp" in line.lower() or "signature" in line.lower())
+            for line in rpm_report
+        ):
+            raise ReleaseError("RPM native signature verification did not pass")
+        public_key_name = f"rpm-signing-{args.target}.asc"
+        public_key_output = output / public_key_name
+        if public_key_output.exists():
+            raise ReleaseError("refusing to overwrite RPM public key evidence")
+        shutil.copyfile(public_key, public_key_output)
+        public_key_output.chmod(0o644)
+        evidence = {
+            "format_version": 2,
+            "target": args.target,
+            "format": "rpm",
+            "package": package["filename"],
+            "package_sha256": sha256_file(package_path),
+            "policy": package["native_signature"],
+            "fingerprint": args.expected_rpm_fingerprint,
+            "public_key": public_key_name,
+            "public_key_sha256": sha256_file(public_key_output),
+            "rpm_report": rpm_report,
+        }
+    else:
+        raise ReleaseError("native package evidence supports only pkg and rpm")
+
+    write_json(output / evidence_name, evidence)
+    package["native_evidence"] = evidence_name
+    write_json(output / WORK_STATE, state)
     print(evidence_name)
 
 
@@ -981,6 +1233,159 @@ def make_provenance(
     }
 
 
+def make_package_sbom(
+    state: dict[str, Any],
+    record: dict[str, Any],
+    package: dict[str, Any],
+    package_path: Path,
+) -> dict[str, Any]:
+    config = state["config"]
+    final_sha = sha256_file(package_path)
+    final_sha1 = sha1_file(package_path)
+    created = iso8601(int(state["source_date_epoch"]))
+    package_id = "SPDXRef-Package-ConnectorInstaller"
+    file_id = "SPDXRef-File-ConnectorInstaller"
+    return {
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": f"{package_path.name}.spdx",
+        "documentNamespace": f"https://sub2api-codex.invalid/spdx/{sha256_bytes((final_sha + ':' + record['target']['id'] + ':' + package['format']).encode())}",
+        "creationInfo": {
+            "created": created,
+            "creators": ["Tool: sub2api-codex-release/2"],
+        },
+        "packages": [
+            {
+                "SPDXID": package_id,
+                "name": config["product"],
+                "versionInfo": config["connector_version"],
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": True,
+                "checksums": [
+                    {"algorithm": "SHA1", "checksumValue": final_sha1},
+                    {"algorithm": "SHA256", "checksumValue": final_sha},
+                ],
+                "packageVerificationCode": {
+                    "packageVerificationCodeValue": hashlib.sha1(
+                        final_sha1.encode("ascii")
+                    ).hexdigest()
+                },
+                "licenseInfoFromFiles": ["Apache-2.0"],
+                "licenseConcluded": "Apache-2.0",
+                "licenseDeclared": "Apache-2.0",
+                "copyrightText": "Copyright 2026 Sub2API Codex Control contributors",
+                "externalRefs": [
+                    {
+                        "referenceCategory": "PACKAGE-MANAGER",
+                        "referenceType": "purl",
+                        "referenceLocator": f"pkg:generic/{config['product']}@{config['connector_version']}?os={record['target']['goos']}&arch={record['target']['goarch']}&type={package['format']}",
+                    }
+                ],
+            }
+        ],
+        "files": [
+            {
+                "SPDXID": file_id,
+                "fileName": package_path.name,
+                "checksums": [
+                    {"algorithm": "SHA1", "checksumValue": final_sha1},
+                    {"algorithm": "SHA256", "checksumValue": final_sha},
+                ],
+                "licenseConcluded": "Apache-2.0",
+                "licenseInfoInFiles": ["Apache-2.0"],
+                "copyrightText": "Copyright 2026 Sub2API Codex Control contributors",
+            }
+        ],
+        "relationships": [
+            {
+                "spdxElementId": "SPDXRef-DOCUMENT",
+                "relationshipType": "DESCRIBES",
+                "relatedSpdxElement": package_id,
+            },
+            {
+                "spdxElementId": package_id,
+                "relationshipType": "CONTAINS",
+                "relatedSpdxElement": file_id,
+            },
+        ],
+    }
+
+
+def make_package_provenance(
+    state: dict[str, Any],
+    record: dict[str, Any],
+    package: dict[str, Any],
+    package_path: Path,
+) -> dict[str, Any]:
+    source = state["source"]
+    source_digest = (
+        {"gitCommit": source["commit"]}
+        if HEX_GIT_COMMIT.fullmatch(source["commit"])
+        else {"sha256": source["snapshot_sha256"]}
+    )
+    return {
+        "_type": IN_TOTO_STATEMENT,
+        "subject": [
+            {
+                "name": package_path.name,
+                "digest": {"sha256": sha256_file(package_path)},
+            }
+        ],
+        "predicateType": SLSA_PREDICATE,
+        "predicate": {
+            "buildDefinition": {
+                "buildType": "https://sub2api-codex.invalid/buildtypes/connector-native-package/v2",
+                "externalParameters": {
+                    "sourceRepository": source["repository"],
+                    "sourceCommit": source["commit"],
+                    "connectorVersion": state["config"]["connector_version"],
+                    "target": record["target"]["id"],
+                    "packageFormat": package["format"],
+                    "nativeSignaturePolicy": package["native_signature"],
+                },
+                "internalParameters": {
+                    "reproducibilityPasses": 2,
+                    "packageContentVerified": True,
+                    "licenseInventoryVerified": True,
+                    "serviceDefinitionIncluded": True,
+                    "configurationExampleIncluded": True,
+                },
+                "resolvedDependencies": [
+                    {"uri": source["repository"], "digest": source_digest},
+                    {
+                        "uri": f"pkg:generic/{state['config']['product']}@{state['config']['connector_version']}",
+                        "digest": {"sha256": record["unsigned_sha256"]},
+                    },
+                ],
+            },
+            "runDetails": {
+                "builder": {"id": state["builder_id"]},
+                "metadata": {
+                    "invocationId": f"{state['invocation_id']}#{record['target']['id']}-{package['format']}",
+                    "startedOn": state["build_started_at"],
+                    "finishedOn": state["build_finished_at"],
+                },
+                "byproducts": [
+                    {
+                        "name": f"{package_path.name}.unsigned-candidate",
+                        "digest": {
+                            "sha256": package["reproducible_candidate_sha256"]
+                        },
+                        "annotations": {
+                            "passes": 2,
+                            "matched": True,
+                            "candidateSize": package[
+                                "reproducible_candidate_size"
+                            ],
+                        },
+                    }
+                ],
+            },
+        },
+    }
+
+
 def safe_file(
     output: Path, name: str, context: str, *, executable: bool | None = None
 ) -> Path:
@@ -1089,7 +1494,7 @@ def validate_work_state(
     for record in records:
         require_exact_keys(
             record,
-            {"target", "filename", "unsigned_sha256", "unsigned_size"},
+            {"target", "filename", "unsigned_sha256", "unsigned_size", "packages"},
             "target record",
         )
         target_id = (
@@ -1118,6 +1523,109 @@ def validate_work_state(
             raise ReleaseError(
                 f"unsigned artifact changed after reproducibility check: {target_id}"
             )
+        packages = record["packages"]
+        if not isinstance(packages, list):
+            raise ReleaseError(f"release work packages are invalid for {target_id}")
+        if mode == "local-unsigned":
+            if packages:
+                raise ReleaseError("local unsigned work state must not contain native packages")
+            continue
+        if [item.get("format") for item in packages] != [
+            item["format"] for item in expected_target["packages"]
+        ]:
+            raise ReleaseError(
+                f"release work packages do not match the admitted matrix for {target_id}"
+            )
+        for package, package_config in zip(
+            packages, expected_target["packages"], strict=True
+        ):
+            require_exact_keys(
+                package,
+                {
+                    "format",
+                    "filename",
+                    "native_signature",
+                    "reproducible_candidate_sha256",
+                    "reproducible_candidate_size",
+                    "native_evidence",
+                },
+                "release work package",
+            )
+            package_format = package_config["format"]
+            expected_filename = package_name(config, expected_target, package_format)
+            if (
+                package["format"] != package_format
+                or package["filename"] != expected_filename
+                or package["native_signature"]
+                != package_config["native_signature"]
+            ):
+                raise ReleaseError(
+                    f"release work package metadata is invalid for {target_id}/{package_format}"
+                )
+            candidate_hash = package["reproducible_candidate_sha256"]
+            candidate_size = package["reproducible_candidate_size"]
+            native_evidence = package["native_evidence"]
+            if expected_target["goos"] == "linux":
+                if (
+                    not isinstance(candidate_hash, str)
+                    or not HEX_SHA256.fullmatch(candidate_hash)
+                    or not isinstance(candidate_size, int)
+                    or candidate_size <= 0
+                ):
+                    raise ReleaseError(
+                        f"release work package lacks reproducible candidate metadata for {target_id}/{package_format}"
+                    )
+                packaged = safe_file(output, expected_filename, "native package")
+                if package_format == "deb":
+                    if native_evidence is not None:
+                        raise ReleaseError("Debian package must not claim a native signature")
+                    if (
+                        sha256_file(packaged) != candidate_hash
+                        or packaged.stat().st_size != candidate_size
+                    ):
+                        raise ReleaseError(
+                            f"Debian package differs from its reproducible candidate for {target_id}"
+                        )
+                elif native_evidence is not None and (
+                    not isinstance(native_evidence, str)
+                    or native_evidence
+                    != f"native-package-{target_id}-{package_format}.json"
+                ):
+                    raise ReleaseError(
+                        f"RPM package native evidence name is invalid for {target_id}"
+                    )
+                elif native_evidence is None and (
+                    sha256_file(packaged) != candidate_hash
+                    or packaged.stat().st_size != candidate_size
+                ):
+                    raise ReleaseError(
+                        f"unsigned RPM package differs from its reproducible candidate for {target_id}"
+                    )
+            else:
+                values_absent = candidate_hash is None and candidate_size is None
+                values_present = (
+                    isinstance(candidate_hash, str)
+                    and HEX_SHA256.fullmatch(candidate_hash) is not None
+                    and isinstance(candidate_size, int)
+                    and candidate_size > 0
+                )
+                if not values_absent and not values_present:
+                    raise ReleaseError(
+                        f"Darwin package candidate state is partial for {target_id}"
+                    )
+                expected_evidence = f"native-package-{target_id}-pkg.json"
+                if values_absent:
+                    if native_evidence is not None or (output / expected_filename).exists():
+                        raise ReleaseError(
+                            f"Darwin package appears before candidate metadata for {target_id}"
+                        )
+                elif native_evidence != expected_evidence:
+                    raise ReleaseError(
+                        f"Darwin package lacks native evidence for {target_id}"
+                    )
+                else:
+                    safe_file(output, expected_filename, "signed macOS installer")
+                    safe_file(output, expected_evidence, "macOS installer evidence")
 
 
 def validate_release_context(
@@ -2630,15 +3138,36 @@ def parser() -> argparse.ArgumentParser:
     finalize_parser.set_defaults(func=finalize)
 
     native_parser = sub.add_parser(
-        "record-native-evidence", help="canonicalize accepted Apple evidence"
+        "record-native-evidence", help="canonicalize Apple executable evidence"
     )
     native_parser.add_argument("--output", type=Path, required=True)
     native_parser.add_argument("--target", required=True)
-    native_parser.add_argument("--notary-json", type=Path, required=True)
     native_parser.add_argument("--codesign-report", type=Path, required=True)
     native_parser.add_argument("--expected-team-id", required=True)
     native_parser.add_argument("--expected-signing-identity", required=True)
     native_parser.set_defaults(func=record_native_evidence)
+
+    package_native_parser = sub.add_parser(
+        "record-native-package-evidence",
+        help="canonicalize verified RPM or macOS installer evidence",
+    )
+    package_native_parser.add_argument("--output", type=Path, required=True)
+    package_native_parser.add_argument("--target", required=True)
+    package_native_parser.add_argument(
+        "--package-format", choices=("rpm", "pkg"), required=True
+    )
+    package_native_parser.add_argument("--candidate-package", type=Path)
+    package_native_parser.add_argument("--installer-report", type=Path)
+    package_native_parser.add_argument("--notary-json", type=Path)
+    package_native_parser.add_argument("--stapler-report", type=Path)
+    package_native_parser.add_argument("--gatekeeper-report", type=Path)
+    package_native_parser.add_argument("--expected-team-id")
+    package_native_parser.add_argument("--expected-application-identity")
+    package_native_parser.add_argument("--expected-installer-identity")
+    package_native_parser.add_argument("--rpm-public-key", type=Path)
+    package_native_parser.add_argument("--rpm-report", type=Path)
+    package_native_parser.add_argument("--expected-rpm-fingerprint")
+    package_native_parser.set_defaults(func=record_native_package_evidence)
 
     sign_parser = sub.add_parser(
         "sign", parents=[common_config], help="create keyless Sigstore bundles"

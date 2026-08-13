@@ -1,0 +1,284 @@
+#!/bin/sh
+set -eu
+
+product="sub2api-codex-connector"
+service_label="org.sub2api.codex-connector"
+
+fail() {
+  printf '%s\n' "connector-ctl: $*" >&2
+  exit 1
+}
+
+usage() {
+  cat >&2 <<'EOF'
+usage: sub2api-codex-connector-ctl COMMAND [OPTIONS]
+
+User commands:
+  init --origin HTTPS_ORIGIN --workspace ABSOLUTE_DIR [--display-name NAME]
+  config-path
+  pair
+  start
+  stop
+  restart
+  status
+  logs
+  purge-user-state --yes
+
+Internal command:
+  run-service
+EOF
+  exit 2
+}
+
+require_regular_user() {
+  [ "$(id -u)" -ne 0 ] || fail "run this command as the Connector user, not root"
+  [ -n "${HOME:-}" ] || fail "HOME is unavailable"
+  [ "${HOME#/}" != "$HOME" ] || fail "HOME must be absolute"
+}
+
+config_root() {
+  if [ -n "${XDG_CONFIG_HOME:-}" ]; then
+    [ "${XDG_CONFIG_HOME#/}" != "$XDG_CONFIG_HOME" ] || fail "XDG_CONFIG_HOME must be absolute"
+    printf '%s\n' "$XDG_CONFIG_HOME/$product"
+  else
+    printf '%s\n' "$HOME/.config/$product"
+  fi
+}
+
+state_root() {
+  if [ -n "${XDG_STATE_HOME:-}" ]; then
+    [ "${XDG_STATE_HOME#/}" != "$XDG_STATE_HOME" ] || fail "XDG_STATE_HOME must be absolute"
+    printf '%s\n' "$XDG_STATE_HOME/$product"
+  else
+    printf '%s\n' "$HOME/.local/state/$product"
+  fi
+}
+
+config_path() {
+  printf '%s/connector.json\n' "$(config_root)"
+}
+
+codex_home() {
+  if [ -n "${CODEX_HOME:-}" ]; then
+    printf '%s\n' "$CODEX_HOME"
+  else
+    printf '%s\n' "$HOME/.codex"
+  fi
+}
+
+connector_binary() {
+  case "$(uname -s)" in
+    Linux) printf '%s\n' /usr/bin/sub2api-codex-connector ;;
+    Darwin) printf '%s\n' /usr/local/bin/sub2api-codex-connector ;;
+    *) fail "unsupported operating system" ;;
+  esac
+}
+
+reject_control_characters() {
+  label=$1
+  value=$2
+  if printf '%s' "$value" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null 2>&1; then
+    fail "$label contains control characters"
+  fi
+}
+
+json_escape() {
+  reject_control_characters "JSON value" "$1"
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+canonical_directory() {
+  [ -d "$1" ] || fail "directory does not exist: $1"
+  (CDPATH= cd -- "$1" && pwd -P)
+}
+
+reject_codex_overlap() {
+  candidate=${1%/}
+  protected=${2%/}
+  case "$candidate/" in
+    "$protected/"|"$protected/"*) fail "Connector paths must not overlap CODEX_HOME" ;;
+  esac
+  case "$protected/" in
+    "$candidate/"|"$candidate/"*) fail "Connector paths must not contain CODEX_HOME" ;;
+  esac
+}
+
+write_initial_config() {
+  origin=$1
+  workspace=$2
+  display_name=$3
+  cfg_root=$(config_root)
+  state=$(state_root)
+  cfg=$(config_path)
+  protected=$(codex_home)
+
+  [ "${origin#https://}" != "$origin" ] || fail "--origin must use https://"
+  case "$origin" in
+    *\?*|*\#*|*@*|*' '*) fail "--origin must be an HTTPS origin without credentials, query, or fragment" ;;
+  esac
+  origin=${origin%/}
+  authority=${origin#https://}
+  case "$authority" in ''|*/*) fail "--origin must not contain a path" ;; esac
+  workspace=$(canonical_directory "$workspace")
+  [ "${state#/}" != "$state" ] || fail "state directory must be absolute"
+  [ "${protected#/}" != "$protected" ] || fail "CODEX_HOME must be absolute"
+  reject_codex_overlap "$state" "$protected"
+  reject_codex_overlap "$workspace" "$protected"
+  case "$state/" in "$workspace/"*) fail "state directory must not be inside a workspace" ;; esac
+  case "$workspace/" in "$state/"*) fail "workspace must not be inside the state directory" ;; esac
+  [ ! -e "$cfg" ] || fail "configuration already exists: $cfg"
+
+  old_umask=$(umask)
+  umask 077
+  mkdir -p -- "$cfg_root" "$state"
+  temporary="$cfg.tmp.$$"
+  trap 'rm -f -- "$temporary"' EXIT HUP INT TERM
+  control_origin=$(printf '%s' "$origin" | sed 's#^https://#wss://#')
+  escaped_control=$(json_escape "$control_origin/codex-ws/device")
+  escaped_pairing=$(json_escape "$origin/codex-api/v1/device-pairings/start")
+  escaped_token=$(json_escape "$origin/codex-api/v1/device/connect-token")
+  escaped_display=$(json_escape "$display_name")
+  escaped_state=$(json_escape "$state")
+  escaped_workspace=$(json_escape "$workspace")
+  cat >"$temporary" <<EOF
+{
+  "control_url": "$escaped_control",
+  "pairing_url": "$escaped_pairing",
+  "token_url": "$escaped_token",
+  "display_name": "$escaped_display",
+  "state_dir": "$escaped_state",
+  "workspace_roots": ["$escaped_workspace"],
+  "sandbox_cap": "workspace-write",
+  "codex_binary": "codex",
+  "codex_version": "0.147.0",
+  "schema_digest": "511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b",
+  "heartbeat_interval": "20s",
+  "approval_timeout": "120s",
+  "pairing_poll_interval": "2s",
+  "reconnect_min": "1s",
+  "reconnect_max": "30s"
+}
+EOF
+  chmod 0600 "$temporary"
+  mv -f -- "$temporary" "$cfg"
+  trap - EXIT HUP INT TERM
+  umask "$old_umask"
+  printf '%s\n' "Created $cfg"
+  printf '%s\n' "Run '$0 pair', then enter the private pairing code in the Control PWA."
+}
+
+linux_service() {
+  command -v systemctl >/dev/null 2>&1 || fail "systemctl is unavailable"
+  systemctl --user "$@" "$product.service"
+}
+
+darwin_domain() {
+  printf 'gui/%s\n' "$(id -u)"
+}
+
+darwin_plist() {
+  printf '%s\n' "/Library/LaunchAgents/$service_label.plist"
+}
+
+service_start() {
+  [ -f "$(config_path)" ] || fail "run '$0 init' first"
+  case "$(uname -s)" in
+    Linux)
+      systemctl --user daemon-reload
+      linux_service enable --now
+      ;;
+    Darwin)
+      plist=$(darwin_plist)
+      [ -f "$plist" ] || fail "launchd definition is missing: $plist"
+      domain=$(darwin_domain)
+      launchctl enable "$domain/$service_label"
+      launchctl bootout "$domain/$service_label" >/dev/null 2>&1 || true
+      launchctl bootstrap "$domain" "$plist"
+      launchctl kickstart -k "$domain/$service_label"
+      ;;
+    *) fail "unsupported operating system" ;;
+  esac
+}
+
+service_stop() {
+  case "$(uname -s)" in
+    Linux) linux_service disable --now ;;
+    Darwin)
+      domain=$(darwin_domain)
+      launchctl bootout "$domain/$service_label" >/dev/null 2>&1 || true
+      launchctl disable "$domain/$service_label"
+      ;;
+    *) fail "unsupported operating system" ;;
+  esac
+}
+
+purge_user_state() {
+  [ "${1:-}" = "--yes" ] || fail "purge requires the explicit --yes argument"
+  cfg_root=$(config_root)
+  state=$(state_root)
+  protected=$(codex_home)
+  for path in "$cfg_root" "$state"; do
+    [ "${path#/}" != "$path" ] || fail "refusing a non-absolute purge path"
+    [ "$path" != "/" ] || fail "refusing to purge the filesystem root"
+    [ "$path" != "$HOME" ] || fail "refusing to purge HOME"
+    reject_codex_overlap "$path" "$protected"
+  done
+  service_stop || true
+  rm -rf -- "$cfg_root" "$state"
+  printf '%s\n' "Removed Connector user configuration and state; Codex files were not touched."
+}
+
+require_regular_user
+command=${1:-}
+[ "$#" -gt 0 ] && shift || true
+
+case "$command" in
+  init)
+    origin=
+    workspace=
+    display_name=$(hostname -s 2>/dev/null || hostname)
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --origin) [ "$#" -ge 2 ] || usage; origin=$2; shift 2 ;;
+        --workspace) [ "$#" -ge 2 ] || usage; workspace=$2; shift 2 ;;
+        --display-name) [ "$#" -ge 2 ] || usage; display_name=$2; shift 2 ;;
+        *) usage ;;
+      esac
+    done
+    [ -n "$origin" ] && [ -n "$workspace" ] || usage
+    reject_control_characters "display name" "$display_name"
+    write_initial_config "$origin" "$workspace" "$display_name"
+    ;;
+  config-path) [ "$#" -eq 0 ] || usage; config_path ;;
+  pair)
+    [ "$#" -eq 0 ] || usage
+    [ -f "$(config_path)" ] || fail "run '$0 init' first"
+    exec "$(connector_binary)" -config "$(config_path)" -pair-only
+    ;;
+  start) [ "$#" -eq 0 ] || usage; service_start ;;
+  stop) [ "$#" -eq 0 ] || usage; service_stop ;;
+  restart) [ "$#" -eq 0 ] || usage; service_stop || true; service_start ;;
+  status)
+    [ "$#" -eq 0 ] || usage
+    case "$(uname -s)" in
+      Linux) linux_service status ;;
+      Darwin) launchctl print "$(darwin_domain)/$service_label" ;;
+      *) fail "unsupported operating system" ;;
+    esac
+    ;;
+  logs)
+    [ "$#" -eq 0 ] || usage
+    case "$(uname -s)" in
+      Linux) exec journalctl --user-unit "$product.service" --no-pager -n 200 ;;
+      Darwin) exec log show --last 1h --style compact --predicate 'process == "sub2api-codex-connector"' ;;
+      *) fail "unsupported operating system" ;;
+    esac
+    ;;
+  purge-user-state) purge_user_state "${1:-}" ;;
+  run-service)
+    [ "$#" -eq 0 ] || usage
+    [ -f "$(config_path)" ] || fail "Connector configuration is missing"
+    exec "$(connector_binary)" -config "$(config_path)"
+    ;;
+  *) usage ;;
+esac
