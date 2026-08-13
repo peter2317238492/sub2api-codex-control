@@ -1,59 +1,263 @@
-# Sub2API Codex Control
+<p align="center">
+  <img src="apps/pwa/public/icon.svg" width="88" height="88" alt="Sub2API Codex Control icon">
+</p>
 
-Same-origin remote control for user-owned Codex installations. The Control API
-exchanges a current Sub2API access token for a short-lived, revocable HttpOnly
-session. Devices connect outbound through the Connector, which speaks the pinned
-Codex app-server protocol over stdio and enforces a fail-closed RPC policy.
+<h1 align="center">Sub2API Codex Control</h1>
 
-## Security invariants
+<p align="center">
+  Securely use your own Codex installation from a browser, without opening a port on the device.
+</p>
 
-- The browser and control database never receive a raw Sub2API provider key.
-- A Connector never opens an inbound device port and never rewrites Codex config.
-- The Sub2API refresh token is never sent to or stored by the Control API.
-- Remote RPC is an explicit allowlist; shell, process, filesystem, account,
-  config, plugin, and raw pass-through methods are denied.
-- Connector working directories must be inside a local allowlist and remote
-  sandbox requests cannot exceed `workspace-write`.
-- Approval requests expire after 120 seconds and default to denial.
+<p align="center">
+  <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="docs/installation.md">Installation</a> ·
+  <a href="docs/usage.md">User guide</a> ·
+  <a href="docs/operations.md">Operations</a> ·
+  <a href="SECURITY.md">Security</a>
+</p>
 
-## Repository layout
+<p align="center">
+  <img alt="Release status" src="https://img.shields.io/badge/status-release%20candidate-E6A23C">
+  <img alt="Codex version" src="https://img.shields.io/badge/Codex-0.147.0-111827">
+  <img alt="Sub2API version" src="https://img.shields.io/badge/Sub2API-0.1.176-2563EB">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-22C55E"></a>
+</p>
 
-```text
-apps/control-api/       FastAPI control plane
-apps/pwa/               Vue 3 same-origin PWA
-connector/              Go outbound connector
-packages/control-protocol/ shared wire types and policy
-packages/appserver-schema/ pinned Codex 0.147.0 schema
-migrations/             database migrations
-deploy/                 Compose and Nginx integration
-tests/e2e/              system acceptance tests
-docs/adr/               frozen decisions and threat model
+> [!IMPORTANT]
+> This repository currently contains a **source release candidate**. No signed
+> production Release or supported installer has been published yet. Do not use
+> a mutable checkout, an ad hoc binary, or an unsigned image as a production
+> release. Follow the release notes only after an immutable tagged Release
+> appears on GitHub.
+
+## What it is
+
+Sub2API Codex Control is a self-hosted, same-origin control plane for
+user-owned Codex installations. It combines three small components:
+
+| Component | Runs on | Responsibility |
+| --- | --- | --- |
+| **Control PWA** | Browser | Devices, threads, streamed turns, approvals, and revocation |
+| **Control API** | Sub2API server | Short-lived sessions, user isolation, durable dispatch, and audit state |
+| **Connector** | Your Codex device | Outbound WSS connection and a pinned `codex app-server` child over stdio |
+
+The Connector does not open an inbound device port and does not modify Codex
+configuration, authentication files, workspaces, plugins, or shell profiles.
+Every ordinary Sub2API user owns and manages their own devices; routine setup,
+pairing, use, and revocation do not require an administrator.
+
+```mermaid
+flowchart LR
+    B["Browser /codex/"] -->|"same-origin HTTPS + WSS"| E["Nginx edge"]
+    E --> A["Control API"]
+    A --> D[("PostgreSQL + Redis")]
+    A --> S["Sub2API identity"]
+    C["Connector on user device"] -->|"outbound WSS only"| E
+    C -->|"stdio"| X["Codex app-server 0.147.0"]
 ```
 
-## Local development
+## Highlights
 
-Prerequisites are Node.js 22+, pnpm 11+, Python 3.12+, PostgreSQL 16+, Redis 7+,
-Go 1.24+, and `codex-cli 0.147.0`.
+- **Self-service devices.** An authenticated user can download the matching
+  Connector package, generate a private configuration, pair a device, and
+  revoke it from the PWA.
+- **Eight typed operations only.** Remote access is limited to `model/list`,
+  `thread/start`, `thread/list`, `thread/read`, `thread/resume`, `turn/start`,
+  `turn/steer`, and `turn/interrupt`.
+- **Fail-closed approvals.** Command, file-change, and permission approvals are
+  scoped, one-shot, epoch-bound, revocable, and denied on timeout or disconnect.
+- **Local workspace control.** The device owner selects the allowed workspace
+  roots and a maximum sandbox of `workspace-write` or `read-only`.
+- **No raw remote shell.** Shell, exec, arbitrary filesystem/process access,
+  config changes, account login, plugin installation, and raw RPC pass-through
+  are rejected before Codex dispatch.
+- **Release and recovery gates.** The repository includes signed-source,
+  immutable-image, backup/restore, datastore-isolation, rollback, and
+  observability tooling for production operators.
 
-```bash
+## User Quick Start
+
+This flow applies after a signed `connector-v*` Release is published and your
+Sub2API operator has enabled Control.
+
+### 1. Sign in
+
+Sign in to Sub2API at the normal site root, then open the Control PWA on the
+same origin:
+
+```text
+https://your-sub2api.example/codex/
+```
+
+Control exchanges the current Sub2API access session for a short-lived
+HttpOnly session. Your Sub2API refresh credential is not sent to Control.
+
+### 2. Install the Connector
+
+In the PWA, open **Devices → Set up Connector** and select the package matching
+your operating system and architecture. Verify the displayed SHA-256 before
+installing.
+
+| Platform | Supported package | Install with |
+| --- | --- | --- |
+| Debian / Ubuntu `amd64`, `arm64` | `.deb` | `sudo apt install ./sub2api-codex-connector_*.deb` |
+| Fedora / RHEL `amd64`, `arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
+| macOS `amd64`, Apple silicon | signed and notarized `.pkg` | `sudo installer -pkg ./sub2api-codex-connector_*.pkg -target /` |
+
+Run Connector commands as the ordinary user who owns Codex and the workspace,
+not as `root`.
+
+### 3. Configure and pair
+
+The PWA can generate `connector.json`, or the installed helper can create the
+same private configuration:
+
+```sh
+sub2api-codex-connector-ctl init \
+  --origin https://your-sub2api.example \
+  --workspace /absolute/path/to/workspace \
+  --display-name "My workstation"
+
+sub2api-codex-connector-ctl pair
+```
+
+`pair` reports the path of a mode-`0600` file containing a one-time code. Keep
+the command running, enter that code in the PWA, and wait until the device is
+shown as online. Do not paste the code into chat, logs, or an issue.
+
+### 4. Start the service
+
+```sh
+sub2api-codex-connector-ctl start
+sub2api-codex-connector-ctl status
+```
+
+The package installs a user-level `systemd` service on Linux or a `launchd`
+agent on macOS. It preserves existing Codex files during install and upgrade.
+
+### 5. Control Codex
+
+1. Select an online device.
+2. Create a thread inside one of its allowed workspace roots.
+3. Select a model and send text input.
+4. Review each approval request; stale or unanswered requests are denied.
+5. Steer or interrupt the active turn, resume a managed thread, or archive an
+   idle thread from the PWA.
+
+## Everyday Commands
+
+```sh
+# Show the private configuration path
+sub2api-codex-connector-ctl config-path
+
+# Service lifecycle
+sub2api-codex-connector-ctl start
+sub2api-codex-connector-ctl stop
+sub2api-codex-connector-ctl restart
+sub2api-codex-connector-ctl status
+
+# Recent user-service logs
+sub2api-codex-connector-ctl logs
+```
+
+To retire a device, revoke it in the PWA first. Native package removal deletes
+only package-owned files and preserves the user's private Connector state. The
+user may explicitly remove that retained state afterward:
+
+```sh
+sub2api-codex-connector-ctl purge-user-state --yes
+```
+
+That command refuses root execution and refuses any path overlapping
+`CODEX_HOME`.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| PWA returns to Sub2API | Sign in at `/` first, then reopen `/codex/` on the same host. |
+| Pairing does not complete | Keep `connector-ctl pair` running, check system time, HTTPS origin, and outbound WSS. |
+| Codex version is rejected | Install exactly `codex-cli 0.147.0`; protocol drift is intentionally blocked. |
+| Workspace is rejected | Use an existing absolute path outside Connector state and `CODEX_HOME`. |
+| Device is offline | Run `connector-ctl status` and `connector-ctl logs`; verify outbound TLS access. |
+| Approval disappeared | It expired, was already resolved, belonged to another user, or became stale after reconnect. |
+
+See the complete [usage guide](docs/usage.md) for revocation, logout, and the
+remote data-projection boundary.
+
+## For Server Operators
+
+Production is deliberately not a one-command Compose deployment. Operators
+must use the verified server package and satisfy the admission gates for the
+exact release:
+
+1. immutable Sub2API and Control image identities;
+2. a fresh root-only backup and isolated restore rehearsal;
+3. dedicated PostgreSQL ownership and authenticated, prefixed Redis ACLs;
+4. same-origin Nginx/TLS routes and loopback-only service bindings;
+5. signed source, image lock, SBOM, provenance, and rollback evidence;
+6. authenticated browser/device acceptance and alert-delivery evidence.
+
+Start with the [deployment runbook](docs/runbooks/deployment.md), then use the
+[backup and rollback](docs/runbooks/backups-and-rollback.md) and
+[observability](docs/runbooks/observability.md) runbooks. Direct migration,
+direct `docker compose up`, and deployment from a checkout bypass required
+controls and are not supported production paths.
+
+## Development
+
+Prerequisites: Node.js 22+, pnpm 11+, Python 3.12+, Go 1.24+, Docker with
+Compose v2, PostgreSQL 16+, Redis 7+, and Codex CLI `0.147.0`.
+
+```sh
+git clone https://github.com/peter2317238492/sub2api-codex-control.git
+cd sub2api-codex-control
 pnpm install
-pnpm test
 pnpm dev
 ```
 
-Backend and Connector commands are documented in their respective directories.
-Production routes are `/codex/`, `/codex-api/`, `/codex-ws/browser`, and
-`/codex-ws/device`.
+The disposable full-stack harness builds the real Connector but uses a mock
+Sub2API authority and a protocol-faithful fake Codex app-server. Its result is
+development evidence, not production acceptance:
 
-The disposable full-stack acceptance harness is `tests/e2e/run-local.sh`. It
-builds and runs the real Connector through a local TLS edge against PostgreSQL,
-Redis, a mock Sub2API authority, and a protocol-faithful fake Codex app-server.
-It exercises pairing, all eight admitted RPC classes, approval, reconnect,
-revocation, no published Connector port, no raw bearer in the Control database,
-no generated secret in container metadata, and the coexistence sentinel.
+```sh
+install -d -m 0700 "$HOME/.local/state/sub2api-codex-control/e2e-reports"
+CONTROL_E2E_REPORT_DIR="$HOME/.local/state/sub2api-codex-control/e2e-reports" \
+  ./tests/e2e/run-local.sh
+```
 
-Production admission remains deliberately fail-closed: the observed Sub2API
-container has an executable replaced in its writable layer. It must be rebuilt
-as one immutable, read-only image matching `versions.lock.json`; the repository
-does not modify or whitelist that existing deployment. See
-`docs/runbooks/version-matrix.md` and `docs/runbooks/deployment.md`.
+## Repository Map
+
+```text
+apps/control-api/          FastAPI control plane
+apps/pwa/                  Vue 3 same-origin PWA
+connector/                 Go outbound-only Connector
+connector/packaging/       Native package and service definitions
+packages/control-protocol/ Shared wire types and policy
+packages/appserver-schema/ Pinned Codex 0.147.0 schema
+migrations/                Alembic database migrations
+deploy/                    Release, deployment, backup, and monitoring tools
+tests/e2e/                 Disposable system acceptance harness
+docs/                      User, operator, contract, and security documentation
+```
+
+## Documentation
+
+| Audience | Guide |
+| --- | --- |
+| Users | [Installation](docs/installation.md) · [Usage](docs/usage.md) |
+| Server operators | [Operations](docs/operations.md) · [Production runbooks](docs/runbooks/README.md) |
+| Release operators | [Connector release policy](connector/release/README.md) · [Control release policy](deploy/release/README.md) |
+| Security reviewers | [Threat model and ADRs](docs/adr/) · [Version matrix](docs/runbooks/version-matrix.md) |
+| Contributors | [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md) |
+
+## Security and License
+
+Please report vulnerabilities through GitHub private vulnerability reporting as
+described in [SECURITY.md](SECURITY.md). Never include credentials, pairing
+codes, private paths, production logs, or user data in a public issue.
+
+Licensed under the [Apache License 2.0](LICENSE). Third-party attribution is in
+[NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This is
+an independent community project and is not affiliated with, endorsed by, or
+sponsored by OpenAI or the Sub2API project.

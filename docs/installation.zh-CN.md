@@ -1,15 +1,18 @@
 # 安装
 
-[English](installation.md) | [文档索引](../README.zh-CN.md#文档)
+[English](installation.md) | [文档索引](../README.zh-CN.md#文档导航)
 
 ## 先选择正确的安装路径
 
-当前有两条完全不同的路径：
+当前有三条完全不同的路径：
 
 1. 隔离 E2E 路径现在可用，用一次性基础设施验证源码。
-2. 首个公开源码版本不能直接安装到生产。它尚未发布生产安装所需的完整签名证据。
+2. 正式签名的 `connector-v*` Release 发布后，普通用户安装对应原生包，并在 PWA
+   自助完成配置。
+3. 首个公开源码版本不能直接安装到生产。它尚未发布生产安装所需的完整签名证据。
 
-Connector 可从源码构建用于开发与评估，但目前不提供受支持的预编译二进制。
+Connector 目前可从源码构建用于开发与评估。在上述签名 Release 出现之前，不提供受支持的
+预编译 Connector。
 
 本文命令假设使用 Linux 或 macOS 的 POSIX shell。当前源码支持这两个 Connector 运行目标，
 不支持 Windows Connector。
@@ -43,10 +46,47 @@ Codex app-server；它不会使用真实账号或真实供应商密钥。除非�
 测试通过会覆盖同源路由、配对、允许的 RPC、审批、重连、撤销、数据存储隔离和秘密处理，
 但不能证明真实账号登录、真实 Codex canary、公网 TLS、生产 WSS 或发布真实性。
 
-## 以普通用户构建 Connector
+## 安装签名 Connector 包
 
-安装 Go 1.24 或更高版本及 `codex-cli 0.147.0`。Connector 应以拥有目标 Codex 和工作区
-的同一个普通用户运行，不要用 root 运行。
+仅在仓库发布不可变、已签名的 `connector-v*` GitHub Release，并且 Control PWA 显示同一
+精确版本后使用此流程。在 PWA 打开**设备 -> 设置 Connector**，选择操作系统和架构，并将
+下载文件的 SHA-256 与 PWA 显示值逐字核对。
+
+| 平台 | 安装包 | 安装命令 |
+| --- | --- | --- |
+| Debian / Ubuntu `amd64`、`arm64` | `.deb` | `sudo apt install ./sub2api-codex-connector_*.deb` |
+| Fedora / RHEL `amd64`、`arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
+| macOS Intel、Apple 芯片 | 已签名并公证的 `.pkg` | `sudo installer -pkg ./sub2api-codex-connector_*.pkg -target /` |
+
+安装后，以拥有 Codex 和目标工作区的普通用户运行辅助命令。将示例域名和工作区替换为
+自己的值：
+
+```sh
+sub2api-codex-connector-ctl init \
+  --origin https://control.example.com \
+  --workspace /absolute/path/to/workspace \
+  --display-name "我的工作站"
+
+sub2api-codex-connector-ctl pair
+```
+
+保持 `pair` 运行。它会提示一个 mode `0600` 文件路径，文件内是一组一次性配对码；在已登录
+的 PWA 输入该配对码。PWA 显示配对成功后，启动用户服务并确认状态：
+
+```sh
+sub2api-codex-connector-ctl start
+sub2api-codex-connector-ctl status
+```
+
+Linux 包安装用户级 `systemd` 服务，macOS 包安装 `launchd` agent。升级和卸载会保留用户的
+私密 Connector 状态。需要彻底清除时，先在 PWA 撤销设备，再运行
+`sub2api-codex-connector-ctl purge-user-state --yes`。
+
+## 从源码构建 Connector 用于开发
+
+此路径仅用于开发与评估，不属于生产安装。安装 Go 1.24 或更高版本及
+`codex-cli 0.147.0`。Connector 应以拥有目标 Codex 和工作区的同一个普通用户运行，
+不要用 root 运行。
 
 ```sh
 cd connector

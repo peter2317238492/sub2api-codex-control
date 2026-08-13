@@ -1,9 +1,9 @@
 # 使用
 
-[English](usage.md) | [文档索引](../README.zh-CN.md#文档)
+[English](usage.md) | [文档索引](../README.zh-CN.md#文档导航)
 
-本教程假设已有通过准入的 Control 部署。仓库首个公开版本不包含受支持的生产镜像或预编译
-Connector。
+本教程假设已有通过准入的 Control 部署和正式签名的 `connector-v*` Release。当前仓库状态
+仍是源码候选版，不要把临时构建当作受支持的生产安装包。
 
 ## 先登录，再打开 PWA
 
@@ -14,21 +14,30 @@ Sub2API access 会话换取短期 HttpOnly Control 会话；refresh 凭据只留
 
 ## 配对设备
 
-1. 按[安装文档](installation.zh-CN.md#以普通用户构建-connector)构建并配置 Connector。
-2. 使用 `-pair-only` 启动，保持进程运行。
+1. 在 PWA 打开**设备 -> 设置 Connector**，安装对应平台的包，并按照
+   [安装文档](installation.zh-CN.md#安装签名-connector-包)生成或初始化私密配置。
+2. 运行 `sub2api-codex-connector-ctl pair` 并保持命令运行。
 3. 只从 stderr 提示的 mode `0600` `pairing-code.json` 文件读取配对码，并把它当作临时凭据。
 4. 在 PWA 中选择“配对设备”，输入 16 位配对码，确认设备和工作区信息。
 5. 等待 Connector 确认认领并退出。配对码过期或被拒绝后应重新配对，不要通过不可信渠道分享。
 
-以普通 Codex 用户启动长期 Connector：
+以普通 Codex 用户启动用户服务：
 
 ```sh
-/absolute/path/to/sub2api-codex-connector \
-  -config "$HOME/.config/sub2api-codex-control/connector.json"
+sub2api-codex-connector-ctl start
+sub2api-codex-connector-ctl status
 ```
 
-Connector 只建立出站连接。若需在用户退出桌面会话后继续运行，请使用用户自己的服务管理器，
-并确保状态目录始终仅该用户可读。
+Connector 只建立出站连接。原生安装包使用用户级服务管理进程，并确保状态目录仅该用户可读。
+
+常用生命周期和诊断命令如下：
+
+```sh
+sub2api-codex-connector-ctl stop
+sub2api-codex-connector-ctl restart
+sub2api-codex-connector-ctl status
+sub2api-codex-connector-ctl logs
+```
 
 ## 使用 Codex
 
@@ -45,6 +54,12 @@ Codex 线程。未明确允许的方法一律拒绝。
 
 设备丢失或退役时，在设备菜单撤销 Connector。撤销会阻止后续 token 交换并关闭有效的远程
 访问路径。只有确认不再需要事件调查证据后，才删除设备上的私密 Connector 状态目录。
+
+卸载原生包会保留用户的私密 Connector 状态。撤销设备后，仅在确认不再需要时显式清除：
+
+```sh
+sub2api-codex-connector-ctl purge-user-state --yes
+```
 
 使用 PWA 的注销操作结束会话，它会协调 Control 会话与 Sub2API 注销。只关闭浏览器标签页
 不等于显式注销。

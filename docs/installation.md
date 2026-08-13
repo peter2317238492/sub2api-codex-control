@@ -4,16 +4,19 @@
 
 ## Choose the correct path
 
-There are two distinct installation paths:
+There are three distinct installation paths:
 
 1. The isolated E2E path is available now and verifies the source in disposable
    infrastructure.
-2. A production Control deployment is not available from the first public
+2. After a signed `connector-v*` Release is published, ordinary users install
+   its native Connector package and complete setup from the PWA.
+3. A production Control deployment is not available from the first public
    source release. It requires a complete signed release evidence set that has
    not yet been published.
 
-The Connector can be built from source for development and evaluation. No
-prebuilt Connector binary is currently supported.
+The Connector can currently be built from source for development and
+evaluation. Until the signed Release described above exists, no prebuilt
+Connector binary is supported.
 
 Commands in this guide assume a POSIX shell on Linux or macOS. The Connector
 source supports those targets; Windows is not a supported runtime target in
@@ -53,8 +56,49 @@ approvals, reconnect behavior, revocation, datastore isolation, and secret
 handling. It does not prove real-account authentication, a real Codex canary,
 public TLS, production WSS connectivity, or release authenticity.
 
-## Build a Connector as an ordinary user
+## Install a signed Connector package
 
+Use this path only after the repository publishes an immutable, signed
+`connector-v*` GitHub Release and the Control PWA displays that exact release.
+In the PWA, open **Devices -> Set up Connector**, select the operating system
+and architecture, and compare the downloaded file's SHA-256 with the value
+shown in the PWA.
+
+| Platform | Package | Installation command |
+| --- | --- | --- |
+| Debian / Ubuntu `amd64`, `arm64` | `.deb` | `sudo apt install ./sub2api-codex-connector_*.deb` |
+| Fedora / RHEL `amd64`, `arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
+| macOS Intel, Apple silicon | signed and notarized `.pkg` | `sudo installer -pkg ./sub2api-codex-connector_*.pkg -target /` |
+
+Run the installed helper as the ordinary user who owns Codex and the intended
+workspace. Replace the example origin and workspace with your values:
+
+```sh
+sub2api-codex-connector-ctl init \
+  --origin https://control.example.com \
+  --workspace /absolute/path/to/workspace \
+  --display-name "My workstation"
+
+sub2api-codex-connector-ctl pair
+```
+
+Keep `pair` running. It reports a mode-`0600` file containing a one-time code;
+enter that code in the authenticated PWA. When the PWA shows the device as
+paired, start the user service and confirm its status:
+
+```sh
+sub2api-codex-connector-ctl start
+sub2api-codex-connector-ctl status
+```
+
+The package installs a user-level `systemd` service on Linux or a `launchd`
+agent on macOS. Package upgrades and removal preserve the user's private
+Connector state. Revoke the device in the PWA before explicitly deleting that
+state with `sub2api-codex-connector-ctl purge-user-state --yes`.
+
+## Build a Connector from source for development
+
+This path is for development and evaluation, not production installation.
 Install Go 1.24 or newer and `codex-cli 0.147.0`. Run the Connector as the same
 ordinary user who owns the intended Codex installation and workspace roots;
 do not run it as root.
