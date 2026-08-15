@@ -3,6 +3,7 @@
 - [Deployment](deployment.md): datastore isolation, secrets, Compose, Nginx, and acceptance checks.
 - [Unsigned first-production bootstrap](unsigned-bootstrap.md): one-time, backup-first startup from exact local image IDs before the first signed release.
 - [Backups and rollback](backups-and-rollback.md): backup cadence, restore rehearsal, release rollback, and secret rotation.
+- [Sub2API immutable migration](sub2api-immutable-migration.md): backup-first, same-project Compose replacement, exact bind admission, receipts, and snapshot rollback.
 - [Observability](observability.md): health signals, metrics, structured logs, retention, and alerts.
 - [Connector release policy](connector-release-policy.md): reproducible artifacts, signing, staged updates, and rollback.
 - [Version matrix](version-matrix.md): pinned contracts and production admission gates.

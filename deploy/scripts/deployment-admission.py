@@ -25,6 +25,38 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_PRIVATE_INPUT_BYTES = 1_048_576
 MAX_BACKUP_METADATA_BYTES = 16 * 1_048_576
 MAX_JSON_INPUT_BYTES = 32 * 1_048_576
+MAX_PACKAGE_EVIDENCE_BYTES = 16 * 1024 * 1_048_576
+SERVER_PACKAGE_MANIFEST_SCHEMA = (
+    "https://sub2api-codex.invalid/schemas/server-package-inventory-v1.json"
+)
+SERVER_PACKAGE_RECEIPT_SCHEMA = (
+    "https://sub2api-codex.invalid/schemas/server-package-verification-v1.json"
+)
+CONNECTOR_METADATA_FILENAME = "connector-release-metadata.json"
+CONNECTOR_METADATA_BUNDLE_FILENAME = f"{CONNECTOR_METADATA_FILENAME}.sigstore.json"
+CONNECTOR_AGGREGATE_FILENAME = "connector-public-verification-aggregate.json"
+CONNECTOR_AGGREGATE_BUNDLE_FILENAME = f"{CONNECTOR_AGGREGATE_FILENAME}.sigstore.json"
+OCI_EXPORT_RECEIPT_FILENAME = "oci-export-receipt.json"
+LOCAL_DOCKER_HOST = "unix:///var/run/docker.sock"
+WRITER_SERVICES = ("control-api-replica", "control-api")
+WRITER_UNFREEZE_PLAN_TYPE = "production-writer-unfreeze-plan-v1"
+WRITER_FREEZE_TYPE = "production-writer-freeze-v1"
+POST_UNFREEZE_VERIFY_TIMEOUT_SECONDS = 120
+POST_REVERSE_VERIFY_TIMEOUT_SECONDS = 120
+UNINSTALL_SERVICES = ("control-api", "control-api-replica", "codex-pwa")
+UNINSTALL_PRESERVED_RESOURCES = {
+    "sub2api_runtime": True,
+    "postgresql": True,
+    "redis": True,
+    "application_data": True,
+    "secrets": True,
+    "backups": True,
+    "deployment_records": True,
+    "container_images": True,
+    "connector_user_state": True,
+    "nginx_configuration": True,
+    "logrotate_policy": True,
+}
 
 
 def fail(message: str) -> NoReturn:
@@ -50,6 +82,719 @@ def load_json(path: Path, label: str) -> Any:
 def write_json(value: Any) -> None:
     json.dump(value, sys.stdout, sort_keys=True, separators=(",", ":"))
     sys.stdout.write("\n")
+
+
+def strict_json_bytes(
+    content: bytes, label: str, *, canonical: bool = False
+) -> Any:
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                fail(f"{label} repeats JSON key {key}")
+            value[key] = item
+        return value
+
+    try:
+        value = json.loads(
+            content.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=lambda token: fail(f"{label} contains {token}"),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"cannot parse {label}: {exc}")
+    if canonical:
+        expected = (
+            json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode("ascii")
+            + b"\n"
+        )
+        if content != expected:
+            fail(f"{label} is not canonical JSON")
+    return value
+
+
+def secure_exact_bytes(
+    path: Path,
+    label: str,
+    *,
+    expected_uid: int,
+    exact_mode: int,
+    maximum: int = MAX_JSON_INPUT_BYTES,
+) -> bytes:
+    descriptor = -1
+    try:
+        descriptor, metadata = open_stable_regular_file(
+            path,
+            label,
+            expected_uid=expected_uid,
+            exact_mode=exact_mode,
+            max_size=maximum,
+        )
+        if metadata.st_nlink != 1:
+            fail(f"{label} must have exactly one hard link")
+        content = read_descriptor(descriptor, label, maximum)
+        assert_stable(descriptor, metadata, label)
+        return content
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def exact_keys(value: Any, expected: set[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != expected:
+        fail(f"{label} has an unexpected schema")
+    return value
+
+
+def package_file_record(
+    package_root: Path,
+    files: dict[str, dict[str, Any]],
+    path: str,
+    label: str,
+    *,
+    expected_uid: int,
+    include_content: bool = True,
+) -> tuple[dict[str, Any], bytes]:
+    record = files.get(path)
+    if not isinstance(record, dict) or set(record) != {"mode", "path", "sha256", "size"}:
+        fail(f"server package inventory omits {label}")
+    if (
+        record.get("path") != path
+        or record.get("mode") != "0444"
+        or not isinstance(record.get("sha256"), str)
+        or SHA256_RE.fullmatch(record["sha256"]) is None
+        or type(record.get("size")) is not int
+        or not 0
+        < record["size"]
+        <= (MAX_JSON_INPUT_BYTES if include_content else MAX_PACKAGE_EVIDENCE_BYTES)
+    ):
+        fail(f"server package inventory record is invalid for {label}")
+    descriptor, metadata = open_stable_regular_file(
+        package_root / path,
+        label,
+        expected_uid=expected_uid,
+        exact_mode=0o444,
+        max_size=record["size"],
+    )
+    try:
+        if metadata.st_nlink != 1 or metadata.st_size != record["size"]:
+            fail(f"server package file metadata differs from the inventory for {label}")
+        if include_content:
+            content = read_descriptor(descriptor, label, record["size"])
+            digest = hashlib.sha256(content).hexdigest()
+        else:
+            content = b""
+            digest = hash_descriptor(descriptor)
+        assert_stable(descriptor, metadata, label)
+    finally:
+        os.close(descriptor)
+    if digest != record["sha256"]:
+        fail(f"server package bytes differ from the inventory for {label}")
+    return record, content
+
+
+def connector_release_metadata(value: Any) -> dict[str, Any]:
+    metadata = exact_keys(
+        value,
+        {
+            "format_version",
+            "release_mode",
+            "releasable",
+            "source_repository",
+            "source_commit",
+            "version",
+            "tag",
+            "codex_version",
+            "schema_digest",
+            "manifest",
+            "config_path_hint",
+            "pair_command",
+            "start_command",
+            "assets",
+        },
+        "Connector release metadata",
+    )
+    version = metadata.get("version")
+    assets = metadata.get("assets")
+    if (
+        metadata.get("format_version") != 1
+        or metadata.get("release_mode") != "release"
+        or metadata.get("releasable") is not True
+        or not isinstance(metadata.get("source_repository"), str)
+        or re.fullmatch(r"https://github\.com/[^/\s]+/[^/\s]+", metadata["source_repository"])
+        is None
+        or not isinstance(metadata.get("source_commit"), str)
+        or VCS_REF_RE.fullmatch(metadata["source_commit"]) is None
+        or not isinstance(version, str)
+        or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None
+        or metadata.get("tag") != f"connector-v{version}"
+        or not isinstance(metadata.get("codex_version"), str)
+        or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", metadata["codex_version"])
+        is None
+        or not isinstance(metadata.get("schema_digest"), str)
+        or SHA256_RE.fullmatch(metadata["schema_digest"]) is None
+        or metadata.get("config_path_hint")
+        != "~/.config/sub2api-codex-connector/connector.json"
+        or metadata.get("pair_command") != "sub2api-codex-connector-ctl pair"
+        or metadata.get("start_command") != "sub2api-codex-connector-ctl start"
+        or not isinstance(assets, list)
+        or len(assets) != 6
+    ):
+        fail("Connector release metadata is not one complete public release")
+    expected_matrix = {
+        ("darwin", "amd64", "pkg"),
+        ("darwin", "arm64", "pkg"),
+        ("linux", "amd64", "deb"),
+        ("linux", "amd64", "rpm"),
+        ("linux", "arm64", "deb"),
+        ("linux", "arm64", "rpm"),
+    }
+    observed_matrix: set[tuple[str, str, str]] = set()
+    for asset in assets:
+        if not isinstance(asset, dict):
+            fail("Connector release metadata contains an invalid asset")
+        identity = (asset.get("os"), asset.get("arch"), asset.get("package_format"))
+        if not all(isinstance(item, str) for item in identity):
+            fail("Connector release metadata contains an invalid asset identity")
+        observed_matrix.add(identity)  # type: ignore[arg-type]
+        if (
+            not isinstance(asset.get("sha256"), str)
+            or SHA256_RE.fullmatch(asset["sha256"]) is None
+            or type(asset.get("size")) is not int
+            or asset["size"] <= 0
+        ):
+            fail("Connector release metadata contains invalid asset evidence")
+    if observed_matrix != expected_matrix:
+        fail("Connector release metadata native package matrix is incomplete")
+    return metadata
+
+
+def server_package_release(args: argparse.Namespace) -> dict[str, Any]:
+    manifest_path = args.manifest
+    receipt_path = args.verification_receipt
+    if not manifest_path.is_absolute() or not receipt_path.is_absolute():
+        fail("server package evidence paths must be absolute")
+    if os.environ.get("DOCKER_HOST") != LOCAL_DOCKER_HOST:
+        fail("server package admission requires the lifecycle-pinned local Docker socket")
+    if manifest_path.name != "PACKAGE.json":
+        fail("server package manifest must be named PACKAGE.json")
+    package_root = manifest_path.parent
+    root_metadata = package_root.lstat()
+    if (
+        stat.S_ISLNK(root_metadata.st_mode)
+        or not stat.S_ISDIR(root_metadata.st_mode)
+        or root_metadata.st_uid != args.expected_owner_uid
+        or stat.S_IMODE(root_metadata.st_mode) != 0o555
+    ):
+        fail("installed server package root is not immutable and root-owned")
+    manifest_raw = secure_exact_bytes(
+        manifest_path,
+        "server package manifest",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o444,
+    )
+    manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
+    if (
+        not isinstance(args.expected_manifest_sha256, str)
+        or SHA256_RE.fullmatch(args.expected_manifest_sha256) is None
+        or manifest_sha256 != args.expected_manifest_sha256
+    ):
+        fail("server package manifest differs from the lifecycle-owned hash")
+    manifest = strict_json_bytes(manifest_raw, "server package manifest", canonical=True)
+    required_manifest_keys = {
+        "$schema",
+        "format_version",
+        "product",
+        "release",
+        "release_tag",
+        "mode",
+        "platform",
+        "source",
+        "builder",
+        "source_date_epoch",
+        "common_payload_sha256",
+        "control_release",
+        "connector_release",
+        "oci_export",
+        "source_bundle",
+        "source_verification",
+        "image_trust",
+        "images",
+        "lifecycle",
+        "required_source_paths",
+        "files",
+    }
+    manifest = exact_keys(manifest, required_manifest_keys, "server package manifest")
+    if (
+        manifest.get("$schema") != SERVER_PACKAGE_MANIFEST_SCHEMA
+        or manifest.get("format_version") != 1
+        or manifest.get("product") != "sub2api-codex-control-server"
+        or manifest.get("mode") != args.mode
+        or manifest.get("platform") != "linux/amd64"
+    ):
+        fail("server package identity differs from the lifecycle mode")
+
+    receipt_raw = secure_exact_bytes(
+        receipt_path,
+        "lifecycle package verification receipt",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o400,
+    )
+    receipt = strict_json_bytes(
+        receipt_raw, "lifecycle package verification receipt", canonical=True
+    )
+    receipt = exact_keys(
+        receipt,
+        {
+            "$schema",
+            "format_version",
+            "status",
+            "verified_at",
+            "release",
+            "release_tag",
+            "mode",
+            "platform",
+            "source",
+            "package",
+            "release_manifest",
+            "trust",
+        },
+        "lifecycle package verification receipt",
+    )
+    receipt_package = exact_keys(
+        receipt.get("package"),
+        {"filename", "sha256", "size", "internal_manifest_sha256", "extracted_root"},
+        "lifecycle package receipt package binding",
+    )
+    if (
+        receipt.get("$schema") != SERVER_PACKAGE_RECEIPT_SCHEMA
+        or receipt.get("format_version") != 1
+        or receipt.get("status") != "verified"
+        or receipt.get("mode") != args.mode
+        or receipt.get("release") != manifest.get("release")
+        or receipt.get("release_tag") != manifest.get("release_tag")
+        or receipt.get("source") != manifest.get("source")
+        or receipt_package.get("extracted_root") != str(package_root)
+        or receipt_package.get("internal_manifest_sha256") != manifest_sha256
+    ):
+        fail("lifecycle verification receipt does not bind this installed package")
+
+    records_value = manifest.get("files")
+    if not isinstance(records_value, list) or not records_value:
+        fail("server package has no exact file inventory")
+    files: dict[str, dict[str, Any]] = {}
+    for record in records_value:
+        if not isinstance(record, dict) or not isinstance(record.get("path"), str):
+            fail("server package file inventory is invalid")
+        path = record["path"]
+        if (
+            path in files
+            or Path(path).is_absolute()
+            or not Path(path).parts
+            or any(part in {"", ".", ".."} for part in Path(path).parts)
+        ):
+            fail("server package file inventory contains an unsafe or repeated path")
+        files[path] = record
+
+    oci_export_value = manifest.get("oci_export")
+    oci_export_evidence: dict[str, Any] | None = None
+    if args.mode == "online":
+        if oci_export_value is not None or OCI_EXPORT_RECEIPT_FILENAME in files:
+            fail("online server package must not contain an OCI export receipt")
+    else:
+        oci_export = exact_keys(
+            oci_export_value,
+            {"filename", "sha256", "size"},
+            "offline server package OCI export binding",
+        )
+        record, _ = package_file_record(
+            package_root,
+            files,
+            OCI_EXPORT_RECEIPT_FILENAME,
+            "offline server package OCI export receipt",
+            expected_uid=args.expected_owner_uid,
+            include_content=False,
+        )
+        expected_oci_export = {
+            "filename": OCI_EXPORT_RECEIPT_FILENAME,
+            "sha256": record["sha256"],
+            "size": record["size"],
+        }
+        if oci_export != expected_oci_export:
+            fail("offline server package OCI export binding differs from package bytes")
+        oci_export_evidence = expected_oci_export
+
+    connector = exact_keys(
+        manifest.get("connector_release"),
+        {
+            "source_repository",
+            "source_commit",
+            "version",
+            "tag",
+            "release_id",
+            "workflow_run_id",
+            "workflow_run_attempt",
+            "metadata",
+            "metadata_bundle",
+            "aggregate",
+            "aggregate_bundle",
+        },
+        "server package Connector release binding",
+    )
+    connector_names = {
+        "metadata": CONNECTOR_METADATA_FILENAME,
+        "metadata_bundle": CONNECTOR_METADATA_BUNDLE_FILENAME,
+        "aggregate": CONNECTOR_AGGREGATE_FILENAME,
+        "aggregate_bundle": CONNECTOR_AGGREGATE_BUNDLE_FILENAME,
+    }
+    connector_raw: dict[str, bytes] = {}
+    connector_records: dict[str, dict[str, Any]] = {}
+    for role, filename in connector_names.items():
+        package_record, raw = package_file_record(
+            package_root,
+            files,
+            filename,
+            f"packaged Connector {role}",
+            expected_uid=args.expected_owner_uid,
+        )
+        bound = connector.get(role)
+        expected_bound = {
+            "filename": filename,
+            "sha256": package_record["sha256"],
+            "size": package_record["size"],
+        }
+        if bound != expected_bound:
+            fail(f"Connector {role} binding differs from the package inventory")
+        connector_raw[role] = raw
+        connector_records[role] = expected_bound
+
+    metadata = connector_release_metadata(
+        strict_json_bytes(
+            connector_raw["metadata"], "packaged Connector release metadata", canonical=True
+        )
+    )
+    metadata_environment = os.environ.get("CONTROL_CONNECTOR_RELEASE_METADATA_JSON")
+    if metadata_environment is None or "\n" in metadata_environment or "\r" in metadata_environment:
+        fail("lifecycle-owned Connector release metadata environment is unset or multiline")
+    canonical_environment = json.dumps(
+        metadata,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    if metadata_environment != canonical_environment:
+        fail("Connector release metadata environment differs from packaged canonical bytes")
+    identity_fields = (
+        "source_repository",
+        "source_commit",
+        "version",
+        "tag",
+    )
+    if any(connector.get(key) != metadata.get(key) for key in identity_fields):
+        fail("Connector release identity differs between metadata and package manifest")
+    for key in ("release_id", "workflow_run_id", "workflow_run_attempt"):
+        if type(connector.get(key)) is not int or connector[key] <= 0:
+            fail("Connector public release identity is invalid")
+
+    aggregate = strict_json_bytes(
+        connector_raw["aggregate"], "packaged Connector verification aggregate", canonical=True
+    )
+    if not isinstance(aggregate, dict):
+        fail("Connector verification aggregate is not an object")
+    aggregate_release = aggregate.get("release")
+    aggregate_run = aggregate.get("verification_run")
+    aggregate_public = aggregate.get("public_release")
+    if (
+        not isinstance(aggregate_release, dict)
+        or not isinstance(aggregate_run, dict)
+        or not isinstance(aggregate_public, dict)
+        or any(aggregate_release.get(key) != connector.get(key) for key in identity_fields)
+        or aggregate_run.get("run_id") != connector.get("workflow_run_id")
+        or aggregate_run.get("run_attempt") != connector.get("workflow_run_attempt")
+        or aggregate_public.get("release_id") != connector.get("release_id")
+    ):
+        fail("Connector verification aggregate differs from the packaged release identity")
+
+    control = exact_keys(
+        manifest.get("control_release"),
+        {"evidence", "lock_sha256", "bundle_sha256"},
+        "embedded Control release binding",
+    )
+    evidence_value = control.get("evidence")
+    if not isinstance(evidence_value, dict) or not evidence_value:
+        fail("embedded Control release evidence inventory is empty")
+    evidence_sha256s: dict[str, str] = {}
+    for name, bound in evidence_value.items():
+        if not isinstance(name, str) or not isinstance(bound, dict):
+            fail("embedded Control release evidence inventory is invalid")
+        path = f"release/{name}"
+        record, _ = package_file_record(
+            package_root,
+            files,
+            path,
+            f"embedded Control release evidence {name}",
+            expected_uid=args.expected_owner_uid,
+            include_content=False,
+        )
+        if bound != {"filename": path, "sha256": record["sha256"], "size": record["size"]}:
+            fail("embedded Control evidence binding differs from package bytes")
+        evidence_sha256s[name] = record["sha256"]
+    lock_name = "control-images.lock.json"
+    bundle_name = "control-images.lock.sigstore.json"
+    if (
+        control.get("lock_sha256") != evidence_sha256s.get(lock_name)
+        or control.get("bundle_sha256") != evidence_sha256s.get(bundle_name)
+    ):
+        fail("embedded Control lock hashes are inconsistent")
+    _, lock_raw = package_file_record(
+        package_root,
+        files,
+        f"release/{lock_name}",
+        "embedded Control image lock",
+        expected_uid=args.expected_owner_uid,
+    )
+    lock = strict_json_bytes(lock_raw, "embedded Control image lock", canonical=True)
+    lock = exact_keys(
+        lock,
+        {
+            "$schema",
+            "format_version",
+            "release",
+            "release_tag",
+            "release_inputs",
+            "source",
+            "source_bundle",
+            "builder",
+            "images",
+        },
+        "embedded Control image lock",
+    )
+    if (
+        lock.get("format_version") != 1
+        or lock.get("release") != manifest.get("release")
+        or lock.get("release_tag") != manifest.get("release_tag")
+        or lock.get("source") != manifest.get("source")
+        or lock.get("source_bundle") != manifest.get("source_bundle")
+    ):
+        fail("embedded Control image lock differs from the package identity")
+    source = exact_keys(
+        lock.get("source"), {"repository", "commit", "ref"}, "Control release source"
+    )
+    if (
+        source.get("repository") != args.expected_source_repository
+        or source.get("commit") != args.expected_source_commit
+        or lock.get("release_tag") != args.expected_release_tag
+    ):
+        fail("server package differs from lifecycle-owned Control release identity")
+    release_inputs = exact_keys(
+        lock.get("release_inputs"), {"migration_head", "files"}, "Control release inputs"
+    )
+    input_hashes = release_inputs.get("files")
+    if not isinstance(input_hashes, dict) or any(
+        not isinstance(path, str)
+        or not isinstance(digest, str)
+        or SHA256_RE.fullmatch(digest) is None
+        for path, digest in input_hashes.items()
+    ):
+        fail("Control release input inventory is invalid")
+    versions_digest = input_hashes.get("versions.lock.json")
+    if not isinstance(versions_digest, str):
+        fail("Control release does not bind versions.lock.json")
+    versions_record, versions_raw = package_file_record(
+        package_root,
+        files,
+        "source/versions.lock.json",
+        "packaged versions lock",
+        expected_uid=args.expected_owner_uid,
+    )
+    if versions_record["sha256"] != versions_digest:
+        fail("packaged versions lock differs from the Control release input")
+    versions = strict_json_bytes(versions_raw, "packaged versions lock")
+    codex = versions.get("codex") if isinstance(versions, dict) else None
+    if (
+        not isinstance(codex, dict)
+        or codex.get("cli_version") != metadata.get("codex_version")
+        or codex.get("schema_sha256") != metadata.get("schema_digest")
+    ):
+        fail("Connector metadata Codex contract differs from packaged versions.lock.json")
+    auth_paths = sorted(
+        path
+        for path in input_hashes
+        if path.startswith("docs/contracts/sub2api-auth.") and path.endswith(".json")
+    )
+    if len(auth_paths) != 1:
+        fail("Control release input has no unique Sub2API auth contract")
+    auth_contract = auth_paths[0]
+    auth_record, _ = package_file_record(
+        package_root,
+        files,
+        f"source/{auth_contract}",
+        "packaged Sub2API auth contract",
+        expected_uid=args.expected_owner_uid,
+    )
+    if auth_record["sha256"] != input_hashes[auth_contract]:
+        fail("packaged Sub2API auth contract differs from the Control release input")
+
+    source_bundle = exact_keys(
+        lock.get("source_bundle"),
+        {"archive", "manifest", "attestation"},
+        "Control source bundle",
+    )
+    for role, bound in source_bundle.items():
+        if not isinstance(bound, dict) or set(bound) != {"filename", "sha256", "size"}:
+            fail("Control source bundle record is invalid")
+        record, _ = package_file_record(
+            package_root,
+            files,
+            f"release/{bound['filename']}",
+            f"Control source bundle {role}",
+            expected_uid=args.expected_owner_uid,
+            include_content=False,
+        )
+        if record["sha256"] != bound["sha256"] or record["size"] != bound["size"]:
+            fail("Control source bundle differs from the package inventory")
+
+    images = exact_keys(
+        lock.get("images"), {"control-api", "pwa", "postgres-tools"}, "Control images"
+    )
+    package_images = exact_keys(
+        manifest.get("images"),
+        {"control-api", "pwa", "postgres-tools"},
+        "server package images",
+    )
+    references: dict[str, str] = {}
+    package_image_evidence: dict[str, Any] = {}
+    for component, image in images.items():
+        if not isinstance(image, dict):
+            fail("Control image lock contains an invalid image")
+        reference = image.get("reference")
+        if not isinstance(reference, str) or DIGEST_REF_RE.fullmatch(reference) is None:
+            fail("Control image lock contains a mutable image reference")
+        package_image = package_images.get(component)
+        selected = (
+            package_image.get("locked_reference")
+            if isinstance(package_image, dict) and args.mode == "offline"
+            else package_image.get("reference") if isinstance(package_image, dict) else None
+        )
+        if selected != reference:
+            fail("server package image differs from the signed Control image lock")
+        digest = image.get("digest")
+        if not isinstance(digest, str) or reference.rsplit("@", 1)[-1] != digest:
+            fail("Control image lock digest and reference are inconsistent")
+        if args.mode == "offline":
+            package_image = exact_keys(
+                package_image,
+                {
+                    "acquisition",
+                    "archive",
+                    "identity",
+                    "locked_digest",
+                    "locked_reference",
+                },
+                f"offline server package image {component}",
+            )
+            if (
+                package_image.get("acquisition") != "offline-oci"
+                or package_image.get("locked_digest") != digest
+            ):
+                fail("offline server package image identity differs from the lock")
+            bound_records: dict[str, Any] = {}
+            for role, expected_name in (
+                ("archive", f"images/{component}.oci.tar"),
+                ("identity", f"images/{component}.identity.json"),
+            ):
+                bound = package_image.get(role)
+                if not isinstance(bound, dict) or set(bound) != {"filename", "sha256", "size"}:
+                    fail("offline server package image record is invalid")
+                record, _ = package_file_record(
+                    package_root,
+                    files,
+                    expected_name,
+                    f"offline {component} {role}",
+                    expected_uid=args.expected_owner_uid,
+                    include_content=role == "identity",
+                )
+                expected_bound = {
+                    "filename": expected_name,
+                    "sha256": record["sha256"],
+                    "size": record["size"],
+                }
+                if bound != expected_bound:
+                    fail("offline image record differs from exact package bytes")
+                bound_records[role] = expected_bound
+            package_image_evidence[component] = {
+                "locked_reference": reference,
+                "locked_digest": digest,
+                **bound_records,
+            }
+        else:
+            package_image = exact_keys(
+                package_image,
+                {"acquisition", "digest", "reference", "repository"},
+                f"online server package image {component}",
+            )
+            if (
+                package_image.get("acquisition") != "registry"
+                or package_image.get("digest") != digest
+            ):
+                fail("online server package image identity differs from the lock")
+            package_image_evidence[component] = {
+                "reference": reference,
+                "digest": digest,
+            }
+        references[component] = reference
+
+    return {
+        "CONTROL_API_IMAGE": references["control-api"],
+        "CONTROL_MIGRATION_HEAD": release_inputs["migration_head"],
+        "CONTROL_POSTGRES_TOOLS_IMAGE": references["postgres-tools"],
+        "CONTROL_PWA_IMAGE": references["pwa"],
+        "CONTROL_RELEASE": lock["release"],
+        "CONTROL_RELEASE_BUNDLE_SHA256": control["bundle_sha256"],
+        "CONTROL_RELEASE_EVIDENCE_SHA256S": evidence_sha256s,
+        "CONTROL_RELEASE_INPUT_SHA256S": input_hashes,
+        "CONTROL_RELEASE_LOCK_SHA256": control["lock_sha256"],
+        "CONTROL_SOURCE_REPOSITORY": source["repository"],
+        "CONTROL_SOURCE_ARCHIVE_SHA256": source_bundle["archive"]["sha256"],
+        "CONTROL_SOURCE_ATTESTATION_SHA256": source_bundle["attestation"]["sha256"],
+        "CONTROL_SOURCE_MANIFEST_SHA256": source_bundle["manifest"]["sha256"],
+        "CONTROL_SUB2API_AUTH_CONTRACT_PATH": auth_contract,
+        "CONTROL_SUB2API_AUTH_CONTRACT_SHA256": input_hashes[auth_contract],
+        "CONTROL_VCS_REF": source["commit"],
+        "CONTROL_VERSIONS_LOCK_SHA256": versions_digest,
+        "CONTROL_CONNECTOR_RELEASE_METADATA_SHA256": connector_records["metadata"]["sha256"],
+        "CONTROL_CONNECTOR_RELEASE_METADATA_JSON_SHA256": hashlib.sha256(
+            canonical_environment.encode("ascii")
+        ).hexdigest(),
+        "CONTROL_SERVER_PACKAGE_MANIFEST_SHA256": manifest_sha256,
+        "CONTROL_SERVER_PACKAGE_VERIFICATION_RECEIPT_SHA256": hashlib.sha256(
+            receipt_raw
+        ).hexdigest(),
+        "CONTROL_SERVER_PACKAGE_MODE": args.mode,
+        "CONTROL_SERVER_PACKAGE_DOCKER_HOST": LOCAL_DOCKER_HOST,
+        "_server_package": {
+            "manifest_path": str(manifest_path),
+            "manifest_sha256": manifest_sha256,
+            "verification_receipt_path": str(receipt_path),
+            "verification_receipt_sha256": hashlib.sha256(receipt_raw).hexdigest(),
+            "archive_sha256": receipt_package["sha256"],
+            "mode": args.mode,
+            "docker_host": LOCAL_DOCKER_HOST,
+            "oci_export": oci_export_evidence,
+            "images": package_image_evidence,
+            "connector_release": {
+                **{key: connector[key] for key in (*identity_fields, "release_id", "workflow_run_id", "workflow_run_attempt")},
+                **connector_records,
+            },
+        },
+    }
 
 
 def service(config: dict[str, Any], name: str) -> dict[str, Any]:
@@ -313,6 +1058,50 @@ def compose_plan(args: argparse.Namespace) -> dict[str, Any]:
         fail(
             "Control API instances and control-migrate do not have identical environments"
         )
+    connector_json = api_environment.get("CONTROL_CONNECTOR_RELEASE_METADATA_JSON")
+    if (
+        not isinstance(connector_json, str)
+        or not connector_json
+        or "\n" in connector_json
+        or "\r" in connector_json
+    ):
+        fail("packaged Connector release metadata is not projected into Control API")
+    connector_value = connector_release_metadata(
+        strict_json_bytes(
+            connector_json.encode("utf-8"),
+            "projected Connector release metadata",
+        )
+    )
+    canonical_connector_json = json.dumps(
+        connector_value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    if connector_json != canonical_connector_json:
+        fail("projected Connector release metadata is not canonical JSON")
+    connector_json_sha256 = hashlib.sha256(connector_json.encode("ascii")).hexdigest()
+    if (
+        verified_release.get("CONTROL_CONNECTOR_RELEASE_METADATA_JSON_SHA256")
+        != connector_json_sha256
+    ):
+        fail("projected Connector metadata differs from the verified server package")
+    server_package = verified_release.get("_server_package")
+    if (
+        not isinstance(server_package, dict)
+        or server_package.get("mode") not in {"online", "offline"}
+        or verified_release.get("CONTROL_SERVER_PACKAGE_MODE")
+        != server_package.get("mode")
+        or server_package.get("manifest_sha256")
+        != verified_release.get("CONTROL_SERVER_PACKAGE_MANIFEST_SHA256")
+        or server_package.get("verification_receipt_sha256")
+        != verified_release.get("CONTROL_SERVER_PACKAGE_VERIFICATION_RECEIPT_SHA256")
+        or server_package.get("docker_host") != LOCAL_DOCKER_HOST
+        or verified_release.get("CONTROL_SERVER_PACKAGE_DOCKER_HOST")
+        != LOCAL_DOCKER_HOST
+    ):
+        fail("signed release verification lacks a bound server package receipt")
     if api_environment.get("CONTROL_ENVIRONMENT") != "production":
         fail("CONTROL_ENVIRONMENT must resolve to production")
     if api_environment.get("CONTROL_SUB2API_BASE_URL") != "http://sub2api:8080":
@@ -324,6 +1113,29 @@ def compose_plan(args: argparse.Namespace) -> dict[str, Any]:
         )
     if api_environment.get("CONTROL_REDIS_AUTH_MODE") != "password":
         fail("normal production admission requires the dedicated Redis ACL password")
+    control_database_role = api_environment.get("CONTROL_DB_USER")
+    control_database_name = api_environment.get("CONTROL_DB_NAME")
+    control_redis_user = api_environment.get("CONTROL_REDIS_USER")
+    control_redis_prefix = api_environment.get("CONTROL_REDIS_PREFIX")
+    if (
+        not isinstance(control_database_role, str)
+        or REVISION_RE.fullmatch(control_database_role) is None
+        or not isinstance(control_database_name, str)
+        or REVISION_RE.fullmatch(control_database_name) is None
+        or not isinstance(args.sub2api_database, str)
+        or REVISION_RE.fullmatch(args.sub2api_database) is None
+        or control_database_name == args.sub2api_database
+    ):
+        fail("production PostgreSQL identities are not isolated safe identifiers")
+    if (
+        not isinstance(control_redis_user, str)
+        or control_redis_user in {"", "default"}
+        or re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", control_redis_user) is None
+        or not isinstance(control_redis_prefix, str)
+        or not control_redis_prefix
+        or any(character.isspace() for character in control_redis_prefix)
+    ):
+        fail("normal production admission requires a dedicated Redis user and prefix")
     database_keys = (
         "CONTROL_DATABASE_PASSWORD_FILE",
         "CONTROL_DB_HOST",
@@ -550,6 +1362,24 @@ def compose_plan(args: argparse.Namespace) -> dict[str, Any]:
         "pwa_network_driver": "bridge",
         "pwa_network_driver_opts": expected_pwa_driver_opts,
         "public_origin": public_origins,
+        "server_package": server_package,
+        "connector_release_metadata_sha256": connector_json_sha256,
+        "datastores": {
+            "postgres": {
+                "role": control_database_role,
+                "database": control_database_name,
+                "sub2api_database": args.sub2api_database,
+                "host": api_environment["CONTROL_DB_HOST"],
+                "port": api_environment["CONTROL_DB_PORT"],
+            },
+            "redis": {
+                "auth_mode": "password",
+                "user": control_redis_user,
+                "prefix": control_redis_prefix,
+                "host": api_environment.get("CONTROL_REDIS_HOST"),
+                "port": api_environment.get("CONTROL_REDIS_PORT"),
+            },
+        },
         "instances": {
             "control-api": {
                 "image_id_key": "api",
@@ -901,6 +1731,696 @@ def operator_directory(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def post_success_reverse_admission(args: argparse.Namespace) -> dict[str, Any]:
+    record_root = args.record_root
+    deployment_directory = args.deployment_directory
+    normalized_root = Path(os.path.normpath(str(record_root)))
+    normalized_deployment = Path(os.path.normpath(str(deployment_directory)))
+    if (
+        not record_root.is_absolute()
+        or not deployment_directory.is_absolute()
+        or record_root != normalized_root
+        or deployment_directory != normalized_deployment
+        or deployment_directory.parent != record_root
+        or re.fullmatch(
+            r"deployment-[0-9]{8}T[0-9]{6}Z-[0-9]+", deployment_directory.name
+        )
+        is None
+    ):
+        fail("post-success reverse directory is not one normalized deployment child")
+    if (
+        re.fullmatch(
+            r"lifecycle-post-success:[0-9]{8}T[0-9]{6}Z-[0-9]+-[0-9]+-"
+            r"(?:install|upgrade|rollback)-[0-9a-f]{32}",
+            args.trigger_stage,
+        )
+        is None
+    ):
+        fail("post-success reverse trigger is not one lifecycle operation id")
+
+    for path, label in (
+        (record_root, "deployment record root"),
+        (deployment_directory, "post-success deployment record directory"),
+    ):
+        descriptor, _ = open_stable_directory(
+            path,
+            label,
+            expected_uid=args.expected_owner_uid,
+            exact_mode=0o700,
+        )
+        os.close(descriptor)
+
+    terminal_path = deployment_directory / "reverse-execution.json"
+    if terminal_path.exists() or terminal_path.is_symlink():
+        fail("post-success bounded reverse already has terminal evidence")
+
+    def private_json(
+        filename: str, label: str, mode: int
+    ) -> tuple[dict[str, Any], bytes, Path]:
+        path = deployment_directory / filename
+        raw = secure_exact_bytes(
+            path,
+            label,
+            expected_uid=args.expected_owner_uid,
+            exact_mode=mode,
+        )
+        value = strict_json_bytes(raw, label, canonical=True)
+        if not isinstance(value, dict):
+            fail(f"{label} must be an object")
+        return value, raw, path
+
+    deployment, deployment_raw, deployment_path = private_json(
+        "deployment.json", "successful deployment record", 0o400
+    )
+    reverse_plan, reverse_raw, reverse_path = private_json(
+        "reverse-plan.json", "bounded reverse plan", 0o600
+    )
+    rollback_compose, rollback_raw, rollback_path = private_json(
+        "rollback-compose.json", "rollback Compose snapshot", 0o600
+    )
+    plan, plan_raw, _ = private_json("plan.json", "deployment plan", 0o600)
+    auth_evidence, _, auth_path = private_json(
+        "generated-auth-evidence.json", "generated authentication evidence", 0o600
+    )
+    compose_path = deployment_directory / "compose-config.json"
+    compose_raw = secure_exact_bytes(
+        compose_path,
+        "resolved Compose snapshot",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o600,
+    )
+    versions_path = deployment_directory / "versions.lock.json"
+    versions_raw = secure_exact_bytes(
+        versions_path,
+        "signed versions lock snapshot",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o600,
+    )
+    contract_path = deployment_directory / "sub2api-auth-contract.json"
+    contract_raw = secure_exact_bytes(
+        contract_path,
+        "signed Sub2API auth contract snapshot",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o600,
+    )
+
+    recovery = deployment.get("recovery")
+    reverse_record = (
+        recovery.get("bounded_reverse_plan") if isinstance(recovery, dict) else None
+    )
+    rollback_record = recovery.get("rollback_compose") if isinstance(recovery, dict) else None
+    limits = reverse_plan.get("limits")
+    bindings = reverse_plan.get("bindings")
+    steps = reverse_plan.get("reverse_steps")
+    source_revision = deployment.get("source_database_revision")
+    target_revision = deployment.get("target_migration_head")
+    if (
+        deployment.get("format_version") != 1
+        or deployment.get("status") != "deployed"
+        or not isinstance(source_revision, str)
+        or source_revision != target_revision
+        or deployment.get("deployed_database_revision") != target_revision
+        or not isinstance(reverse_record, dict)
+        or reverse_record.get("path") != str(reverse_path)
+        or reverse_record.get("sha256") != hashlib.sha256(reverse_raw).hexdigest()
+        or reverse_record.get("size") != len(reverse_raw)
+        or reverse_record.get("value") != reverse_plan
+        or not isinstance(rollback_record, dict)
+        or rollback_record.get("path") != str(rollback_path)
+        or rollback_record.get("sha256") != hashlib.sha256(rollback_raw).hexdigest()
+        or rollback_record.get("size") != len(rollback_raw)
+        or rollback_record.get("value") != rollback_compose
+        or not isinstance(limits, dict)
+        or reverse_plan.get("format_version") != 1
+        or limits.get("migration_required") is not False
+        or limits.get("automatic_reverse_on_failure") is not True
+        or limits.get("database_restore_requires_write_freeze") is not True
+        or limits.get("application_reverse_preserves_database") is not True
+        or limits.get("writer_exposure_after_database_mutation_allowed") is not False
+        or limits.get("database_restore_policy")
+        != "only-before-writer-exposure-after-observed-mutation"
+        or limits.get("max_attempts_per_step") != 1
+        or limits.get("post_reverse_verification_timeout_seconds") != 120
+        or type(limits.get("max_reverse_steps")) is not int
+        or not 5 <= limits["max_reverse_steps"] <= 8
+        or type(limits.get("total_timeout_seconds")) is not int
+        or not 1 <= limits["total_timeout_seconds"] <= 900
+        or reverse_plan.get("status") != "admitted"
+        or reverse_plan.get("type") != "production-bounded-reverse-plan-v1"
+        or not isinstance(bindings, dict)
+        or bindings.get("deployment_plan_sha256")
+        != hashlib.sha256(plan_raw).hexdigest()
+        or not isinstance(steps, list)
+        or len(steps) != 5
+        or any(not isinstance(step, dict) for step in steps)
+        or [step.get("ordinal") for step in steps] != [1, 2, 3, 4, 5]
+        or [step.get("timeout_seconds") for step in steps]
+        != [105, 360, 105, 105, 105]
+        or any(step.get("max_attempts") != 1 for step in steps)
+        or sum(step["timeout_seconds"] for step in steps) + 120
+        > limits["total_timeout_seconds"]
+        or steps[0].get("action") != "stop-database-mutators"
+        or steps[0].get("services")
+        != ["control-api", "control-api-replica", "control-migrate"]
+        or steps[1].get("action")
+        != "restore-control-database-from-premigration-dump"
+        or steps[1].get("condition")
+        != "database-mutated-and-writers-never-reexposed"
+        or steps[1].get("write_freeze_required") is not True
+        or [step.get("service") for step in steps[2:]]
+        != ["codex-pwa", "control-api", "control-api-replica"]
+        or any(
+            step.get("action") not in {"recreate-prior-service", "remove-new-service"}
+            for step in steps[2:]
+        )
+    ):
+        fail("post-success record has no admitted application-only bounded reverse")
+
+    sub2api_record = deployment.get("sub2api")
+    auth_record = (
+        sub2api_record.get("auth_evidence")
+        if isinstance(sub2api_record, dict)
+        else None
+    )
+    probe = auth_evidence.get("probe")
+    canonical_auth = json.dumps(
+        auth_evidence,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("ascii")
+    if (
+        plan.get("resolved_compose_sha256") != hashlib.sha256(compose_raw).hexdigest()
+        or deployment.get("resolved_compose_sha256")
+        != hashlib.sha256(compose_raw).hexdigest()
+        or plan.get("versions_lock_sha256") != hashlib.sha256(versions_raw).hexdigest()
+        or plan.get("auth_contract_sha256") != hashlib.sha256(contract_raw).hexdigest()
+        or not isinstance(auth_record, dict)
+        or not isinstance(probe, dict)
+        or auth_record.get("sha256") != hashlib.sha256(canonical_auth).hexdigest()
+        or auth_record.get("probe") != probe
+        or probe.get("base_url") != "http://127.0.0.1:8080"
+        or not isinstance(probe.get("nonce"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", probe["nonce"]) is None
+        or not isinstance(probe.get("expected_user_id"), str)
+        or not probe["expected_user_id"]
+        or len(probe["expected_user_id"]) > 256
+        or not isinstance(plan.get("compose_project"), str)
+        or not plan["compose_project"]
+        or not isinstance(plan.get("sub2api_network"), str)
+        or not plan["sub2api_network"]
+    ):
+        fail("post-success runtime evidence is not bound to the successful deployment")
+
+    return {
+        "format_version": 1,
+        "type": "production-post-success-reverse-admission-v1",
+        "status": "admitted",
+        "admitted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "trigger_stage": args.trigger_stage,
+        "deployment_record": {
+            "path": str(deployment_path),
+            "sha256": hashlib.sha256(deployment_raw).hexdigest(),
+        },
+        "reverse_plan": {
+            "path": str(reverse_path),
+            "sha256": hashlib.sha256(reverse_raw).hexdigest(),
+        },
+        "application_only": True,
+        "database_restore_allowed": False,
+        "database_revision": target_revision,
+        "compose_project": plan["compose_project"],
+        "sub2api_network": plan["sub2api_network"],
+        "auth_evidence": {
+            "path": str(auth_path),
+            "nonce": probe["nonce"],
+            "expected_user_id": probe["expected_user_id"],
+            "base_url": probe["base_url"],
+        },
+    }
+
+
+def bounded_uninstall_plan(args: argparse.Namespace) -> dict[str, Any]:
+    record_root = args.record_root
+    deployment_directory = args.deployment_directory
+    normalized_root = Path(os.path.normpath(str(record_root)))
+    normalized_deployment = Path(os.path.normpath(str(deployment_directory)))
+    if (
+        not record_root.is_absolute()
+        or not deployment_directory.is_absolute()
+        or record_root != normalized_root
+        or deployment_directory != normalized_deployment
+        or deployment_directory.parent != record_root
+        or re.fullmatch(
+            r"deployment-[0-9]{8}T[0-9]{6}Z-[0-9]+", deployment_directory.name
+        )
+        is None
+    ):
+        fail("bounded uninstall directory is not one normalized deployment child")
+    if (
+        re.fullmatch(
+            r"lifecycle-uninstall:[0-9]{8}T[0-9]{6}Z-[0-9]+-[0-9]+-"
+            r"uninstall-[0-9a-f]{32}",
+            args.trigger_stage,
+        )
+        is None
+    ):
+        fail("bounded uninstall trigger is not one lifecycle uninstall operation id")
+    for path, label in (
+        (record_root, "deployment record root"),
+        (deployment_directory, "bounded uninstall deployment record directory"),
+    ):
+        descriptor, _ = open_stable_directory(
+            path,
+            label,
+            expected_uid=args.expected_owner_uid,
+            exact_mode=0o700,
+        )
+        os.close(descriptor)
+    for terminal_name in ("uninstall-plan.json", "uninstall-execution.json"):
+        terminal_path = deployment_directory / terminal_name
+        if terminal_path.exists() or terminal_path.is_symlink():
+            fail(f"bounded uninstall terminal evidence already exists: {terminal_name}")
+
+    status_raw = secure_exact_bytes(
+        deployment_directory / "status",
+        "active deployment terminal status",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o600,
+        maximum=1024,
+    )
+    if status_raw != b"deployed\n":
+        fail("bounded uninstall requires one exact deployed terminal status")
+    deployment_path = deployment_directory / "deployment.json"
+    deployment_raw = secure_exact_bytes(
+        deployment_path,
+        "active deployment record",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o400,
+    )
+    deployment = strict_json_bytes(
+        deployment_raw, "active deployment record", canonical=True
+    )
+    if (
+        not isinstance(deployment, dict)
+        or deployment.get("format_version") != 1
+        or deployment.get("status") != "deployed"
+    ):
+        fail("bounded uninstall requires one supported deployed record")
+
+    release_path = deployment_directory / "release-verification.json"
+    release_raw = secure_exact_bytes(
+        release_path,
+        "active package release verification",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o600,
+    )
+    release = strict_json_bytes(
+        release_raw, "active package release verification", canonical=True
+    )
+    signed_release = deployment.get("signed_release")
+    if (
+        not isinstance(release, dict)
+        or not isinstance(signed_release, dict)
+        or signed_release.get("values") != release
+        or signed_release.get("sha256") != hashlib.sha256(release_raw).hexdigest()
+    ):
+        fail("active package verification is not bound by the deployment record")
+    package = release.get("_server_package")
+    if not isinstance(package, dict):
+        fail("active deployment has no server package identity")
+
+    manifest_path = args.manifest
+    receipt_path = args.verification_receipt
+    if (
+        not manifest_path.is_absolute()
+        or not receipt_path.is_absolute()
+        or manifest_path.name != "PACKAGE.json"
+    ):
+        fail("bounded uninstall package evidence paths are invalid")
+    package_root_metadata = manifest_path.parent.lstat()
+    if (
+        stat.S_ISLNK(package_root_metadata.st_mode)
+        or not stat.S_ISDIR(package_root_metadata.st_mode)
+        or package_root_metadata.st_uid != args.expected_owner_uid
+        or stat.S_IMODE(package_root_metadata.st_mode) != 0o555
+    ):
+        fail("bounded uninstall package root is not immutable and root-owned")
+    manifest_raw = secure_exact_bytes(
+        manifest_path,
+        "active server package manifest",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o444,
+    )
+    receipt_raw = secure_exact_bytes(
+        receipt_path,
+        "active server package verification receipt",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o400,
+    )
+    manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
+    receipt_sha256 = hashlib.sha256(receipt_raw).hexdigest()
+    manifest = strict_json_bytes(
+        manifest_raw, "active server package manifest", canonical=True
+    )
+    if (
+        not isinstance(manifest, dict)
+        or args.expected_manifest_sha256 != manifest_sha256
+        or package.get("manifest_path") != str(manifest_path)
+        or package.get("manifest_sha256") != manifest_sha256
+        or package.get("verification_receipt_path") != str(receipt_path)
+        or package.get("verification_receipt_sha256") != receipt_sha256
+        or package.get("mode") != args.mode
+        or package.get("docker_host") != LOCAL_DOCKER_HOST
+        or release.get("CONTROL_SERVER_PACKAGE_MANIFEST_SHA256") != manifest_sha256
+        or release.get("CONTROL_SERVER_PACKAGE_VERIFICATION_RECEIPT_SHA256")
+        != receipt_sha256
+        or release.get("CONTROL_SERVER_PACKAGE_MODE") != args.mode
+        or release.get("CONTROL_SERVER_PACKAGE_DOCKER_HOST") != LOCAL_DOCKER_HOST
+        or deployment.get("release") != manifest.get("release")
+        or release.get("CONTROL_RELEASE") != manifest.get("release")
+    ):
+        fail("active lifecycle package does not own this deployment record")
+
+    running = deployment.get("running")
+    terminal_containers = running.get("containers") if isinstance(running, dict) else None
+    terminal_network = running.get("pwa_network") if isinstance(running, dict) else None
+    if (
+        not isinstance(terminal_containers, dict)
+        or set(terminal_containers) != set(UNINSTALL_SERVICES)
+        or not isinstance(terminal_network, dict)
+    ):
+        fail("active deployment has no exact uninstall runtime identity")
+    compose_project = terminal_network.get("compose_project")
+    if (
+        not isinstance(compose_project, str)
+        or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", compose_project) is None
+    ):
+        fail("active deployment has no valid Compose project identity")
+
+    project_inspect_raw = secure_exact_bytes(
+        args.project_containers_inspect,
+        "bounded uninstall project container inspection",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o600,
+    )
+    project_inspect = strict_json_bytes(
+        project_inspect_raw, "bounded uninstall project container inspection"
+    )
+    if (
+        not isinstance(project_inspect, list)
+        or len(project_inspect) != len(UNINSTALL_SERVICES)
+        or any(not isinstance(item, dict) for item in project_inspect)
+    ):
+        fail("bounded uninstall requires exactly three active project containers")
+    live_by_service: dict[str, dict[str, Any]] = {}
+    observed_ids: set[str] = set()
+    for container in project_inspect:
+        config = container.get("Config")
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        service = labels.get("com.docker.compose.service") if isinstance(labels, dict) else None
+        container_id = container.get("Id")
+        container_name = container.get("Name")
+        if (
+            service not in UNINSTALL_SERVICES
+            or service in live_by_service
+            or not isinstance(labels, dict)
+            or labels.get("com.docker.compose.project") != compose_project
+            or labels.get("com.docker.compose.oneoff") != "False"
+            or labels.get("com.docker.compose.container-number") != "1"
+            or labels.get("com.docker.compose.project.config_files")
+            != str(deployment_directory / "compose-config.json")
+            or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in labels.items()
+            )
+            or not isinstance(container_id, str)
+            or CONTAINER_ID_RE.fullmatch(container_id) is None
+            or container_id in observed_ids
+            or not isinstance(container_name, str)
+            or not container_name.startswith("/")
+            or len(container_name) > 256
+        ):
+            fail("bounded uninstall found an unowned or duplicate project container")
+        live_by_service[service] = container
+        observed_ids.add(container_id)
+    if set(live_by_service) != set(UNINSTALL_SERVICES):
+        fail("bounded uninstall project container set is incomplete")
+
+    container_targets: dict[str, dict[str, Any]] = {}
+    for service in UNINSTALL_SERVICES:
+        terminal = exact_keys(
+            terminal_containers.get(service),
+            {
+                "container_id",
+                "container_name",
+                "image_id",
+                "health",
+                "network",
+                "published_port",
+                "compose_project",
+                "compose_service",
+                "compose_oneoff",
+                "labels",
+            },
+            f"active deployment terminal identity for {service}",
+        )
+        live = live_by_service[service]
+        state = live.get("State")
+        health = state.get("Health") if isinstance(state, dict) else None
+        host_config = live.get("HostConfig")
+        network_settings = live.get("NetworkSettings")
+        networks = (
+            network_settings.get("Networks")
+            if isinstance(network_settings, dict)
+            else None
+        )
+        expected_network = terminal.get("network")
+        expected_port_bindings = {
+            ("8080/tcp" if service == "codex-pwa" else "8090/tcp"): [
+                {"HostIp": "127.0.0.1", "HostPort": terminal.get("published_port")}
+            ]
+        }
+        if (
+            terminal.get("container_id") != live.get("Id")
+            or terminal.get("container_name") != live.get("Name")
+            or terminal.get("image_id") != live.get("Image")
+            or not isinstance(state, dict)
+            or state.get("Running") is not True
+            or not isinstance(health, dict)
+            or health.get("Status") != terminal.get("health")
+            or terminal.get("health") != "healthy"
+            or not isinstance(host_config, dict)
+            or host_config.get("PortBindings") != expected_port_bindings
+            or not isinstance(networks, dict)
+            or set(networks) != {expected_network}
+            or terminal.get("compose_project") != compose_project
+            or terminal.get("compose_service") != service
+            or terminal.get("compose_oneoff") is not False
+            or terminal.get("labels") != live.get("Config", {}).get("Labels")
+        ):
+            fail(f"bounded uninstall runtime drifted for {service}")
+        container_targets[service] = {
+            "container_id": live["Id"],
+            "container_name": live["Name"],
+            "image_id": live["Image"],
+            "compose_project": compose_project,
+            "compose_service": service,
+            "compose_oneoff": False,
+            "network": expected_network,
+            "labels": dict(live["Config"]["Labels"]),
+        }
+
+    network = require_pwa_network_inspect(
+        args.pwa_network_inspect,
+        expected_name=terminal_network.get("name"),
+        expected_project=compose_project,
+        pwa_container=live_by_service["codex-pwa"],
+    )
+    if network != terminal_network:
+        fail("bounded uninstall PWA network differs from terminal deployment evidence")
+    pwa_network_inspect = strict_json_bytes(
+        secure_exact_bytes(
+            args.pwa_network_inspect,
+            "bounded uninstall PWA network inspection",
+            expected_uid=args.expected_owner_uid,
+            exact_mode=0o600,
+        ),
+        "bounded uninstall PWA network inspection",
+    )
+    network_labels = pwa_network_inspect[0].get("Labels")
+    if not isinstance(network_labels, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in network_labels.items()
+    ):
+        fail("bounded uninstall PWA network has invalid full labels")
+
+    return {
+        "format_version": 1,
+        "type": "production-bounded-uninstall-plan-v1",
+        "status": "admitted",
+        "admitted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "trigger_stage": args.trigger_stage,
+        "deployment_record": {
+            "path": str(deployment_path),
+            "sha256": hashlib.sha256(deployment_raw).hexdigest(),
+        },
+        "active_package": {
+            "manifest_path": str(manifest_path),
+            "manifest_sha256": manifest_sha256,
+            "verification_receipt_path": str(receipt_path),
+            "verification_receipt_sha256": receipt_sha256,
+            "mode": args.mode,
+            "release": manifest["release"],
+            "release_tag": manifest["release_tag"],
+        },
+        "compose_project": compose_project,
+        "targets": {
+            "containers": container_targets,
+            "pwa_network": {
+                **network,
+                "compose_network": "pwa-network",
+                "labels": dict(network_labels),
+                "member_container_ids": [network["container_id"]],
+            },
+        },
+        "limits": {
+            "max_attempts_per_step": 1,
+            "total_timeout_seconds": 240,
+            "container_stop_timeout_seconds": 30,
+            "container_remove_timeout_seconds": 15,
+            "network_remove_timeout_seconds": 30,
+            "exact_ids_required": True,
+            "drift_fail_closed": True,
+        },
+        "one_off_containers_absent": True,
+        "preserved": dict(UNINSTALL_PRESERVED_RESOURCES),
+    }
+
+
+def bounded_uninstall_execution(args: argparse.Namespace) -> dict[str, Any]:
+    plan_raw = secure_exact_bytes(
+        args.plan,
+        "bounded uninstall plan",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o400,
+    )
+    plan = strict_json_bytes(plan_raw, "bounded uninstall plan", canonical=True)
+    if not isinstance(plan, dict):
+        fail("bounded uninstall plan must be an object")
+    deployment_record = plan.get("deployment_record")
+    targets = plan.get("targets")
+    containers = targets.get("containers") if isinstance(targets, dict) else None
+    network = targets.get("pwa_network") if isinstance(targets, dict) else None
+    limits = plan.get("limits")
+    if (
+        plan.get("format_version") != 1
+        or plan.get("type") != "production-bounded-uninstall-plan-v1"
+        or plan.get("status") != "admitted"
+        or plan.get("trigger_stage") != args.trigger_stage
+        or not isinstance(deployment_record, dict)
+        or not isinstance(containers, dict)
+        or set(containers) != set(UNINSTALL_SERVICES)
+        or not isinstance(network, dict)
+        or not isinstance(limits, dict)
+        or limits.get("max_attempts_per_step") != 1
+        or limits.get("total_timeout_seconds") != 240
+        or limits.get("container_stop_timeout_seconds") != 30
+        or limits.get("container_remove_timeout_seconds") != 15
+        or limits.get("network_remove_timeout_seconds") != 30
+        or limits.get("exact_ids_required") is not True
+        or limits.get("drift_fail_closed") is not True
+        or plan.get("one_off_containers_absent") is not True
+        or plan.get("preserved") != UNINSTALL_PRESERVED_RESOURCES
+        or args.project_containers_absent is not True
+        or args.pwa_network_absent is not True
+    ):
+        fail("bounded uninstall execution does not satisfy its admitted plan")
+    deployment_path = Path(deployment_record.get("path", ""))
+    if not deployment_path.is_absolute():
+        fail("bounded uninstall plan has no absolute deployment record")
+    deployment_raw = secure_exact_bytes(
+        deployment_path,
+        "bounded uninstall deployment record",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o400,
+    )
+    if deployment_record.get("sha256") != hashlib.sha256(deployment_raw).hexdigest():
+        fail("bounded uninstall deployment record changed after admission")
+
+    empty_network_raw = secure_exact_bytes(
+        args.empty_network_inspect,
+        "bounded uninstall empty PWA network inspection",
+        expected_uid=args.expected_owner_uid,
+        exact_mode=0o600,
+    )
+    empty_network_value = strict_json_bytes(
+        empty_network_raw, "bounded uninstall empty PWA network inspection"
+    )
+    if (
+        not isinstance(empty_network_value, list)
+        or len(empty_network_value) != 1
+        or not isinstance(empty_network_value[0], dict)
+        or empty_network_value[0].get("Id") != network.get("network_id")
+        or empty_network_value[0].get("Name") != network.get("name")
+        or empty_network_value[0].get("Labels") != network.get("labels")
+        or empty_network_value[0].get("Containers") != {}
+    ):
+        fail("bounded uninstall did not prove the exact PWA network was empty")
+
+    removed_containers = [
+        {
+            "service": service,
+            "container_id": containers[service]["container_id"],
+            "container_name": containers[service]["container_name"],
+            "image_id": containers[service]["image_id"],
+            "compose_project": containers[service]["compose_project"],
+            "compose_service": containers[service]["compose_service"],
+            "compose_oneoff": containers[service]["compose_oneoff"],
+            "network": containers[service]["network"],
+            "labels": dict(containers[service]["labels"]),
+        }
+        for service in UNINSTALL_SERVICES
+    ]
+    return {
+        "format_version": 1,
+        "type": "production-bounded-uninstall-execution-v1",
+        "status": "succeeded",
+        "trigger_stage": args.trigger_stage,
+        "uninstall_plan_path": str(args.plan),
+        "uninstall_plan_sha256": hashlib.sha256(plan_raw).hexdigest(),
+        "deployment_record": dict(deployment_record),
+        "active_package": dict(plan["active_package"]),
+        "removed": {
+            "containers": removed_containers,
+            "pwa_network": {
+                "network_id": network["network_id"],
+                "name": network["name"],
+                "labels": dict(network["labels"]),
+                "member_container_ids_at_admission": list(
+                    network["member_container_ids"]
+                ),
+                "members_after_container_removal": [],
+            },
+        },
+        "network_empty_evidence": {
+            "path": str(args.empty_network_inspect),
+            "sha256": hashlib.sha256(empty_network_raw).hexdigest(),
+        },
+        "postconditions": {
+            "project_containers_absent": True,
+            "one_off_containers_absent": True,
+            "pwa_network_zero_members_before_removal": True,
+            "pwa_network_absent": True,
+        },
+        "preserved": dict(UNINSTALL_PRESERVED_RESOURCES),
+        "bounded": True,
+        "max_attempts_per_step": 1,
+        "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    }
+
+
 def copy_to_private_destination(
     args: argparse.Namespace,
     *,
@@ -1194,6 +2714,554 @@ def revisions(args: argparse.Namespace) -> dict[str, Any]:
     return {"source_database_revision": current, "target_migration_head": head}
 
 
+def load_private_evidence(path: Path, label: str) -> tuple[dict[str, Any], str, int]:
+    descriptor, metadata = open_stable_regular_file(
+        path,
+        label,
+        expected_uid=os.geteuid(),
+        exact_mode=0o600,
+        max_size=MAX_JSON_INPUT_BYTES,
+    )
+    try:
+        raw = read_descriptor(descriptor, label, MAX_JSON_INPUT_BYTES)
+        digest = hashlib.sha256(raw).hexdigest()
+        assert_stable(descriptor, metadata, label)
+    finally:
+        os.close(descriptor)
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        fail(f"{label} is not valid JSON")
+    if not isinstance(value, dict):
+        fail(f"{label} is not an object")
+    return value, digest, metadata.st_size
+
+
+def receipt_timestamp(value: Any, label: str, maximum_age: int) -> str:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        fail(f"{label} has no UTC completion timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.removesuffix("Z") + "+00:00")
+    except ValueError:
+        fail(f"{label} completion timestamp is invalid")
+    age = (datetime.now(UTC) - parsed).total_seconds()
+    if age < -60 or age > maximum_age:
+        fail(f"{label} is not fresh for this deployment admission")
+    return value
+
+
+def current_control_evidence(
+    path: Path,
+) -> tuple[dict[str, dict[str, Any]], str, int]:
+    descriptor, metadata = open_stable_regular_file(
+        path,
+        "current Control container inspection",
+        expected_uid=os.geteuid(),
+        exact_mode=0o600,
+        max_size=MAX_JSON_INPUT_BYTES,
+    )
+    try:
+        raw = read_descriptor(descriptor, "current Control container inspection", MAX_JSON_INPUT_BYTES)
+        digest = hashlib.sha256(raw).hexdigest()
+        assert_stable(descriptor, metadata, "current Control container inspection")
+    finally:
+        os.close(descriptor)
+    value = strict_json_bytes(raw, "current Control container inspection")
+    if not isinstance(value, list):
+        fail("current Control container inspection is not an array")
+    allowed = {"control-api", "control-api-replica", "codex-pwa"}
+    identities: dict[str, dict[str, Any]] = {}
+    for container in value:
+        if not isinstance(container, dict):
+            fail("current Control container inspection contains a non-object")
+        config = container.get("Config")
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        service_name = (
+            labels.get("com.docker.compose.service") if isinstance(labels, dict) else None
+        )
+        state = container.get("State")
+        identity = {
+            "container_id": container.get("Id"),
+            "image_id": container.get("Image"),
+            "running": state.get("Running") if isinstance(state, dict) else None,
+            "started_at": state.get("StartedAt") if isinstance(state, dict) else None,
+            "restart_count": container.get("RestartCount"),
+        }
+        if (
+            service_name not in allowed
+            or service_name in identities
+            or not isinstance(identity["container_id"], str)
+            or CONTAINER_ID_RE.fullmatch(identity["container_id"]) is None
+            or not isinstance(identity["image_id"], str)
+            or IMAGE_ID_RE.fullmatch(identity["image_id"]) is None
+            or type(identity["running"]) is not bool
+            or not isinstance(identity["started_at"], str)
+            or not identity["started_at"]
+            or type(identity["restart_count"]) is not int
+            or identity["restart_count"] < 0
+        ):
+            fail("current Control container identity is invalid")
+        identities[service_name] = identity
+    return identities, digest, metadata.st_size
+
+
+def expected_writer_steps(
+    current: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "ordinal": ordinal,
+            "action": (
+                "require-absent"
+                if previous is None
+                else (
+                    "start-exact-prior-container"
+                    if previous["running"]
+                    else "keep-exact-prior-container-stopped"
+                )
+            ),
+            "service": service_name,
+            "previous": previous,
+            "max_attempts": 1,
+            "timeout_seconds": 60,
+        }
+        for ordinal, service_name in enumerate(WRITER_SERVICES, start=1)
+        for previous in (current.get(service_name),)
+    ]
+
+
+def validate_stopped_writer_evidence(
+    current: dict[str, dict[str, Any]],
+    observed: dict[str, dict[str, Any]],
+    label: str,
+) -> None:
+    if set(observed) - set(WRITER_SERVICES):
+        fail(f"{label} contains a non-writer service")
+    for service_name in WRITER_SERVICES:
+        previous = current.get(service_name)
+        stopped = observed.get(service_name)
+        if previous is None:
+            if stopped is not None:
+                fail(f"{label} created a previously absent writer")
+            continue
+        if (
+            stopped is None
+            or stopped.get("container_id") != previous.get("container_id")
+            or stopped.get("image_id") != previous.get("image_id")
+            or stopped.get("running") is not False
+            or stopped.get("started_at") != previous.get("started_at")
+            or stopped.get("restart_count") != previous.get("restart_count")
+        ):
+            fail(f"{label} does not preserve one exact stopped writer identity")
+
+
+def recovery_chain(args: argparse.Namespace, plan: dict[str, Any]) -> dict[str, Any]:
+    full_backup, full_backup_sha, full_backup_size = load_private_evidence(
+        args.full_backup, "full production backup admission"
+    )
+    if (
+        full_backup.get("status") != "admitted"
+        or full_backup.get("fresh") is not True
+        or full_backup.get("admission_mode") != "fresh-production-backup"
+        or full_backup.get("owner_uid") != os.geteuid()
+    ):
+        fail("normal deployment requires one fresh root-owned full backup admission")
+    receipt_timestamp(
+        full_backup.get("backup_created_at"),
+        "full production backup",
+        args.recovery_max_age_seconds,
+    )
+    artifacts = full_backup.get("artifacts")
+    required_backup_artifacts = {
+        "sub2api-postgres.dump",
+        "postgres-additional-databases.json",
+        "redis-logical.rdb",
+        "release-records.tar.gz",
+        "release-records-inventory.json",
+        "release-evidence-inventory.json",
+        "docker-network-inspect.json",
+        "docker-networks.json",
+    }
+    if not isinstance(artifacts, dict) or not required_backup_artifacts.issubset(artifacts):
+        fail("full production backup omits release-record or network recovery metadata")
+    restore, restore_sha, restore_size = load_private_evidence(
+        args.restore_receipt, "isolated restore receipt"
+    )
+    isolation, isolation_sha, isolation_size = load_private_evidence(
+        args.isolation_receipt, "live datastore isolation receipt"
+    )
+    unfreeze, unfreeze_sha, unfreeze_size = load_private_evidence(
+        args.writer_unfreeze_plan, "writer unfreeze plan"
+    )
+    freeze, freeze_sha, freeze_size = load_private_evidence(
+        args.writer_freeze_receipt, "writer freeze receipt"
+    )
+    reverse_plan, reverse_plan_sha, reverse_plan_size = load_private_evidence(
+        args.reverse_plan, "bounded reverse plan"
+    )
+    releases, releases_sha, _ = load_private_evidence(
+        args.releases, "release image evidence"
+    )
+    revisions_value, revisions_sha, _ = load_private_evidence(
+        args.revisions, "migration revision evidence"
+    )
+    premigration, premigration_sha, _ = load_private_evidence(
+        args.backup, "pre-migration backup evidence"
+    )
+    rollback_compose, rollback_compose_sha, rollback_compose_size = load_private_evidence(
+        args.rollback_compose, "rollback Compose snapshot"
+    )
+    current, current_sha, current_size = current_control_evidence(
+        args.current_control_containers
+    )
+    stopped_before, stopped_before_sha, stopped_before_size = current_control_evidence(
+        args.writers_stopped_before_backup
+    )
+    stopped_after, stopped_after_sha, stopped_after_size = current_control_evidence(
+        args.writers_stopped_after_backup
+    )
+    plan_sha = secure_file_sha256(args.plan, "deployment plan")
+    if (
+        restore.get("format_version") != 1
+        or restore.get("type") != "production-isolated-restore-v1"
+        or restore.get("status") != "succeeded"
+        or restore.get("backup_admission_sha256") != full_backup_sha
+        or restore.get("backup_receipt_sha256") != full_backup.get("receipt_sha256")
+        or restore.get("snapshot_manifest_sha256") != full_backup.get("manifest_sha256")
+        or restore.get("isolation", {}).get("docker_network_mode") != "none"
+        or restore.get("isolation", {}).get("published_ports") != 0
+        or restore.get("isolation", {}).get("temporary_containers_removed") is not True
+        or restore.get("postgresql", {}).get("restore_completed") is not True
+        or restore.get("redis", {}).get("restore_completed") is not True
+    ):
+        fail("isolated restore receipt is incomplete or belongs to another backup")
+    receipt_timestamp(
+        restore.get("completed_at"), "isolated restore receipt", args.recovery_max_age_seconds
+    )
+    postgres_isolation = isolation.get("postgresql")
+    redis_isolation = isolation.get("redis")
+    if (
+        isolation.get("format_version") != 1
+        or isolation.get("type") != "production-datastore-isolation-v1"
+        or isolation.get("status") != "passed"
+        or isolation.get("deployment_plan_sha256") != plan_sha
+        or isolation.get("backup_admission_sha256") != full_backup_sha
+        or isolation.get("backup_receipt_sha256") != full_backup.get("receipt_sha256")
+        or isolation.get("snapshot_manifest_sha256") != full_backup.get("manifest_sha256")
+        or not isinstance(postgres_isolation, dict)
+        or any(
+            postgres_isolation.get(key) is not True
+            for key in (
+                "role_flags_exact",
+                "database_owner_exact",
+                "schema_and_object_owners_exact",
+                "public_connect_revoked",
+                "control_to_sub2api_connect_denied",
+                "control_positive_connection",
+            )
+        )
+        or postgres_isolation.get("membership_count") != 0
+        or not isinstance(redis_isolation, dict)
+        or any(
+            redis_isolation.get(key) is not True
+            for key in (
+                "authenticated",
+                "acl_exact",
+                "aclfile_configured",
+                "anonymous_access_denied",
+                "enabled_nopass_users_absent",
+                "inside_prefix_read_write_passed",
+                "outside_prefix_read_denied",
+                "outside_prefix_write_denied",
+                "inside_channel_publish_passed",
+                "outside_channel_publish_denied",
+                "administrative_command_denied",
+            )
+        )
+    ):
+        fail("live datastore isolation receipt is incomplete or belongs to another plan")
+    receipt_timestamp(
+        isolation.get("completed_at"),
+        "live datastore isolation receipt",
+        args.recovery_max_age_seconds,
+    )
+    expected_unfreeze_steps = expected_writer_steps(current)
+    unfreeze_limits = unfreeze.get("limits")
+    if (
+        unfreeze.get("format_version") != 1
+        or unfreeze.get("type") != WRITER_UNFREEZE_PLAN_TYPE
+        or unfreeze.get("status") != "admitted"
+        or not isinstance(unfreeze_limits, dict)
+        or unfreeze_limits.get("max_steps") != len(WRITER_SERVICES)
+        or unfreeze_limits.get("max_attempts_per_step") != 1
+        or unfreeze_limits.get("post_unfreeze_verification_timeout_seconds")
+        != POST_UNFREEZE_VERIFY_TIMEOUT_SECONDS
+        or not isinstance(unfreeze_limits.get("total_timeout_seconds"), int)
+        or unfreeze_limits["total_timeout_seconds"]
+        != sum(step["timeout_seconds"] for step in expected_unfreeze_steps)
+        + POST_UNFREEZE_VERIFY_TIMEOUT_SECONDS
+        or unfreeze_limits.get("database_restore_allowed") is not False
+        or unfreeze_limits.get("exact_container_ids_required") is not True
+        or unfreeze.get("bindings", {}).get("current_control_containers_sha256")
+        != current_sha
+        or unfreeze.get("steps") != expected_unfreeze_steps
+    ):
+        fail("writer unfreeze plan is not bound to the exact prior container IDs")
+    receipt_timestamp(
+        unfreeze.get("created_at"),
+        "writer unfreeze plan",
+        args.recovery_max_age_seconds,
+    )
+    validate_stopped_writer_evidence(current, stopped_before, "pre-backup writer freeze")
+    validate_stopped_writer_evidence(current, stopped_after, "post-backup writer freeze")
+    if stopped_before != stopped_after:
+        fail("one Control writer changed during the final pre-migration backup")
+    expected_freeze_writers = {
+        service_name: {
+            "previous": current.get(service_name),
+            "stopped": stopped_after.get(service_name),
+        }
+        for service_name in WRITER_SERVICES
+    }
+    if (
+        freeze.get("format_version") != 1
+        or freeze.get("type") != WRITER_FREEZE_TYPE
+        or freeze.get("status") != "passed"
+        or freeze.get("bindings")
+        != {
+            "current_control_containers_sha256": current_sha,
+            "unfreeze_plan_sha256": unfreeze_sha,
+            "stopped_before_backup_sha256": stopped_before_sha,
+            "stopped_after_backup_sha256": stopped_after_sha,
+        }
+        or freeze.get("no_write_window")
+        != {
+            "all_writers_stopped": True,
+            "container_restart_observed": False,
+            "exact_container_ids_preserved": True,
+        }
+        or freeze.get("writers") != expected_freeze_writers
+    ):
+        fail("writer freeze receipt does not prove the final backup no-write window")
+    receipt_timestamp(
+        freeze.get("completed_at"),
+        "writer freeze receipt",
+        args.recovery_max_age_seconds,
+    )
+    expected_migration_required = (
+        revisions_value.get("source_database_revision")
+        != revisions_value.get("target_migration_head")
+    )
+    limits = reverse_plan.get("limits")
+    bindings = reverse_plan.get("bindings")
+    forward_steps = reverse_plan.get("forward_steps")
+    reverse_steps = reverse_plan.get("reverse_steps")
+    if (
+        reverse_plan.get("format_version") != 1
+        or reverse_plan.get("type") != "production-bounded-reverse-plan-v1"
+        or reverse_plan.get("status") != "admitted"
+        or not isinstance(limits, dict)
+        or limits.get("automatic_reverse_on_failure") is not True
+        or limits.get("database_restore_requires_write_freeze") is not True
+        or limits.get("database_restore_policy")
+        != "only-before-writer-exposure-after-observed-mutation"
+        or limits.get("writer_exposure_after_database_mutation_allowed") is not False
+        or limits.get("application_reverse_preserves_database") is not True
+        or limits.get("migration_required") is not expected_migration_required
+        or limits.get("post_reverse_verification_timeout_seconds")
+        != POST_REVERSE_VERIFY_TIMEOUT_SECONDS
+        or limits.get("max_attempts_per_step") != 1
+        or not isinstance(limits.get("max_reverse_steps"), int)
+        or not 1 <= limits["max_reverse_steps"] <= 8
+        or not isinstance(limits.get("total_timeout_seconds"), int)
+        or not 1 <= limits["total_timeout_seconds"] <= 900
+        or not isinstance(bindings, dict)
+        or bindings.get("deployment_plan_sha256") != plan_sha
+        or bindings.get("release_images_sha256")
+        != releases_sha
+        or bindings.get("revisions_sha256")
+        != revisions_sha
+        or bindings.get("premigration_backup_sha256")
+        != premigration_sha
+        or bindings.get("full_backup_admission_sha256") != full_backup_sha
+        or bindings.get("isolated_restore_receipt_sha256") != restore_sha
+        or bindings.get("datastore_isolation_receipt_sha256") != isolation_sha
+        or bindings.get("writer_unfreeze_plan_sha256") != unfreeze_sha
+        or bindings.get("writer_freeze_receipt_sha256") != freeze_sha
+        or bindings.get("current_control_containers_sha256") != current_sha
+        or bindings.get("rollback_compose_sha256")
+        != rollback_compose_sha
+        or not isinstance(forward_steps, list)
+        or len(forward_steps) != 4
+        or not isinstance(reverse_steps, list)
+        or not 1 <= len(reverse_steps) <= limits["max_reverse_steps"]
+        or [step.get("ordinal") for step in forward_steps if isinstance(step, dict)]
+        != list(range(1, len(forward_steps) + 1))
+        or [step.get("ordinal") for step in reverse_steps if isinstance(step, dict)]
+        != list(range(1, len(reverse_steps) + 1))
+    ):
+        fail("bounded reverse plan is incomplete or belongs to another admission")
+    try:
+        api_image_id = releases["api"]["image_id"]
+        pwa_image_id = releases["pwa"]["image_id"]
+        source_revision = revisions_value["source_database_revision"]
+        target_revision = revisions_value["target_migration_head"]
+        dump_path = premigration["dump_path"]
+        dump_sha256 = premigration["dump_sha256"]
+    except (KeyError, TypeError):
+        fail("bounded reverse plan evidence has no exact release or database identity")
+    if (
+        not isinstance(api_image_id, str)
+        or IMAGE_ID_RE.fullmatch(api_image_id) is None
+        or not isinstance(pwa_image_id, str)
+        or IMAGE_ID_RE.fullmatch(pwa_image_id) is None
+        or not isinstance(source_revision, str)
+        or not isinstance(target_revision, str)
+        or not isinstance(dump_path, str)
+        or not Path(dump_path).is_absolute()
+        or not isinstance(dump_sha256, str)
+        or SHA256_RE.fullmatch(dump_sha256) is None
+    ):
+        fail("bounded reverse plan evidence contains an invalid exact identity")
+    expected_forward = [
+        {
+            "ordinal": 1,
+            "action": "apply-admitted-migration",
+            "from_revision": source_revision,
+            "to_revision": target_revision,
+            "timeout_seconds": 180,
+        },
+        {
+            "ordinal": 2,
+            "action": "recreate-one-service",
+            "service": "control-api-replica",
+            "new_image_id": api_image_id,
+            "timeout_seconds": 120,
+        },
+        {
+            "ordinal": 3,
+            "action": "recreate-one-service",
+            "service": "control-api",
+            "new_image_id": api_image_id,
+            "timeout_seconds": 120,
+        },
+        {
+            "ordinal": 4,
+            "action": "recreate-one-service",
+            "service": "codex-pwa",
+            "new_image_id": pwa_image_id,
+            "timeout_seconds": 120,
+        },
+    ]
+    expected_reverse: list[dict[str, Any]] = [
+        {
+            "ordinal": 1,
+            "action": "stop-database-mutators",
+            "services": ["control-api", "control-api-replica", "control-migrate"],
+            "max_attempts": 1,
+            "timeout_seconds": 105,
+        },
+        {
+            "ordinal": 2,
+            "action": "restore-control-database-from-premigration-dump",
+            "max_attempts": 1,
+            "timeout_seconds": 360,
+            "write_freeze_required": True,
+            "condition": "database-mutated-and-writers-never-reexposed",
+            "dump_path": dump_path,
+            "dump_sha256": dump_sha256,
+        },
+    ]
+    for ordinal, service_name in enumerate(
+        ("codex-pwa", "control-api", "control-api-replica"), start=3
+    ):
+        previous = current.get(service_name)
+        expected_reverse.append(
+            {
+                "ordinal": ordinal,
+                "action": "recreate-prior-service" if previous else "remove-new-service",
+                "service": service_name,
+                "previous": previous,
+                "max_attempts": 1,
+                "timeout_seconds": 105,
+            }
+        )
+    if forward_steps != expected_forward or reverse_steps != expected_reverse:
+        fail("bounded reverse plan steps do not match exact old and new identities")
+    if (
+        sum(step["timeout_seconds"] for step in expected_reverse)
+        + POST_REVERSE_VERIFY_TIMEOUT_SECONDS
+        > limits["total_timeout_seconds"]
+    ):
+        fail("bounded reverse plan timeout does not include post-reverse verification")
+    rollback_services = rollback_compose.get("services")
+    if not isinstance(rollback_services, dict):
+        fail("rollback Compose snapshot has no service map")
+    for service_name in ("control-api", "control-api-replica", "codex-pwa"):
+        service_value = rollback_services.get(service_name)
+        if not isinstance(service_value, dict):
+            fail("rollback Compose snapshot omits one Control service")
+        previous = current.get(service_name)
+        expected_image = (
+            previous["image_id"]
+            if previous is not None
+            else pwa_image_id if service_name == "codex-pwa" else api_image_id
+        )
+        if service_value.get("image") != expected_image:
+            fail("rollback Compose snapshot is not bound to the exact prior image")
+    receipt_timestamp(
+        reverse_plan.get("created_at"), "bounded reverse plan", args.recovery_max_age_seconds
+    )
+
+    def evidence(path: Path, digest: str, size: int, value: dict[str, Any]) -> dict[str, Any]:
+        return {"path": str(path), "sha256": digest, "size": size, "value": value}
+
+    return {
+        "full_backup": evidence(
+            args.full_backup, full_backup_sha, full_backup_size, full_backup
+        ),
+        "isolated_restore": evidence(
+            args.restore_receipt, restore_sha, restore_size, restore
+        ),
+        "datastore_isolation": evidence(
+            args.isolation_receipt, isolation_sha, isolation_size, isolation
+        ),
+        "writer_unfreeze_plan": evidence(
+            args.writer_unfreeze_plan, unfreeze_sha, unfreeze_size, unfreeze
+        ),
+        "writer_freeze": evidence(
+            args.writer_freeze_receipt, freeze_sha, freeze_size, freeze
+        ),
+        "writers_stopped_before_backup": {
+            "path": str(args.writers_stopped_before_backup),
+            "sha256": stopped_before_sha,
+            "size": stopped_before_size,
+            "identities": stopped_before,
+        },
+        "writers_stopped_after_backup": {
+            "path": str(args.writers_stopped_after_backup),
+            "sha256": stopped_after_sha,
+            "size": stopped_after_size,
+            "identities": stopped_after,
+        },
+        "bounded_reverse_plan": evidence(
+            args.reverse_plan, reverse_plan_sha, reverse_plan_size, reverse_plan
+        ),
+        "current_control_containers": {
+            "path": str(args.current_control_containers),
+            "sha256": current_sha,
+            "size": current_size,
+            "identities": current,
+        },
+        "rollback_compose": evidence(
+            args.rollback_compose,
+            rollback_compose_sha,
+            rollback_compose_size,
+            rollback_compose,
+        ),
+    }
+
+
 def deployment_record(args: argparse.Namespace) -> dict[str, Any]:
     plan = load_json(args.plan, "deployment plan")
     releases = load_json(args.releases, "release image evidence")
@@ -1218,6 +3286,7 @@ def deployment_record(args: argparse.Namespace) -> dict[str, Any]:
     )
     if plan.get("resolved_compose_sha256") != resolved_compose_sha256:
         fail("resolved Compose snapshot changed after admission")
+    recovery = recovery_chain(args, plan)
     record = {
         "format_version": 1,
         "status": args.status,
@@ -1237,6 +3306,7 @@ def deployment_record(args: argparse.Namespace) -> dict[str, Any]:
         "images": releases,
         "sub2api": sub2api,
         "backup": backup,
+        "recovery": recovery,
     }
     if args.status == "deployed":
         if args.running is None or args.smoke is None or args.deployed_revision is None:
@@ -1337,6 +3407,10 @@ def require_pwa_network_inspect(
         or not isinstance(labels, dict)
         or labels.get("com.docker.compose.project") != expected_project
         or labels.get("com.docker.compose.network") != "pwa-network"
+        or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in labels.items()
+        )
     ):
         fail("running PWA network does not retain the admitted bridge boundary")
     container_id = pwa_container.get("Id")
@@ -1378,6 +3452,9 @@ def require_pwa_network_inspect(
         "enable_ipv6": False,
         "options": expected_options,
         "container_id": container_id,
+        "compose_network": "pwa-network",
+        "labels": dict(labels),
+        "member_container_ids": [container_id],
     }
 
 
@@ -1389,6 +3466,12 @@ def running_containers(args: argparse.Namespace) -> dict[str, Any]:
     expected_instances = plan.get("instances")
     if not isinstance(expected_instances, dict):
         fail("deployment plan has no admitted instance set")
+    compose_project = plan.get("compose_project")
+    if (
+        not isinstance(compose_project, str)
+        or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", compose_project) is None
+    ):
+        fail("deployment plan has no admitted Compose project")
     result: dict[str, Any] = {"format_version": 1, "containers": {}}
     observed_containers: dict[str, dict[str, Any]] = {}
     observed_ids: set[str] = set()
@@ -1416,6 +3499,26 @@ def running_containers(args: argparse.Namespace) -> dict[str, Any]:
             fail("two admitted services unexpectedly resolve to one container")
         observed_ids.add(container_id)
         observed_containers[label] = container
+        config = container.get("Config")
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        container_name = container.get("Name")
+        if (
+            not isinstance(labels, dict)
+            or labels.get("com.docker.compose.project") != compose_project
+            or labels.get("com.docker.compose.service") != label
+            or labels.get("com.docker.compose.oneoff") != "False"
+            or labels.get("com.docker.compose.container-number") != "1"
+            or labels.get("com.docker.compose.project.config_files")
+            != str(args.plan.parent / "compose-config.json")
+            or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in labels.items()
+            )
+            or not isinstance(container_name, str)
+            or not container_name.startswith("/")
+            or len(container_name) > 256
+        ):
+            fail(f"running {label} has no exact Compose-owned identity")
         host_config = container.get("HostConfig")
         if (
             not isinstance(host_config, dict)
@@ -1467,18 +3570,20 @@ def running_containers(args: argparse.Namespace) -> dict[str, Any]:
             fail(f"running {label} does not expose exactly the admitted runtime port")
         result["containers"][label] = {
             "container_id": container_id,
+            "container_name": container_name,
             "image_id": expected_image_id,
             "health": "healthy",
             "network": expected["network"],
             "published_port": str(published_port),
+            "compose_project": compose_project,
+            "compose_service": label,
+            "compose_oneoff": False,
+            "labels": dict(labels),
         }
     pwa_instance = result["containers"].get("codex-pwa")
     pwa_network_name = plan.get("pwa_network")
     if not isinstance(pwa_instance, dict) or not isinstance(pwa_network_name, str):
         fail("deployment plan has no admitted PWA network instance")
-    compose_project = plan.get("compose_project")
-    if not isinstance(compose_project, str) or not compose_project:
-        fail("deployment plan has no admitted Compose project")
     result["pwa_network"] = require_pwa_network_inspect(
         args.pwa_network_inspect,
         expected_name=pwa_network_name,
@@ -1522,7 +3627,19 @@ def parse_args() -> argparse.Namespace:
     compose_parser.add_argument("--versions-lock", type=Path, required=True)
     compose_parser.add_argument("--source-repository", required=True)
     compose_parser.add_argument("--repo-root", type=Path, required=True)
+    compose_parser.add_argument("--sub2api-database", default="sub2api")
     compose_parser.set_defaults(handler=compose_plan)
+
+    package_parser = commands.add_parser("server-package-release")
+    package_parser.add_argument("--manifest", type=Path, required=True)
+    package_parser.add_argument("--verification-receipt", type=Path, required=True)
+    package_parser.add_argument("--expected-manifest-sha256", required=True)
+    package_parser.add_argument("--mode", choices=("online", "offline"), required=True)
+    package_parser.add_argument("--expected-source-repository", required=True)
+    package_parser.add_argument("--expected-source-commit", required=True)
+    package_parser.add_argument("--expected-release-tag", required=True)
+    package_parser.add_argument("--expected-owner-uid", type=int, default=0)
+    package_parser.set_defaults(handler=server_package_release)
 
     images_parser = commands.add_parser("release-images")
     images_parser.add_argument("--plan", type=Path, required=True)
@@ -1555,6 +3672,23 @@ def parse_args() -> argparse.Namespace:
     record_parser.add_argument("--release-verification", type=Path, required=True)
     record_parser.add_argument("--compose-config", type=Path, required=True)
     record_parser.add_argument("--smoke-input", type=Path, required=True)
+    record_parser.add_argument("--full-backup", type=Path, required=True)
+    record_parser.add_argument("--restore-receipt", type=Path, required=True)
+    record_parser.add_argument("--isolation-receipt", type=Path, required=True)
+    record_parser.add_argument("--writer-unfreeze-plan", type=Path, required=True)
+    record_parser.add_argument("--writer-freeze-receipt", type=Path, required=True)
+    record_parser.add_argument(
+        "--writers-stopped-before-backup", type=Path, required=True
+    )
+    record_parser.add_argument(
+        "--writers-stopped-after-backup", type=Path, required=True
+    )
+    record_parser.add_argument("--reverse-plan", type=Path, required=True)
+    record_parser.add_argument("--rollback-compose", type=Path, required=True)
+    record_parser.add_argument("--current-control-containers", type=Path, required=True)
+    record_parser.add_argument(
+        "--recovery-max-age-seconds", type=int, default=1800
+    )
     record_parser.add_argument(
         "--status", choices=("admitted_for_migration", "deployed"), required=True
     )
@@ -1587,6 +3721,59 @@ def parse_args() -> argparse.Namespace:
     directory_parser.add_argument("--directory", type=Path, required=True)
     directory_parser.add_argument("--label", required=True)
     directory_parser.set_defaults(handler=operator_directory)
+
+    reverse_admission_parser = commands.add_parser("post-success-reverse")
+    reverse_admission_parser.add_argument(
+        "--deployment-directory", type=Path, required=True
+    )
+    reverse_admission_parser.add_argument("--record-root", type=Path, required=True)
+    reverse_admission_parser.add_argument("--trigger-stage", required=True)
+    reverse_admission_parser.add_argument(
+        "--expected-owner-uid", type=int, required=True
+    )
+    reverse_admission_parser.set_defaults(handler=post_success_reverse_admission)
+
+    uninstall_plan_parser = commands.add_parser("bounded-uninstall-plan")
+    uninstall_plan_parser.add_argument(
+        "--deployment-directory", type=Path, required=True
+    )
+    uninstall_plan_parser.add_argument("--record-root", type=Path, required=True)
+    uninstall_plan_parser.add_argument("--trigger-stage", required=True)
+    uninstall_plan_parser.add_argument("--manifest", type=Path, required=True)
+    uninstall_plan_parser.add_argument(
+        "--verification-receipt", type=Path, required=True
+    )
+    uninstall_plan_parser.add_argument("--expected-manifest-sha256", required=True)
+    uninstall_plan_parser.add_argument(
+        "--mode", choices=("online", "offline"), required=True
+    )
+    uninstall_plan_parser.add_argument(
+        "--project-containers-inspect", type=Path, required=True
+    )
+    uninstall_plan_parser.add_argument(
+        "--pwa-network-inspect", type=Path, required=True
+    )
+    uninstall_plan_parser.add_argument(
+        "--expected-owner-uid", type=int, required=True
+    )
+    uninstall_plan_parser.set_defaults(handler=bounded_uninstall_plan)
+
+    uninstall_execution_parser = commands.add_parser("bounded-uninstall-execution")
+    uninstall_execution_parser.add_argument("--plan", type=Path, required=True)
+    uninstall_execution_parser.add_argument("--trigger-stage", required=True)
+    uninstall_execution_parser.add_argument(
+        "--empty-network-inspect", type=Path, required=True
+    )
+    uninstall_execution_parser.add_argument(
+        "--project-containers-absent", action="store_true"
+    )
+    uninstall_execution_parser.add_argument(
+        "--pwa-network-absent", action="store_true"
+    )
+    uninstall_execution_parser.add_argument(
+        "--expected-owner-uid", type=int, required=True
+    )
+    uninstall_execution_parser.set_defaults(handler=bounded_uninstall_execution)
 
     copy_parser = commands.add_parser("copy-private-file")
     copy_parser.add_argument("--source", type=Path, required=True)

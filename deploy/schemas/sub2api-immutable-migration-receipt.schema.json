@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/sub2api-immutable-migration-receipt.schema.json",
+  "title": "Sub2API immutable migration receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "transaction_id",
+    "completed_at",
+    "status",
+    "old_container",
+    "new_container",
+    "data_mount",
+    "network",
+    "operation_lock",
+    "backup",
+    "compose",
+    "runtime_attestation",
+    "rollback"
+  ],
+  "properties": {
+    "format_version": { "const": 1 },
+    "transaction_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[1-9][0-9]*$"
+    },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "status": { "const": "immutable_candidate_running" },
+    "old_container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "image_id", "rollback_image_id", "state"],
+      "properties": {
+        "id": { "$ref": "#/$defs/containerId" },
+        "image_id": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "rollback_image_id": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "state": { "const": "snapshotted_and_removed" }
+      }
+    },
+    "new_container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "image", "image_id", "state"],
+      "properties": {
+        "id": { "$ref": "#/$defs/containerId" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "image": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$"
+        },
+        "image_id": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "state": { "const": "healthy" }
+      }
+    },
+    "data_mount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "source",
+        "destination",
+        "read_write",
+        "propagation",
+        "source_uid",
+        "source_gid",
+        "source_mode"
+      ],
+      "properties": {
+        "type": { "const": "bind" },
+        "source": { "type": "string", "pattern": "^/" },
+        "destination": { "const": "/app/data" },
+        "read_write": { "const": true },
+        "propagation": { "const": "rprivate" },
+        "source_uid": { "type": "integer", "minimum": 1 },
+        "source_gid": { "type": "integer", "minimum": 1 },
+        "source_mode": { "enum": ["0700", "0750", "0755"] }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "alias", "published_endpoint"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "alias": { "type": "string", "minLength": 1 },
+        "published_endpoint": { "const": "127.0.0.1:8080" }
+      }
+    },
+    "operation_lock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "identity", "held_while_receipt_written"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/.*/\\.sub2api-immutable-operation\\.lock$"
+        },
+        "identity": { "type": "string", "pattern": "^[0-9]+:[0-9]+$" },
+        "held_while_receipt_written": { "const": true }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ready_receipt",
+        "ready_receipt_sha256",
+        "live_archive",
+        "live_archive_sha256",
+        "quiesced_archive",
+        "quiesced_archive_sha256",
+        "runtime_environment",
+        "runtime_environment_sha256"
+      ],
+      "properties": {
+        "ready_receipt": { "$ref": "#/$defs/artifactName" },
+        "ready_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "live_archive": { "$ref": "#/$defs/artifactName" },
+        "live_archive_sha256": { "$ref": "#/$defs/sha256" },
+        "quiesced_archive": { "$ref": "#/$defs/artifactName" },
+        "quiesced_archive_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_environment": { "$ref": "#/$defs/artifactName" },
+        "runtime_environment_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "compose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_path",
+        "previous_artifact",
+        "previous_sha256",
+        "previous_mode",
+        "installed_artifact",
+        "installed_sha256",
+        "environment_artifact",
+        "environment_sha256",
+        "resolved_artifact",
+        "resolved_sha256",
+        "project",
+        "service",
+        "service_projection_sha256",
+        "rollback_override_artifact",
+        "rollback_override_sha256"
+      ],
+      "properties": {
+        "active_path": { "type": "string", "pattern": "^/" },
+        "previous_artifact": { "$ref": "#/$defs/artifactName" },
+        "previous_sha256": { "$ref": "#/$defs/sha256" },
+        "previous_mode": {
+          "enum": ["0400", "0440", "0444", "0600", "0640", "0644"]
+        },
+        "installed_artifact": { "$ref": "#/$defs/artifactName" },
+        "installed_sha256": { "$ref": "#/$defs/sha256" },
+        "environment_artifact": { "$ref": "#/$defs/artifactName" },
+        "environment_sha256": { "$ref": "#/$defs/sha256" },
+        "resolved_artifact": { "$ref": "#/$defs/artifactName" },
+        "resolved_sha256": { "$ref": "#/$defs/sha256" },
+        "project": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+        "service": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+        "service_projection_sha256": { "$ref": "#/$defs/sha256" },
+        "rollback_override_artifact": { "$ref": "#/$defs/artifactName" },
+        "rollback_override_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "runtime_attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "container_inspect",
+        "container_inspect_sha256",
+        "image_inspect",
+        "image_inspect_sha256",
+        "rollback_image_inspect",
+        "rollback_image_inspect_sha256"
+      ],
+      "properties": {
+        "path": { "$ref": "#/$defs/artifactName" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "container_inspect": { "$ref": "#/$defs/artifactName" },
+        "container_inspect_sha256": { "$ref": "#/$defs/sha256" },
+        "image_inspect": { "$ref": "#/$defs/artifactName" },
+        "image_inspect_sha256": { "$ref": "#/$defs/sha256" },
+        "rollback_image_inspect": { "$ref": "#/$defs/artifactName" },
+        "rollback_image_inspect_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "automatic_data_restore",
+        "candidate_id_must_match",
+        "rollback_image_id_must_match"
+      ],
+      "properties": {
+        "automatic_data_restore": { "const": false },
+        "candidate_id_must_match": { "$ref": "#/$defs/containerId" },
+        "rollback_image_id_must_match": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "containerId": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifactName": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    }
+  }
+}

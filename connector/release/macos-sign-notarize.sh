@@ -212,6 +212,7 @@ for target in darwin-amd64 darwin-arm64; do
     --stapler-report "$staple_report" \
     --gatekeeper-report "$gatekeeper_report" \
     --expected-team-id "$MACOS_EXPECTED_TEAM_ID" \
+    --expected-application-identity "$MACOS_EXPECTED_APPLICATION_IDENTITY" \
     --expected-installer-identity "$MACOS_EXPECTED_INSTALLER_IDENTITY"
 done
 

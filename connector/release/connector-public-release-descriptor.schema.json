@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api-codex.invalid/schemas/connector-public-release-descriptor-v1.json",
+  "title": "Sub2API Codex Connector immutable GitHub release descriptor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format_version",
+    "kind",
+    "source_repository",
+    "source_commit",
+    "version",
+    "tag",
+    "release_id",
+    "workflow_run_id",
+    "workflow_run_attempt",
+    "published_at",
+    "draft",
+    "prerelease",
+    "immutable",
+    "core_assets",
+    "vulnerability_assets",
+    "assets"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://sub2api-codex.invalid/schemas/connector-public-release-descriptor-v1.json"
+    },
+    "format_version": { "const": 1 },
+    "kind": { "const": "github-public-immutable-release" },
+    "source_repository": {
+      "const": "https://github.com/peter2317238492/sub2api-codex-control"
+    },
+    "source_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "tag": { "type": "string", "pattern": "^connector-v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "release_id": { "type": "integer", "minimum": 1 },
+    "workflow_run_id": { "type": "integer", "minimum": 1 },
+    "workflow_run_attempt": { "type": "integer", "minimum": 1 },
+    "published_at": { "type": "string", "format": "date-time", "pattern": "Z$" },
+    "draft": { "const": false },
+    "prerelease": { "const": false },
+    "immutable": { "const": true },
+    "core_assets": {
+      "type": "array",
+      "minItems": 92,
+      "maxItems": 92,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/asset" }
+    },
+    "vulnerability_assets": {
+      "type": "array",
+      "minItems": 43,
+      "maxItems": 43,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/asset" }
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 135,
+      "maxItems": 135,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/asset" }
+    }
+  },
+  "$defs": {
+    "filename": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "size", "digest", "state", "browser_download_url"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "name": { "$ref": "#/$defs/filename" },
+        "size": { "type": "integer", "minimum": 0 },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "state": { "const": "uploaded" },
+        "browser_download_url": {
+          "type": "string",
+          "pattern": "^https://github\\.com/peter2317238492/sub2api-codex-control/releases/download/connector-v[0-9]+\\.[0-9]+\\.[0-9]+/[A-Za-z0-9][A-Za-z0-9._-]*$"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,560 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api-codex.invalid/schemas/server-packages-v1.json",
+  "title": "Sub2API Codex Control server package release manifest",
+  "description": "Closed schema for the signed Linux amd64 online and offline server package release manifest. Cross-field equality and cryptographic verification remain mandatory runtime checks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "kind",
+    "format_version",
+    "release",
+    "release_tag",
+    "platform",
+    "source",
+    "builder",
+    "control_release",
+    "oci_export",
+    "consumer_verifier",
+    "connector_release",
+    "packages",
+    "checksums",
+    "signing"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://sub2api-codex.invalid/schemas/server-packages-v1.json"
+    },
+    "kind": {
+      "const": "server-packages-manifest-v1"
+    },
+    "format_version": {
+      "const": 1
+    },
+    "release": {
+      "$ref": "#/$defs/semver"
+    },
+    "release_tag": {
+      "type": "string",
+      "pattern": "^control-v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "platform": {
+      "const": "linux/amd64"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "builder": {
+      "$ref": "#/$defs/builder"
+    },
+    "control_release": {
+      "$ref": "#/$defs/controlRelease"
+    },
+    "oci_export": {
+      "$ref": "#/$defs/ociExportReceipt"
+    },
+    "consumer_verifier": {
+      "$ref": "#/$defs/consumerVerifier"
+    },
+    "connector_release": {
+      "$ref": "#/$defs/connectorRelease"
+    },
+    "packages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["online", "offline"],
+      "properties": {
+        "online": {
+          "$ref": "#/$defs/onlinePackage"
+        },
+        "offline": {
+          "$ref": "#/$defs/offlinePackage"
+        }
+      }
+    },
+    "checksums": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "signature_bundle"],
+      "properties": {
+        "filename": {
+          "const": "server-packages.sha256"
+        },
+        "signature_bundle": {
+          "const": "server-packages.sha256.sigstore.json"
+        }
+      }
+    },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cosign_version", "manifest_bundle"],
+      "properties": {
+        "cosign_version": {
+          "$ref": "#/$defs/toolVersion"
+        },
+        "manifest_bundle": {
+          "const": "server-packages.manifest.json.sigstore.json"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "toolVersion": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "artifactSize": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 17179869184
+    },
+    "releasePartSize": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "canonicalDeliveryThreshold": {
+      "if": {
+        "required": ["delivery"],
+        "properties": {
+          "delivery": {
+            "required": ["kind"],
+            "properties": {"kind": {"const": "single"}}
+          }
+        }
+      },
+      "then": {
+        "properties": {"size": {"maximum": 2147483647}}
+      },
+      "else": {
+        "properties": {"size": {"minimum": 2147483648}}
+      }
+    },
+    "githubRepository": {
+      "type": "string",
+      "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit", "ref"],
+      "properties": {
+        "repository": {
+          "$ref": "#/$defs/githubRepository"
+        },
+        "commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "ref": {
+          "type": "string",
+          "pattern": "^refs/tags/control-v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+        }
+      }
+    },
+    "builder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflow_identity",
+        "workflow_sha",
+        "workflow_trigger",
+        "invocation_id",
+        "cosign_version",
+        "syft_version"
+      ],
+      "properties": {
+        "workflow_identity": {
+          "type": "string",
+          "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml@refs/tags/control-v[^/]+$"
+        },
+        "workflow_sha": {
+          "$ref": "#/$defs/commit"
+        },
+        "workflow_trigger": {
+          "const": "push"
+        },
+        "invocation_id": {
+          "type": "string",
+          "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*$"
+        },
+        "cosign_version": {
+          "$ref": "#/$defs/toolVersion"
+        },
+        "syft_version": {
+          "$ref": "#/$defs/toolVersion"
+        }
+      }
+    },
+    "fileRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size"],
+      "properties": {
+        "filename": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._+@-]+$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size": {
+          "$ref": "#/$defs/artifactSize"
+        }
+      }
+    },
+    "controlRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lock", "bundle", "evidence_sha256s"],
+      "properties": {
+        "lock": {
+          "allOf": [
+            {"$ref": "#/$defs/fileRecord"},
+            {"properties": {"filename": {"const": "control-images.lock.json"}}}
+          ]
+        },
+        "bundle": {
+          "allOf": [
+            {"$ref": "#/$defs/fileRecord"},
+            {"properties": {"filename": {"const": "control-images.lock.sigstore.json"}}}
+          ]
+        },
+        "evidence_sha256s": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "control-images.lock.json",
+            "control-images.lock.sigstore.json",
+            "source.tar",
+            "source-files.manifest",
+            "source-attestation.json",
+            "control-api.spdx.json",
+            "control-api.provenance.json",
+            "pwa.spdx.json",
+            "pwa.provenance.json",
+            "postgres-tools.spdx.json",
+            "postgres-tools.provenance.json"
+          ],
+          "properties": {
+            "control-images.lock.json": {"$ref": "#/$defs/sha256"},
+            "control-images.lock.sigstore.json": {"$ref": "#/$defs/sha256"},
+            "source.tar": {"$ref": "#/$defs/sha256"},
+            "source-files.manifest": {"$ref": "#/$defs/sha256"},
+            "source-attestation.json": {"$ref": "#/$defs/sha256"},
+            "control-api.spdx.json": {"$ref": "#/$defs/sha256"},
+            "control-api.provenance.json": {"$ref": "#/$defs/sha256"},
+            "pwa.spdx.json": {"$ref": "#/$defs/sha256"},
+            "pwa.provenance.json": {"$ref": "#/$defs/sha256"},
+            "postgres-tools.spdx.json": {"$ref": "#/$defs/sha256"},
+            "postgres-tools.provenance.json": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      }
+    },
+    "ociExportReceipt": {
+      "allOf": [
+        {"$ref": "#/$defs/fileRecord"},
+        {"properties": {"filename": {"const": "oci-export-receipt.json"}}}
+      ]
+    },
+    "consumerVerifier": {
+      "allOf": [
+        {"$ref": "#/$defs/fileRecord"},
+        {"properties": {"filename": {"const": "server-package-verify.py"}}}
+      ]
+    },
+    "connectorRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_repository",
+        "source_commit",
+        "version",
+        "tag",
+        "release_id",
+        "workflow_run_id",
+        "workflow_run_attempt",
+        "metadata",
+        "metadata_bundle",
+        "aggregate",
+        "aggregate_bundle"
+      ],
+      "properties": {
+        "source_repository": {
+          "$ref": "#/$defs/githubRepository"
+        },
+        "source_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "version": {
+          "$ref": "#/$defs/semver"
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^connector-v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "release_id": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "workflow_run_id": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "workflow_run_attempt": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "metadata": {
+          "$ref": "#/$defs/connectorMetadata"
+        },
+        "metadata_bundle": {
+          "$ref": "#/$defs/connectorMetadataBundle"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/connectorAggregate"
+        },
+        "aggregate_bundle": {
+          "$ref": "#/$defs/connectorAggregateBundle"
+        }
+      }
+    },
+    "connectorMetadata": {
+      "allOf": [
+        {"$ref": "#/$defs/fileRecord"},
+        {"properties": {"filename": {"const": "connector-release-metadata.json"}}}
+      ]
+    },
+    "connectorMetadataBundle": {
+      "allOf": [
+        {"$ref": "#/$defs/fileRecord"},
+        {"properties": {"filename": {"const": "connector-release-metadata.json.sigstore.json"}}}
+      ]
+    },
+    "connectorAggregate": {
+      "allOf": [
+        {"$ref": "#/$defs/fileRecord"},
+        {"properties": {"filename": {"const": "connector-public-verification-aggregate.json"}}}
+      ]
+    },
+    "connectorAggregateBundle": {
+      "allOf": [
+        {"$ref": "#/$defs/fileRecord"},
+        {"properties": {"filename": {"const": "connector-public-verification-aggregate.json.sigstore.json"}}}
+      ]
+    },
+    "deliveryPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size", "index", "count", "signature_bundle"],
+      "properties": {
+        "filename": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._+@-]+$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size": {
+          "$ref": "#/$defs/releasePartSize"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9
+        },
+        "signature_bundle": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._+@-]+\\.sigstore\\.json$"
+        }
+      }
+    },
+    "singleDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "parts"],
+      "properties": {
+        "kind": {
+          "const": "single"
+        },
+        "parts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/deliveryPart"},
+              {"properties": {"index": {"const": 1}, "count": {"const": 1}}}
+            ]
+          }
+        }
+      }
+    },
+    "splitDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "parts"],
+      "properties": {
+        "kind": {
+          "const": "split"
+        },
+        "parts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 9,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/deliveryPart"
+          }
+        }
+      }
+    },
+    "packageSbom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size", "format", "signature_bundle"],
+      "properties": {
+        "filename": {"type": "string"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"$ref": "#/$defs/artifactSize"},
+        "format": {"const": "SPDX-2.3-json"},
+        "signature_bundle": {"type": "string"}
+      }
+    },
+    "packageProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size", "predicate_type", "signature_bundle", "attestation_bundle"],
+      "properties": {
+        "filename": {"type": "string"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"$ref": "#/$defs/artifactSize"},
+        "predicate_type": {"const": "https://slsa.dev/provenance/v1"},
+        "signature_bundle": {"type": "string"},
+        "attestation_bundle": {"type": "string"}
+      }
+    },
+    "onlinePackage": {
+      "type": "object",
+      "allOf": [{"$ref": "#/$defs/canonicalDeliveryThreshold"}],
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size", "target_id", "mode", "platform", "internal_manifest_sha256", "signature_bundle", "delivery", "sbom", "provenance"],
+      "properties": {
+        "filename": {
+          "type": "string",
+          "pattern": "^sub2api-codex-control-server-(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?-linux-amd64-online\\.tar\\.gz$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"$ref": "#/$defs/artifactSize"},
+        "target_id": {"const": "server-online-linux-amd64"},
+        "mode": {"const": "online"},
+        "platform": {"const": "linux/amd64"},
+        "internal_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "signature_bundle": {
+          "type": "string",
+          "pattern": "^sub2api-codex-control-server-.+-linux-amd64-online\\.tar\\.gz\\.sigstore\\.json$"
+        },
+        "delivery": {
+          "oneOf": [
+            {"$ref": "#/$defs/singleDelivery"},
+            {"$ref": "#/$defs/splitDelivery"}
+          ]
+        },
+        "sbom": {
+          "allOf": [
+            {"$ref": "#/$defs/packageSbom"},
+            {
+              "properties": {
+                "filename": {"pattern": "^server-online-linux-amd64\\.[0-9a-f]{64}\\.spdx\\.json$"},
+                "signature_bundle": {"pattern": "^server-online-linux-amd64\\.[0-9a-f]{64}\\.spdx\\.json\\.sigstore\\.json$"}
+              }
+            }
+          ]
+        },
+        "provenance": {
+          "allOf": [
+            {"$ref": "#/$defs/packageProvenance"},
+            {
+              "properties": {
+                "filename": {"pattern": "^sub2api-codex-control-server-.+-linux-amd64-online\\.tar\\.gz\\.provenance\\.json$"},
+                "signature_bundle": {"pattern": "^sub2api-codex-control-server-.+-linux-amd64-online\\.tar\\.gz\\.provenance\\.json\\.sigstore\\.json$"},
+                "attestation_bundle": {"pattern": "^sub2api-codex-control-server-.+-linux-amd64-online\\.tar\\.gz\\.intoto\\.sigstore\\.json$"}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "offlinePackage": {
+      "type": "object",
+      "allOf": [{"$ref": "#/$defs/canonicalDeliveryThreshold"}],
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size", "target_id", "mode", "platform", "internal_manifest_sha256", "signature_bundle", "delivery", "sbom", "provenance"],
+      "properties": {
+        "filename": {
+          "type": "string",
+          "pattern": "^sub2api-codex-control-server-(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?-linux-amd64-offline\\.tar\\.gz$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"$ref": "#/$defs/artifactSize"},
+        "target_id": {"const": "server-offline-linux-amd64"},
+        "mode": {"const": "offline"},
+        "platform": {"const": "linux/amd64"},
+        "internal_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "signature_bundle": {
+          "type": "string",
+          "pattern": "^sub2api-codex-control-server-.+-linux-amd64-offline\\.tar\\.gz\\.sigstore\\.json$"
+        },
+        "delivery": {
+          "oneOf": [
+            {"$ref": "#/$defs/singleDelivery"},
+            {"$ref": "#/$defs/splitDelivery"}
+          ]
+        },
+        "sbom": {
+          "allOf": [
+            {"$ref": "#/$defs/packageSbom"},
+            {
+              "properties": {
+                "filename": {"pattern": "^server-offline-linux-amd64\\.[0-9a-f]{64}\\.spdx\\.json$"},
+                "signature_bundle": {"pattern": "^server-offline-linux-amd64\\.[0-9a-f]{64}\\.spdx\\.json\\.sigstore\\.json$"}
+              }
+            }
+          ]
+        },
+        "provenance": {
+          "allOf": [
+            {"$ref": "#/$defs/packageProvenance"},
+            {
+              "properties": {
+                "filename": {"pattern": "^sub2api-codex-control-server-.+-linux-amd64-offline\\.tar\\.gz\\.provenance\\.json$"},
+                "signature_bundle": {"pattern": "^sub2api-codex-control-server-.+-linux-amd64-offline\\.tar\\.gz\\.provenance\\.json\\.sigstore\\.json$"},
+                "attestation_bundle": {"pattern": "^sub2api-codex-control-server-.+-linux-amd64-offline\\.tar\\.gz\\.intoto\\.sigstore\\.json$"}
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

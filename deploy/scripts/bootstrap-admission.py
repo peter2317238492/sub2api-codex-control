@@ -1015,6 +1015,9 @@ def stale_backup_exception_template(args: argparse.Namespace) -> dict[str, Any]:
                 "snapshot_directory",
                 "containers",
                 "sources",
+                "release_evidence",
+                "docker_networks",
+                "owner_uid",
                 "redis",
                 "artifacts",
             },
@@ -1312,8 +1315,8 @@ def compose_plan(args: argparse.Namespace) -> dict[str, Any]:
         "CONTROL_CSRF_HEADER_NAME": "x-csrf-token",
         "CONTROL_SUB2API_BASE_URL": "http://sub2api:8080",
         "CONTROL_SUB2API_AUTH_ME_PATH": "/api/v1/auth/me",
-        "CONTROL_SUB2API_EXPECTED_VERSION": "0.1.175",
-        "CONTROL_SUB2API_EXPECTED_COMMIT": "93c32fa",
+        "CONTROL_SUB2API_EXPECTED_VERSION": "0.1.176",
+        "CONTROL_SUB2API_EXPECTED_COMMIT": "e803e38",
         "CONTROL_TRUST_FORWARDED_FOR": "true",
         "CONTROL_DB_HOST": "postgres",
         "CONTROL_DB_PORT": "5432",
@@ -1346,7 +1349,7 @@ def compose_plan(args: argparse.Namespace) -> dict[str, Any]:
         SOURCE_REVISION_RE,
     )
     marker = api_environment.get("CONTROL_SUB2API_CONTRACT_MARKER")
-    if marker != "0.1.175/93c32fa":
+    if marker != "0.1.176/e803e38":
         fail("Sub2API contract marker is not the admitted production tuple")
     origin = api_environment.get("CONTROL_ALLOWED_ORIGINS_CSV")
     if not isinstance(origin, str) or "," in origin:

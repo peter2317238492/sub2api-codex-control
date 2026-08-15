@@ -1,0 +1,71 @@
+{
+  "format_version": 1,
+  "tool": "crane",
+  "version": "0.21.7",
+  "release": {
+    "repository": "https://github.com/google/go-containerregistry",
+    "tag": "v0.21.7"
+  },
+  "platform": {
+    "os": "linux",
+    "architecture": "amd64",
+    "archive_platform": "Linux_x86_64"
+  },
+  "assets": {
+    "archive": {
+      "filename": "go-containerregistry_Linux_x86_64.tar.gz",
+      "url": "https://github.com/google/go-containerregistry/releases/download/v0.21.7/go-containerregistry_Linux_x86_64.tar.gz",
+      "size": 16473140,
+      "sha256": "1a57bc98207fa1c0d04bf760699099e26f8383499bfd55b99c1b919a928a7230"
+    },
+    "checksums": {
+      "filename": "checksums.txt",
+      "url": "https://github.com/google/go-containerregistry/releases/download/v0.21.7/checksums.txt",
+      "size": 1279,
+      "sha256": "cd15501232e498a51ef7d2d65dd2fb360f9f1086e234acef1af02343cea291f9"
+    },
+    "provenance": {
+      "filename": "multiple.intoto.jsonl",
+      "url": "https://github.com/google/go-containerregistry/releases/download/v0.21.7/multiple.intoto.jsonl",
+      "size": 25067,
+      "sha256": "349b91c17e49b1887cadc8eeafa4291a22df5afeb9fc00c271c4a6d138381a9a"
+    }
+  },
+  "archive": {
+    "members": [
+      {
+        "name": "LICENSE",
+        "mode": "0644",
+        "size": 11357
+      },
+      {
+        "name": "README.md",
+        "mode": "0644",
+        "size": 6377
+      },
+      {
+        "name": "crane",
+        "mode": "0755",
+        "size": 11813026
+      },
+      {
+        "name": "gcrane",
+        "mode": "0755",
+        "size": 12259490
+      },
+      {
+        "name": "krane",
+        "mode": "0755",
+        "size": 18919586
+      }
+    ],
+    "binary_member": "crane",
+    "binary_sha256": "73c254403f06a07b5274261093693afa01ab964645c929ebb79cd66e077c6ba2"
+  },
+  "provenance": {
+    "media_type": "application/vnd.dev.sigstore.bundle.v0.3+json",
+    "payload_type": "application/vnd.in-toto+json",
+    "statement_type": "https://in-toto.io/Statement/v0.1",
+    "predicate_type": "https://slsa.dev/provenance/v0.2"
+  }
+}
