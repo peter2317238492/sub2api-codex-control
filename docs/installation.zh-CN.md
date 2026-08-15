@@ -49,8 +49,8 @@ Codex app-server；它不会使用真实账号或真实供应商密钥。除非�
 ## 安装签名 Connector 包
 
 仅在仓库发布不可变、已签名的 `connector-v*` GitHub Release，并且 Control PWA 显示同一
-精确版本后使用此流程。在 PWA 打开**设备 -> 设置 Connector**，选择操作系统和架构，并将
-下载文件的 SHA-256 与 PWA 显示值逐字核对。
+精确版本后使用此流程。在 PWA 的设备栏点击下载图标，或在空状态点击**安装 Connector**，
+选择操作系统和架构，并将下载文件的 SHA-256 与 PWA 显示值逐字核对。
 
 | 平台 | 安装包 | 安装命令 |
 | --- | --- | --- |
@@ -58,20 +58,56 @@ Codex app-server；它不会使用真实账号或真实供应商密钥。除非�
 | Fedora / RHEL `amd64`、`arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
 | macOS Intel、Apple 芯片 | 已签名并公证的 `.pkg` | `sudo installer -pkg ./sub2api-codex-connector_*.pkg -target /` |
 
-安装后，以拥有 Codex 和目标工作区的普通用户运行辅助命令。将示例域名和工作区替换为
-自己的值：
+安装包只安装 Connector、用户级服务定义和管理命令，不会安装或升级 Codex。安装完成后，
+其余命令均由拥有 Codex 和目标工作区的普通用户执行。
+
+## 创建私密配置
+
+推荐使用管理命令直接创建配置。将示例域名和工作区替换为自己的值：
 
 ```sh
 sub2api-codex-connector-ctl init \
   --origin https://control.example.com \
   --workspace /absolute/path/to/workspace \
   --display-name "我的工作站"
+```
 
+命令会把配置写入以下路径，并自动使用 mode `0600`：
+
+```text
+${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
+```
+
+如需一次配置多个工作区，可改用 PWA 的**生成配置**步骤。填写设备名称、绝对状态目录、
+1 到 32 个绝对工作区路径和沙箱上限，下载 `connector.json` 后将它放到同一路径：
+
+```sh
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector"
+install -d -m 0700 "$config_dir"
+install -m 0600 "$HOME/Downloads/connector.json" "$config_dir/connector.json"
+```
+
+不要把下载目录中的配置直接用作长期配置，也不要把它提交到 Git、发送到聊天或交给管理员。
+`state_dir` 和所有 `workspace_roots` 都必须是已存在的绝对路径；状态目录、工作区与
+`CODEX_HOME` 不能互相包含。
+
+确认实际路径：
+
+```sh
+sub2api-codex-connector-ctl config-path
+```
+
+## 配对并启动
+
+配置完成后开始配对：
+
+```sh
 sub2api-codex-connector-ctl pair
 ```
 
 保持 `pair` 运行。它会提示一个 mode `0600` 文件路径，文件内是一组一次性配对码；在已登录
-的 PWA 输入该配对码。PWA 显示配对成功后，启动用户服务并确认状态：
+的 PWA 点击**配对已有 Connector**并输入该配对码。命令确认认领并退出后，启动用户服务并
+确认状态：
 
 ```sh
 sub2api-codex-connector-ctl start
@@ -98,9 +134,9 @@ CGO_ENABLED=0 go build -trimpath -buildvcs=false \
 创建私密配置目录并复制示例：
 
 ```sh
-install -d -m 0700 "$HOME/.config/sub2api-codex-control"
+install -d -m 0700 "$HOME/.config/sub2api-codex-connector"
 install -m 0600 connector.example.json \
-  "$HOME/.config/sub2api-codex-control/connector.json"
+  "$HOME/.config/sub2api-codex-connector/connector.json"
 ```
 
 只编辑私密副本。替换 `control.example.com`、`display_name`、`state_dir` 和
@@ -124,7 +160,7 @@ Control 平面已经可用时，开始配对：
 
 ```sh
 ./sub2api-codex-connector \
-  -config "$HOME/.config/sub2api-codex-control/connector.json" \
+  -config "$HOME/.config/sub2api-codex-connector/connector.json" \
   -pair-only
 ```
 
