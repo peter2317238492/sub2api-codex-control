@@ -1,5 +1,5 @@
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import PairDeviceDialog from "@/components/PairDeviceDialog.vue";
 
@@ -32,7 +32,9 @@ describe("PairDeviceDialog", () => {
     expect(wrapper.emitted("claim")).toBeUndefined();
   });
 
-  it("keeps a claimed pairing visible until the Connector comes online", async () => {
+  it("keeps a claimed pairing visible and supplies the separate service start command", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     const wrapper = mount(PairDeviceDialog, {
       props: {
         open: true,
@@ -50,10 +52,14 @@ describe("PairDeviceDialog", () => {
 
     await wrapper.setProps({ deviceDetected: true });
     expect(wrapper.get("[role='status']").text()).toContain("设备已完成配对");
-    expect(wrapper.get("[role='status']").text()).toContain("等待 Connector 上线");
+    expect(wrapper.get("[role='status']").text()).toContain("启动后台服务");
+    expect(wrapper.get(".pair-start-command code").text()).toBe("sub2api-codex-connector-ctl start");
+    expect(wrapper.find(".pair-restart-button").exists()).toBe(false);
 
-    await wrapper.get(".pair-restart-button").trigger("click");
-    expect(wrapper.emitted("restart")).toHaveLength(1);
+    await wrapper.get(".pair-start-command button").trigger("click");
+    expect(writeText).toHaveBeenCalledWith("sub2api-codex-connector-ctl start");
+    await wrapper.get("footer .secondary-button").trigger("click");
+    expect(wrapper.emitted("close")).toHaveLength(1);
   });
 
   it("offers the recovery action selected for a friendly pairing error", async () => {

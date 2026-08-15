@@ -10,8 +10,8 @@
 
 ## Before you start
 
-An ordinary user needs the following. An administrator does not need to create
-the device or issue its pairing code:
+An ordinary user needs the following. A Sub2API administrator does not need to
+create the device or issue its pairing code:
 
 - a working Sub2API account;
 - the same HTTPS site with Control enabled;
@@ -19,9 +19,10 @@ the device or issue its pairing code:
 - at least one existing absolute workspace path;
 - outbound TCP 443 access from the device to the Control site.
 
-The operator deploys the site, publishes trusted packages, and maintains the
-service once. Each user handles post-install configuration, pairing, startup,
-daily operation, diagnosis, and revocation.
+The Sub2API operator deploys the site, publishes trusted packages, and maintains
+the service. Each user handles post-install configuration, pairing, startup,
+daily operation, diagnosis, and revocation. Installing the native package may
+still require local `sudo` or macOS administrator approval.
 
 ## Interface map
 
@@ -63,6 +64,9 @@ Connector** in the empty state. Select the operating system, architecture, and
 package format, download it, then run the checksum-and-install command shown by
 the PWA. Continue only when the SHA-256 matches exactly.
 
+This does not require Sub2API administrator assistance. Linux package installation
+uses local `sudo`; macOS Installer may request local administrator approval.
+
 See [Installation](installation.md) for package commands and the source-only
 evaluation path. The package does not install or upgrade Codex, and it does not
 modify Codex configuration, login files, workspaces, plugins, shell profiles,
@@ -81,12 +85,14 @@ sub2api-codex-connector-ctl init \
   --display-name "My workstation"
 ```
 
-This creates a mode-`0600` private configuration on the device. Its default
-path is:
+This creates a mode-`0600` private configuration on the device. Its fixed path is:
 
 ```text
-${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
+$HOME/.config/sub2api-codex-connector/connector.json
 ```
+
+A non-empty `XDG_CONFIG_HOME` override is rejected so interactive commands and
+the packaged background service always resolve the same configuration.
 
 Print the effective path with:
 
@@ -94,9 +100,12 @@ Print the effective path with:
 sub2api-codex-connector-ctl config-path
 ```
 
-State, workspaces, and `CODEX_HOME` must not contain one another. The browser
-does not need this file. Never commit `connector.json`, send it in chat, or give
-it to an operator.
+Configuration, state, workspaces, and `CODEX_HOME` must not contain one another.
+The management command also rejects symlinks, unexpected owners, and shared
+writable ancestors. The browser does not need this file. Never commit
+`connector.json`, send it in chat, or give it to an operator. New initialization
+records an absolute Codex executable path and binds the configuration SHA-256
+to a private v2 managed layout.
 
 ### 4. Pair the device
 
@@ -168,22 +177,43 @@ invalidates it and fails closed. Deny anything whose impact you cannot confirm.
 - Archiving in Control removes the managed remote view and does not delete the
   original Codex thread on the device.
 
-## Change workspaces or sandbox
+## Change workspace or sandbox
 
 The local device owns workspace and sandbox boundaries; the browser cannot
-silently expand them. Multi-root setup is an advanced local operation. Run
-`sub2api-codex-connector-ctl config-path`, edit that private mode-`0600`
-`connector.json`, and set `workspace_roots` to 1 to 32 existing absolute
-directories. After the edit, restart the user service:
+silently expand them. Do not edit a v2 managed `connector.json`: its SHA-256 is
+checked by `pair`, `start`, and `run-service`, and drift fails closed. The formal
+command currently supports one workspace only and has no controlled multi-root
+or sandbox-cap update.
+
+To replace the workspace, revoke the existing device in the PWA, then run:
 
 ```sh
-sub2api-codex-connector-ctl restart
+sub2api-codex-connector-ctl stop
+sub2api-codex-connector-ctl purge-user-state --yes
+sub2api-codex-connector-ctl init --origin https://control.example.com \
+  --workspace /new/absolute/workspace --display-name "My workstation"
+sub2api-codex-connector-ctl pair
+sub2api-codex-connector-ctl start
 sub2api-codex-connector-ctl status
 ```
 
-Every new workspace must already exist and use an absolute path. `sandbox_cap`
-must be `read-only` or `workspace-write`. Invalid configuration fails closed at
-startup; the logs show a non-secret error category.
+The new workspace must already exist and use an absolute path. A future
+controlled command is required before multi-root or sandbox-cap changes are
+supported.
+
+### Legacy fixed-path and XDG migration
+
+A safe private legacy `connector.json` at the fixed path but without a managed
+layout remains usable by `pair`, `start`, and `run-service`; the Connector
+validates its structure and uses the current valid `CODEX_HOME`.
+`purge-user-state` refuses it because no verified deletion boundary exists.
+
+For an older non-empty `XDG_CONFIG_HOME`, stop the service and back up both its
+configuration and the state directory named by `state_dir`. Copy, never move or
+overwrite, the old configuration to the fixed path only after confirming that
+the destination does not exist. Use mode `0700` on the destination directory
+and `0600` on the file, unset `XDG_CONFIG_HOME`, then pair and start. Retain the
+old files and backups until the device is online and its state is confirmed.
 
 ## Everyday commands
 
@@ -227,8 +257,11 @@ remove it explicitly as the same ordinary user:
 sub2api-codex-connector-ctl purge-user-state --yes
 ```
 
-This command rejects root and refuses to remove a path that overlaps
-`CODEX_HOME`. It does not delete Codex configuration, login state, or
+For a v2 managed configuration, this command rejects root and revalidates the
+configuration SHA-256, ownership, permissions, symlinks, and every recorded
+configuration/state/workspace/`CODEX_HOME` overlap before it removes the two
+Connector-owned directories. It refuses legacy configurations without a
+verified layout. It does not delete Codex configuration, login state, or
 workspaces.
 
 ## Troubleshooting
@@ -237,7 +270,9 @@ workspaces.
 | --- | --- |
 | PWA says Sub2API sign-in is required | Sign in at `/` on the same host, then reopen `/codex/`; do not mix hostnames |
 | Formal package is unavailable | Release metadata is absent or failed validation; do not substitute an untrusted binary |
-| `init` rejects a path | Confirm that it exists, is absolute, and does not overlap state or `CODEX_HOME` |
+| `init` rejects a path | Use an owned, non-symlink absolute workspace with no shared-writable ancestor or overlap with configuration, state, or `CODEX_HOME`; unset `XDG_CONFIG_HOME` |
+| Managed configuration changed | Do not edit it; revoke the device in the PWA, then stop, purge, and re-initialize |
+| `XDG_CONFIG_HOME` is rejected | Follow the non-destructive migration above; back up configuration and state, never overwrite the fixed path, and preserve mode `0700`/`0600` |
 | Pairing never completes | Keep `pair` running; check system time, HTTPS origin, outbound TCP 443/WSS, and code expiry |
 | Codex version is rejected | Install exactly `codex-cli 0.147.0`; do not bypass `codex_version` or `schema_digest` |
 | Service does not start | Run `connector-ctl status` and `connector-ctl logs`; check the configuration path and JSON |

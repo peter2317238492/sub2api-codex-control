@@ -37,7 +37,7 @@
 | **解决什么问题** | 在手机或另一台电脑的浏览器中，查看并控制自己设备上的 Codex |
 | **如何连接** | 用户设备只主动建立出站 WSS，不开放入站端口 |
 | **谁可以使用** | 每个已登录的 Sub2API 普通用户，只能看到并管理自己的设备和线程 |
-| **谁负责配置** | 管理员一次性启用站点；之后安装、配置、配对、使用和撤销均由用户自助完成 |
+| **谁负责配置** | Sub2API 管理员一次性启用站点；原生包安装后，配置、配对、使用和撤销均由用户自助完成 |
 | **安全边界** | 固定八类 RPC、工作区白名单、沙箱上限、限时审批，不提供原始远程 shell |
 | **支持平台** | Connector 支持 Linux `amd64` / `arm64` 与 macOS Intel / Apple 芯片；暂不支持 Windows |
 
@@ -52,8 +52,8 @@ Sub2API Codex Control 是与 Sub2API 同源部署的自托管 Codex 控制平面
 | **Connector** | 用户的 Codex 设备 | 仅出站 WSS，并通过 stdio 启动固定版本的 `codex app-server` |
 
 Connector 不开放设备入站端口，也不会修改 Codex 配置、登录凭据、工作区、插件或 shell
-配置。每个普通 Sub2API 用户都拥有并管理自己的设备；日常安装、配置、配对、使用和撤销
-不需要管理员协助。
+配置。每个普通 Sub2API 用户都拥有并管理自己的设备；配置、配对、使用和撤销不需要
+Sub2API 管理员协助。安装系统包仍可能需要本机 `sudo` 或 macOS 管理员授权。
 
 ```mermaid
 flowchart LR
@@ -67,12 +67,13 @@ flowchart LR
 
 ## 核心能力
 
-- **普通用户自助管理。** 登录后可选择匹配的安装包、复制本地初始化命令、配对并撤销自己的设备。
+- **普通用户自助管理。** 登录后可选择匹配的安装包；完成本机安装授权后，可复制初始化命令、
+  配对并撤销自己的设备，无需 Sub2API 管理员介入。
 - **只允许八类操作。** 远程仅开放 `model/list`、`thread/start`、`thread/list`、
   `thread/read`、`thread/resume`、`turn/start`、`turn/steer` 和 `turn/interrupt`。
 - **审批默认拒绝。** 命令、文件变更和权限审批均为单次、限时、绑定连接世代；超时或失联即拒绝。
-- **设备本地决定边界。** 用户自行选择工作区白名单，并将沙箱上限设为 `workspace-write`
-  或 `read-only`。
+- **设备本地决定边界。** 当前正式管理命令只准入一个设备本地工作区，并将沙箱上限固定为
+  `workspace-write`；直接扩大边界会被拒绝。
 - **没有原始远程 shell。** shell/exec、任意文件或进程访问、配置修改、账号登录、插件安装和
   原始 RPC 透传都会在进入 Codex 前被拒绝。
 - **正式发布与恢复门禁。** 仓库内置签名源码、不可变镜像、备份恢复、数据隔离、回滚和监控工具。
@@ -82,8 +83,9 @@ flowchart LR
 以下流程适用于正式 `connector-v*` Release 发布，并且你的 Sub2API 站点已启用 Control 之后。
 
 开始前准备好：已登录的 Sub2API 账号、安装了准确版本 Codex CLI 的 Linux 或 macOS 设备、
-至少一个允许远程使用的绝对工作区路径，以及到站点 TCP 443 的出站网络。你不需要管理员
-创建设备、下发配对码或代为修改 Connector 配置。
+至少一个允许远程使用的绝对工作区路径，以及到站点 TCP 443 的出站网络。你不需要 Sub2API
+管理员创建设备、下发配对码或代为修改 Connector 配置。原生包安装可能要求本机 `sudo` 或
+macOS 管理员授权，这与 Sub2API 管理权限无关。
 
 ### 1. 登录
 
@@ -107,6 +109,9 @@ Control API。
 | Fedora / RHEL `amd64`、`arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
 | macOS Intel、Apple 芯片 | 已签名并公证的 `.pkg` | `open ./sub2api-codex-connector_*.pkg` |
 
+PWA 会给出精确文件名和校验命令。Linux 安装使用本机 `sudo`，macOS Installer 也可能要求
+本机管理员凭据；Sub2API 管理员不需要代为创建设备或完成配对。
+
 后续 Connector 命令必须由拥有 Codex 和工作区的普通用户执行，不要以 `root` 运行。
 
 ### 3. 创建私密配置
@@ -121,7 +126,12 @@ sub2api-codex-connector-ctl init \
   --display-name "我的工作站"
 ```
 
-多工作区属于设备本地高级配置，参见[修改工作区或沙箱](docs/usage.zh-CN.md#修改工作区或沙箱)。
+配置路径固定为 `$HOME/.config/sub2api-codex-connector/connector.json`，确保交互命令与用户
+后台服务读取同一个文件；非空的 `XDG_CONFIG_HOME` override 会被拒绝。
+
+管理命令会用配置 SHA-256 将该文件绑定到私密 v2 布局，请勿直接编辑。当前正式命令只支持
+每个 Connector 一个工作区。需要更换时，先在 PWA 撤销设备，再停止并清除受管状态，最后
+重新执行 `init`、`pair` 和 `start`；多工作区和沙箱上限变更尚未提供受控命令。
 
 ### 4. 配对并认领设备
 
@@ -186,7 +196,9 @@ Connector 状态；确认不再需要后，用户可以显式清除自己的状�
 sub2api-codex-connector-ctl purge-user-state --yes
 ```
 
-该命令拒绝以 root 执行，并拒绝清理任何与 `CODEX_HOME` 重叠的路径。
+对于 v2 受管配置，该命令拒绝以 root 执行；删除两个 Connector 自有目录前，会重新校验配置
+SHA-256、所有者、权限、symlink，以及记录的配置、状态、工作区和 `CODEX_HOME` 是否存在
+任意重叠。没有可信布局的旧配置会被拒绝清除，不会猜测删除范围。
 
 ## 常见问题
 
@@ -195,6 +207,9 @@ sub2api-codex-connector-ctl purge-user-state --yes
 | PWA 自动返回 Sub2API | 先在 `/` 登录，再打开同一域名的 `/codex/`。 |
 | 配对一直不完成 | 保持 `connector-ctl pair` 运行，检查系统时间、HTTPS origin、出站 WSS 和配对码是否过期。 |
 | Codex 版本被拒绝 | 安装准确的 `codex-cli 0.147.0`；Connector 会主动阻止协议漂移。 |
+| 受管配置被修改 | 不要直接编辑 `connector.json`；先在 PWA 撤销设备，再停止、清除并重新初始化。 |
+| 旧配置缺少后台绑定 | 以当前普通 Codex 用户运行一次 `sub2api-codex-connector-ctl start`，将未改变的旧配置与当前 Codex 绝对路径绑定。 |
+| `XDG_CONFIG_HOME` 被拒绝 | 先备份旧配置及其引用的状态，在不覆盖目标文件的前提下复制到固定路径，目录设为 `0700`、文件设为 `0600`，再取消 override；按安装指南的迁移步骤操作。 |
 | 工作区被拒绝 | 使用已存在的绝对路径，且不要与 Connector 状态目录或 `CODEX_HOME` 重叠。 |
 | 设备离线 | 运行 `connector-ctl status` 和 `connector-ctl logs`，检查出站 TLS。 |
 | 审批突然消失 | 审批可能已过期、已处理、属于其他用户，或在重连后失效。 |
@@ -207,11 +222,12 @@ sub2api-codex-connector-ctl purge-user-state --yes
 | 普通用户自行完成 | 仅服务器管理员负责 |
 | --- | --- |
 | 下载匹配的 Connector、创建私密配置 | 部署并升级 Control 服务 |
-| 选择本地工作区和沙箱上限 | 配置 TLS、Nginx、数据库和 Redis 隔离 |
+| 初始化唯一允许的工作区（当前沙箱上限固定为 `workspace-write`） | 配置 TLS、Nginx、数据库和 Redis 隔离 |
 | 配对、启动、诊断和撤销自己的设备 | 发布并签名可信安装包和镜像 |
 | 新建线程、对话、审批、中断和归档 | 执行备份、恢复演练、回滚和监控 |
 
-正常使用不需要管理员接触用户的设备、Codex 登录信息、工作区内容或配对码。
+正常使用不需要 Sub2API 管理员接触用户的设备、Codex 登录信息、工作区内容或配对码。平台
+要求时，原生包安装仍属于本机操作系统授权步骤。
 
 ## 服务器管理员
 

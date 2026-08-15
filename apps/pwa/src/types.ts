@@ -33,23 +33,45 @@ export type ConnectorOperatingSystem = "linux" | "darwin";
 export type ConnectorArchitecture = "amd64" | "arm64";
 export type ConnectorPackageFormat = "deb" | "rpm" | "pkg";
 
-export interface ConnectorReleaseAsset {
+export interface ConnectorReleaseFileEvidence {
+  filename: string;
+  sha256: string;
+  size: number;
+  signature_bundle: string;
+}
+
+export interface ConnectorReleaseSbomEvidence extends ConnectorReleaseFileEvidence {
+  format: "SPDX-2.3-json";
+}
+
+export interface ConnectorReleaseProvenanceEvidence extends ConnectorReleaseFileEvidence {
+  predicate_type: "https://slsa.dev/provenance/v1";
+  attestation_bundle: string;
+}
+
+export interface ConnectorReleaseAsset extends ConnectorReleaseFileEvidence {
   os: ConnectorOperatingSystem;
   arch: ConnectorArchitecture;
   package_format: ConnectorPackageFormat;
   download_url: string;
-  sha256: string;
+  sbom: ConnectorReleaseSbomEvidence;
+  provenance: ConnectorReleaseProvenanceEvidence;
 }
 
 export interface ConnectorReleaseMetadata {
+  format_version: 1;
   release_mode: "release";
   releasable: true;
+  source_repository: "https://github.com/peter2317238492/sub2api-codex-control";
+  source_commit: string;
   version: string;
   tag: string;
   codex_version: string;
   schema_digest: string;
-  config_path_hint: string;
-  start_command: string;
+  manifest: ConnectorReleaseFileEvidence;
+  config_path_hint: "~/.config/sub2api-codex-connector/connector.json";
+  pair_command: "sub2api-codex-connector-ctl pair";
+  start_command: "sub2api-codex-connector-ctl start";
   assets: ConnectorReleaseAsset[];
 }
 

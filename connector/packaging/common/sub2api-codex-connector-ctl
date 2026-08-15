@@ -3,6 +3,11 @@ set -eu
 
 product="sub2api-codex-connector"
 service_label="org.sub2api.codex-connector"
+managed_layout_name=".managed-layout-v2"
+legacy_service_binding_name=".legacy-service-path-v1"
+host_os=
+current_uid=
+canonical_home=
 
 fail() {
   printf '%s\n' "connector-ctl: $*" >&2
@@ -31,26 +36,27 @@ EOF
 }
 
 require_regular_user() {
-  [ "$(id -u)" -ne 0 ] || fail "run this command as the Connector user, not root"
+  current_uid=$(id -u)
+  [ "$current_uid" -ne 0 ] || fail "run this command as the Connector user, not root"
+  host_os=$(uname -s)
+  case "$host_os" in Linux|Darwin) ;; *) fail "unsupported operating system" ;; esac
   [ -n "${HOME:-}" ] || fail "HOME is unavailable"
-  [ "${HOME#/}" != "$HOME" ] || fail "HOME must be absolute"
+  [ -z "${XDG_CONFIG_HOME:-}" ] || \
+    fail "XDG_CONFIG_HOME overrides are unsupported and no files were changed; back up the legacy Connector configuration and its state, copy the configuration to HOME/.config/sub2api-codex-connector/connector.json with directory mode 0700 and file mode 0600 without overwriting an existing file, then unset XDG_CONFIG_HOME"
+  canonical_home=$(canonical_existing_user_directory "HOME" "$HOME")
+  HOME=$canonical_home
+  export HOME
 }
 
 config_root() {
-  if [ -n "${XDG_CONFIG_HOME:-}" ]; then
-    [ "${XDG_CONFIG_HOME#/}" != "$XDG_CONFIG_HOME" ] || fail "XDG_CONFIG_HOME must be absolute"
-    printf '%s\n' "$XDG_CONFIG_HOME/$product"
-  else
-    printf '%s\n' "$HOME/.config/$product"
-  fi
+  printf '%s\n' "$canonical_home/.config/$product"
 }
 
 state_root() {
   if [ -n "${XDG_STATE_HOME:-}" ]; then
-    [ "${XDG_STATE_HOME#/}" != "$XDG_STATE_HOME" ] || fail "XDG_STATE_HOME must be absolute"
     printf '%s\n' "$XDG_STATE_HOME/$product"
   else
-    printf '%s\n' "$HOME/.local/state/$product"
+    printf '%s\n' "$canonical_home/.local/state/$product"
   fi
 }
 
@@ -62,16 +68,47 @@ codex_home() {
   if [ -n "${CODEX_HOME:-}" ]; then
     printf '%s\n' "$CODEX_HOME"
   else
-    printf '%s\n' "$HOME/.codex"
+    printf '%s\n' "$canonical_home/.codex"
   fi
 }
 
 connector_binary() {
-  case "$(uname -s)" in
+  case "$host_os" in
     Linux) printf '%s\n' /usr/bin/sub2api-codex-connector ;;
     Darwin) printf '%s\n' /usr/local/bin/sub2api-codex-connector ;;
-    *) fail "unsupported operating system" ;;
   esac
+}
+
+resolve_codex_binary() {
+  resolved_codex=$(command -v codex 2>/dev/null) || \
+    fail "codex is unavailable on PATH; install codex-cli 0.147.0 before initialization"
+  reject_control_characters "Codex executable path" "$resolved_codex"
+  case "$resolved_codex" in /*) ;; *) fail "codex must resolve to an absolute executable path" ;; esac
+  case "$resolved_codex" in *:*) fail "Codex executable path must not contain a colon" ;; esac
+  resolved_codex_dir=${resolved_codex%/*}
+  resolved_codex_name=${resolved_codex##*/}
+  [ -n "$resolved_codex_dir" ] || resolved_codex_dir=/
+  resolved_codex_dir=$(CDPATH= cd "$resolved_codex_dir" 2>/dev/null && pwd -P) || \
+    fail "cannot resolve the Codex executable directory"
+  resolved_codex="$resolved_codex_dir/$resolved_codex_name"
+  [ -f "$resolved_codex" ] && [ -x "$resolved_codex" ] || \
+    fail "codex did not resolve to an executable file"
+  printf '%s\n' "$resolved_codex"
+}
+
+sha256_file() {
+  sha_path=$1
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha_output=$(sha256sum "$sha_path") || fail "cannot hash $sha_path"
+  elif command -v shasum >/dev/null 2>&1; then
+    sha_output=$(shasum -a 256 "$sha_path") || fail "cannot hash $sha_path"
+  else
+    fail "sha256sum or shasum is required"
+  fi
+  sha_digest=${sha_output%% *}
+  [ "${#sha_digest}" -eq 64 ] || fail "SHA-256 output is invalid"
+  case "$sha_digest" in *[!0-9a-f]*) fail "SHA-256 output is invalid" ;; esac
+  printf '%s\n' "$sha_digest"
 }
 
 reject_control_characters() {
@@ -87,30 +124,361 @@ json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
-canonical_directory() {
-  [ -d "$1" ] || fail "directory does not exist: $1"
-  (CDPATH= cd -- "$1" && pwd -P)
+path_uid() {
+  case "$host_os" in
+    Linux) stat -c '%u' "$1" ;;
+    Darwin) stat -f '%u' "$1" ;;
+  esac
 }
 
-reject_codex_overlap() {
-  candidate=${1%/}
-  protected=${2%/}
-  case "$candidate/" in
-    "$protected/"|"$protected/"*) fail "Connector paths must not overlap CODEX_HOME" ;;
+path_mode() {
+  case "$host_os" in
+    Linux) stat -c '%a' "$1" ;;
+    Darwin) stat -f '%Lp' "$1" ;;
   esac
-  case "$protected/" in
-    "$candidate/"|"$candidate/"*) fail "Connector paths must not contain CODEX_HOME" ;;
+}
+
+path_nlink() {
+  case "$host_os" in
+    Linux) stat -c '%h' "$1" ;;
+    Darwin) stat -f '%l' "$1" ;;
   esac
+}
+
+path_identity() {
+  case "$host_os" in
+    Linux) stat -c '%d:%i' "$1" ;;
+    Darwin) stat -f '%d:%i' "$1" ;;
+  esac
+}
+
+remove_tracked_path_if_unchanged() {
+  tracked_path=$1
+  expected_identity=$2
+  [ -n "$tracked_path" ] && [ -n "$expected_identity" ] || return 0
+  [ -e "$tracked_path" ] || [ -L "$tracked_path" ] || return 0
+  actual_identity=$(path_identity "$tracked_path" 2>/dev/null) || return 0
+  [ "$actual_identity" = "$expected_identity" ] || return 0
+  rm -f -- "$tracked_path" || true
+}
+
+mode_value() {
+  mode=$1
+  case "$mode" in ''|*[!0-7]*) fail "cannot inspect filesystem permissions" ;; esac
+  printf '%s\n' "$((0$mode))"
+}
+
+clean_absolute_path() {
+  label=$1
+  path=$2
+  reject_control_characters "$label" "$path"
+  [ -n "$path" ] && [ "${path#/}" != "$path" ] || fail "$label must be absolute"
+  while [ "$path" != "/" ] && [ "${path%/}" != "$path" ]; do path=${path%/}; done
+  case "$path" in
+    *//*|*/./*|*/.|*/../*|*/..) fail "$label must not contain empty, dot, or parent components" ;;
+  esac
+  printf '%s\n' "$path"
+}
+
+assert_safe_existing_component() {
+  label=$1
+  path=$2
+  owner=$(path_uid "$path") || fail "cannot inspect $label owner: $path"
+  [ "$owner" = "0" ] || [ "$owner" = "$current_uid" ] || \
+    fail "$label contains a directory not owned by root or the current user: $path"
+  mode=$(path_mode "$path") || fail "cannot inspect $label permissions: $path"
+  numeric_mode=$(mode_value "$mode")
+  [ $((numeric_mode & 0022)) -eq 0 ] || \
+    fail "$label contains a group- or world-writable directory: $path"
+}
+
+canonical_prospective_directory() {
+  label=$1
+  path=$(clean_absolute_path "$label" "$2")
+  current=/
+  remaining=${path#/}
+  missing=0
+  while [ -n "$remaining" ]; do
+    case "$remaining" in
+      */*) component=${remaining%%/*}; remaining=${remaining#*/} ;;
+      *) component=$remaining; remaining= ;;
+    esac
+    if [ "$current" = "/" ]; then next="/$component"; else next="$current/$component"; fi
+    if [ "$missing" -eq 0 ]; then
+      [ ! -L "$next" ] || fail "$label must not contain symlinks: $next"
+      if [ -e "$next" ]; then
+        [ -d "$next" ] || fail "$label contains a non-directory component: $next"
+        assert_safe_existing_component "$label" "$next"
+        physical=$(CDPATH= cd "$next" 2>/dev/null && pwd -P) || \
+          fail "cannot resolve $label: $next"
+        current=$physical
+        continue
+      fi
+      missing=1
+    fi
+    current=$next
+  done
+  printf '%s\n' "$current"
+}
+
+canonical_existing_user_directory() {
+  label=$1
+  path=$(canonical_prospective_directory "$label" "$2")
+  [ "$path" != "/" ] && [ -d "$path" ] || fail "$label must be an existing directory"
+  [ ! -L "$path" ] || fail "$label must not be a symlink"
+  owner=$(path_uid "$path") || fail "cannot inspect $label owner"
+  [ "$owner" = "$current_uid" ] || fail "$label must be owned by the current user"
+  printf '%s\n' "$path"
+}
+
+assert_managed_directory() {
+  label=$1
+  path=$2
+  [ ! -L "$path" ] && [ -d "$path" ] || fail "$label must be a non-symlink directory"
+  owner=$(path_uid "$path") || fail "cannot inspect $label owner"
+  [ "$owner" = "$current_uid" ] || fail "$label must be owned by the current user"
+  mode=$(path_mode "$path") || fail "cannot inspect $label permissions"
+  numeric_mode=$(mode_value "$mode")
+  [ "$numeric_mode" -eq $((0700)) ] || fail "$label must have mode 0700"
+}
+
+assert_private_file() {
+  label=$1
+  path=$2
+  [ ! -L "$path" ] && [ -f "$path" ] || fail "$label must be a regular non-symlink file"
+  owner=$(path_uid "$path") || fail "cannot inspect $label owner"
+  [ "$owner" = "$current_uid" ] || fail "$label must be owned by the current user"
+  mode=$(path_mode "$path") || fail "cannot inspect $label permissions"
+  numeric_mode=$(mode_value "$mode")
+  [ "$numeric_mode" -eq $((0600)) ] || fail "$label must have mode 0600"
+  links=$(path_nlink "$path") || fail "cannot inspect $label link count"
+  [ "$links" -eq 1 ] || fail "$label must have exactly one hard link"
+}
+
+assert_user_directory_if_present() {
+  label=$1
+  path=$2
+  if [ -e "$path" ]; then
+    [ ! -L "$path" ] && [ -d "$path" ] || fail "$label must be a non-symlink directory"
+    owner=$(path_uid "$path") || fail "cannot inspect $label owner"
+    [ "$owner" = "$current_uid" ] || fail "$label must be owned by the current user"
+    assert_safe_existing_component "$label" "$path"
+  fi
+}
+
+reject_path_overlap() {
+  first_label=$1
+  first=${2%/}
+  second_label=$3
+  second=${4%/}
+  case "$first/" in "$second/"|"$second/"*) fail "$first_label must not overlap $second_label" ;; esac
+  case "$second/" in "$first/"|"$first/"*) fail "$first_label must not overlap $second_label" ;; esac
+}
+
+assert_disjoint_layout() {
+  reject_path_overlap "configuration directory" "$admitted_config_root" "state directory" "$admitted_state_root"
+  reject_path_overlap "configuration directory" "$admitted_config_root" "CODEX_HOME" "$admitted_codex_home"
+  reject_path_overlap "configuration directory" "$admitted_config_root" "workspace" "$admitted_workspace"
+  reject_path_overlap "state directory" "$admitted_state_root" "CODEX_HOME" "$admitted_codex_home"
+  reject_path_overlap "state directory" "$admitted_state_root" "workspace" "$admitted_workspace"
+  reject_path_overlap "CODEX_HOME" "$admitted_codex_home" "workspace" "$admitted_workspace"
+}
+
+admit_layout() {
+  state_input=$1
+  workspace_input=$2
+  codex_home_input=$3
+  admitted_config_root=$(canonical_prospective_directory "configuration directory" "$(config_root)")
+  admitted_state_root=$(canonical_prospective_directory "state directory" "$state_input")
+  admitted_codex_home=$(canonical_prospective_directory "CODEX_HOME" "$codex_home_input")
+  admitted_workspace=$(canonical_prospective_directory "workspace" "$workspace_input")
+  [ "$admitted_config_root" != "/" ] && [ "$admitted_config_root" != "$canonical_home" ] || \
+    fail "configuration directory is too broad"
+  [ "$admitted_state_root" != "/" ] && [ "$admitted_state_root" != "$canonical_home" ] || \
+    fail "state directory is too broad"
+  case "$admitted_state_root/" in */"$product"/) ;; *) fail "state directory is not Connector-owned" ;; esac
+  if [ -e "$admitted_config_root" ]; then
+    assert_managed_directory "configuration directory" "$admitted_config_root"
+  fi
+  if [ -e "$admitted_state_root" ]; then
+    assert_managed_directory "state directory" "$admitted_state_root"
+  fi
+  assert_user_directory_if_present "CODEX_HOME" "$admitted_codex_home"
+  assert_user_directory_if_present "workspace" "$admitted_workspace"
+  assert_disjoint_layout
+  admitted_config_path="$admitted_config_root/connector.json"
+  admitted_layout_path="$admitted_config_root/$managed_layout_name"
+}
+
+admit_initial_layout() {
+  admit_layout "$(state_root)" "$1" "$(codex_home)"
+  [ -d "$admitted_workspace" ] || fail "workspace must be an existing directory"
+  for unsupported_layout in "$admitted_config_root"/.managed-layout-v*; do
+    if [ -e "$unsupported_layout" ] || [ -L "$unsupported_layout" ]; then
+      fail "configuration directory contains an existing managed layout"
+    fi
+  done
+  [ ! -e "$admitted_config_path" ] && [ ! -L "$admitted_config_path" ] || \
+    fail "configuration already exists: $admitted_config_path"
+  [ ! -e "$admitted_layout_path" ] && [ ! -L "$admitted_layout_path" ] || \
+    fail "managed layout already exists: $admitted_layout_path"
+}
+
+admitted_existing_config() {
+  existing_cfg_root=$(canonical_prospective_directory "configuration directory" "$(config_root)")
+  current_layout="$existing_cfg_root/$managed_layout_name"
+  if [ -e "$current_layout" ] || [ -L "$current_layout" ]; then
+    read_managed_layout
+    assert_managed_directory "state directory" "$admitted_state_root"
+    [ -d "$admitted_workspace" ] || fail "managed workspace must be an existing directory"
+    configuration_mode=managed
+    return
+  fi
+
+  for unsupported_layout in "$existing_cfg_root"/.managed-layout-v*; do
+    if [ -e "$unsupported_layout" ] || [ -L "$unsupported_layout" ]; then
+      fail "managed layout version is unsupported; revoke the device in the PWA and follow the documented non-destructive migration path"
+    fi
+  done
+
+  assert_managed_directory "legacy configuration directory" "$existing_cfg_root"
+  legacy_config="$existing_cfg_root/connector.json"
+  assert_private_file "legacy Connector configuration" "$legacy_config"
+  admitted_config_root=$existing_cfg_root
+  admitted_config_path=$legacy_config
+  admitted_codex_home=$(canonical_prospective_directory "CODEX_HOME" "$(codex_home)")
+  assert_user_directory_if_present "CODEX_HOME" "$admitted_codex_home"
+  configuration_mode=legacy
+}
+
+read_managed_layout() {
+  cfg_root=$(canonical_prospective_directory "configuration directory" "$(config_root)")
+  assert_managed_directory "configuration directory" "$cfg_root"
+  layout="$cfg_root/$managed_layout_name"
+  assert_private_file "managed layout" "$layout"
+  exec 3<"$layout"
+  IFS= read -r layout_format <&3 || fail "managed layout is incomplete"
+  IFS= read -r layout_config_line <&3 || fail "managed layout is incomplete"
+  IFS= read -r layout_state_line <&3 || fail "managed layout is incomplete"
+  IFS= read -r layout_workspace_line <&3 || fail "managed layout is incomplete"
+  IFS= read -r layout_codex_home_line <&3 || fail "managed layout is incomplete"
+  IFS= read -r layout_config_sha_line <&3 || fail "managed layout is incomplete"
+  if IFS= read -r layout_extra <&3; then fail "managed layout has unexpected content"; fi
+  exec 3<&-
+  [ "$layout_format" = "sub2api-codex-connector-managed-layout-v2" ] || \
+    fail "managed layout version is unsupported"
+  case "$layout_config_line" in config_root=*) recorded_config_root=${layout_config_line#config_root=} ;; *) fail "managed layout configuration path is invalid" ;; esac
+  case "$layout_state_line" in state_root=*) recorded_state_root=${layout_state_line#state_root=} ;; *) fail "managed layout state path is invalid" ;; esac
+  case "$layout_workspace_line" in workspace_root=*) recorded_workspace=${layout_workspace_line#workspace_root=} ;; *) fail "managed layout workspace path is invalid" ;; esac
+  case "$layout_codex_home_line" in codex_home=*) recorded_codex_home=${layout_codex_home_line#codex_home=} ;; *) fail "managed layout CODEX_HOME path is invalid" ;; esac
+  case "$layout_config_sha_line" in config_sha256=*) recorded_config_sha=${layout_config_sha_line#config_sha256=} ;; *) fail "managed layout configuration digest is invalid" ;; esac
+  [ "${#recorded_config_sha}" -eq 64 ] || fail "managed layout configuration digest is invalid"
+  case "$recorded_config_sha" in *[!0-9a-f]*) fail "managed layout configuration digest is invalid" ;; esac
+  admit_layout "$recorded_state_root" "$recorded_workspace" "$recorded_codex_home"
+  [ "$recorded_config_root" = "$admitted_config_root" ] || \
+    fail "managed layout does not match the fixed configuration directory"
+  [ "$recorded_state_root" = "$admitted_state_root" ] || fail "managed layout state path is not canonical"
+  [ "$recorded_workspace" = "$admitted_workspace" ] || fail "managed layout workspace path is not canonical"
+  [ "$recorded_codex_home" = "$admitted_codex_home" ] || fail "managed layout CODEX_HOME path is not canonical"
+  assert_private_file "Connector configuration" "$admitted_config_path"
+  actual_config_sha=$(sha256_file "$admitted_config_path")
+  [ "$actual_config_sha" = "$recorded_config_sha" ] || \
+    fail "managed Connector configuration changed; revoke the device in the PWA, then purge and re-initialize instead of editing connector.json"
+}
+
+write_legacy_service_binding() {
+  command -v mktemp >/dev/null 2>&1 || fail "mktemp is unavailable"
+  command -v cmp >/dev/null 2>&1 || fail "cmp is unavailable"
+  legacy_codex=$(resolve_codex_binary)
+  legacy_config_sha=$(sha256_file "$admitted_config_path")
+  legacy_binding="$admitted_config_root/$legacy_service_binding_name"
+  legacy_binding_temp=$(mktemp "$admitted_config_root/.legacy-service-path.XXXXXX") || \
+    fail "cannot create a private temporary legacy service binding"
+  legacy_binding_temp_identity=$(path_identity "$legacy_binding_temp") || \
+    fail "cannot inspect the temporary legacy service binding identity"
+  cleanup_legacy_binding_identity=
+  cleanup_legacy_service_binding() {
+    cleanup_status=$1
+    trap - EXIT HUP INT TERM
+    remove_tracked_path_if_unchanged "$legacy_binding" "${cleanup_legacy_binding_identity:-}"
+    remove_tracked_path_if_unchanged "$legacy_binding_temp" "${legacy_binding_temp_identity:-}"
+    exit "$cleanup_status"
+  }
+  trap 'cleanup_legacy_service_binding $?' EXIT
+  trap 'cleanup_legacy_service_binding 129' HUP
+  trap 'cleanup_legacy_service_binding 130' INT
+  trap 'cleanup_legacy_service_binding 143' TERM
+  printf '%s\nconfig_sha256=%s\ncodex_binary=%s\n' \
+    "sub2api-codex-connector-legacy-service-path-v1" \
+    "$legacy_config_sha" "$legacy_codex" >"$legacy_binding_temp"
+  chmod 0600 "$legacy_binding_temp"
+  assert_private_file "temporary legacy service binding" "$legacy_binding_temp"
+
+  if [ -e "$legacy_binding" ] || [ -L "$legacy_binding" ]; then
+    assert_private_file "legacy service binding" "$legacy_binding"
+    cmp -s "$legacy_binding_temp" "$legacy_binding" || \
+      fail "legacy service binding does not match the current configuration and Codex path; no files were changed"
+  else
+    cleanup_legacy_binding_identity=$legacy_binding_temp_identity
+    if ln "$legacy_binding_temp" "$legacy_binding" 2>/dev/null; then
+      [ "$(path_identity "$legacy_binding")" = "$cleanup_legacy_binding_identity" ] || \
+        fail "legacy service binding changed while committing"
+    else
+      cleanup_legacy_binding_identity=
+      assert_private_file "legacy service binding" "$legacy_binding"
+      cmp -s "$legacy_binding_temp" "$legacy_binding" || \
+        fail "legacy service binding appeared with different content; no files were changed"
+    fi
+  fi
+  remove_tracked_path_if_unchanged "$legacy_binding_temp" "$legacy_binding_temp_identity"
+  [ ! -e "$legacy_binding_temp" ] && [ ! -L "$legacy_binding_temp" ] || \
+    fail "temporary legacy service binding changed while committing"
+  legacy_binding_temp=
+  legacy_binding_temp_identity=
+  assert_private_file "legacy service binding" "$legacy_binding"
+  cleanup_legacy_binding_identity=
+  trap - EXIT HUP INT TERM
+}
+
+read_legacy_service_binding() {
+  legacy_binding="$admitted_config_root/$legacy_service_binding_name"
+  if [ ! -e "$legacy_binding" ] && [ ! -L "$legacy_binding" ]; then
+    fail "legacy service binding is missing; run connector-ctl start interactively as the ordinary Codex user"
+  fi
+  assert_private_file "legacy service binding" "$legacy_binding"
+  exec 3<"$legacy_binding"
+  IFS= read -r legacy_binding_format <&3 || fail "legacy service binding is incomplete"
+  IFS= read -r legacy_config_sha_line <&3 || fail "legacy service binding is incomplete"
+  IFS= read -r legacy_codex_line <&3 || fail "legacy service binding is incomplete"
+  if IFS= read -r legacy_binding_extra <&3; then fail "legacy service binding has unexpected content"; fi
+  exec 3<&-
+  [ "$legacy_binding_format" = "sub2api-codex-connector-legacy-service-path-v1" ] || \
+    fail "legacy service binding version is unsupported"
+  case "$legacy_config_sha_line" in config_sha256=*) legacy_recorded_config_sha=${legacy_config_sha_line#config_sha256=} ;; *) fail "legacy service binding configuration digest is invalid" ;; esac
+  [ "${#legacy_recorded_config_sha}" -eq 64 ] || fail "legacy service binding configuration digest is invalid"
+  case "$legacy_recorded_config_sha" in *[!0-9a-f]*) fail "legacy service binding configuration digest is invalid" ;; esac
+  case "$legacy_codex_line" in codex_binary=*) legacy_recorded_codex=${legacy_codex_line#codex_binary=} ;; *) fail "legacy service binding Codex path is invalid" ;; esac
+  reject_control_characters "legacy service binding Codex path" "$legacy_recorded_codex"
+  case "$legacy_recorded_codex" in /*) ;; *) fail "legacy service binding Codex path must be absolute" ;; esac
+  case "$legacy_recorded_codex" in *:*) fail "legacy service binding Codex path must not contain a colon" ;; esac
+  legacy_codex_dir=${legacy_recorded_codex%/*}
+  legacy_codex_name=${legacy_recorded_codex##*/}
+  [ -n "$legacy_codex_dir" ] || legacy_codex_dir=/
+  physical_legacy_codex_dir=$(CDPATH= cd "$legacy_codex_dir" 2>/dev/null && pwd -P) || \
+    fail "legacy service binding Codex directory is unavailable"
+  [ "$legacy_codex_dir" = "$physical_legacy_codex_dir" ] || \
+    fail "legacy service binding Codex path is not canonical"
+  [ -f "$legacy_recorded_codex" ] && [ -x "$legacy_recorded_codex" ] || \
+    fail "legacy service binding Codex executable is unavailable"
+  legacy_actual_config_sha=$(sha256_file "$admitted_config_path")
+  [ "$legacy_actual_config_sha" = "$legacy_recorded_config_sha" ] || \
+    fail "legacy Connector configuration changed; run connector-ctl start interactively as the ordinary Codex user"
 }
 
 write_initial_config() {
   origin=$1
   workspace=$2
   display_name=$3
-  cfg_root=$(config_root)
-  state=$(state_root)
-  cfg=$(config_path)
-  protected=$(codex_home)
 
   [ "${origin#https://}" != "$origin" ] || fail "--origin must use https://"
   case "$origin" in
@@ -119,20 +487,55 @@ write_initial_config() {
   origin=${origin%/}
   authority=${origin#https://}
   case "$authority" in ''|*/*) fail "--origin must not contain a path" ;; esac
-  workspace=$(canonical_directory "$workspace")
-  [ "${state#/}" != "$state" ] || fail "state directory must be absolute"
-  [ "${protected#/}" != "$protected" ] || fail "CODEX_HOME must be absolute"
-  reject_codex_overlap "$state" "$protected"
-  reject_codex_overlap "$workspace" "$protected"
-  case "$state/" in "$workspace/"*) fail "state directory must not be inside a workspace" ;; esac
-  case "$workspace/" in "$state/"*) fail "workspace must not be inside the state directory" ;; esac
-  [ ! -e "$cfg" ] || fail "configuration already exists: $cfg"
+  command -v mktemp >/dev/null 2>&1 || fail "mktemp is unavailable"
+  resolved_codex=$(resolve_codex_binary)
+  admit_initial_layout "$workspace"
+  cfg_root=$admitted_config_root
+  state=$admitted_state_root
+  workspace=$admitted_workspace
+  protected=$admitted_codex_home
+  cfg=$admitted_config_path
+  layout=$admitted_layout_path
 
   old_umask=$(umask)
   umask 077
   mkdir -p -- "$cfg_root" "$state"
-  temporary="$cfg.tmp.$$"
-  trap 'rm -f -- "$temporary"' EXIT HUP INT TERM
+  expected_cfg_root=$cfg_root
+  expected_state=$state
+  expected_workspace=$workspace
+  expected_codex_home=$protected
+  admit_initial_layout "$workspace"
+  [ "$admitted_config_root" = "$expected_cfg_root" ] && \
+    [ "$admitted_state_root" = "$expected_state" ] && \
+    [ "$admitted_workspace" = "$expected_workspace" ] && \
+    [ "$admitted_codex_home" = "$expected_codex_home" ] || \
+    fail "Connector paths changed while creating private directories"
+  assert_managed_directory "configuration directory" "$cfg_root"
+  assert_managed_directory "state directory" "$state"
+
+  temporary_config=
+  temporary_layout=
+  temporary_config_identity=
+  temporary_layout_identity=
+  cleanup_config_identity=
+  cleanup_layout_identity=
+  cleanup_initial_write() {
+    cleanup_status=$1
+    trap - EXIT HUP INT TERM
+    remove_tracked_path_if_unchanged "$cfg" "${cleanup_config_identity:-}"
+    remove_tracked_path_if_unchanged "$layout" "${cleanup_layout_identity:-}"
+    remove_tracked_path_if_unchanged "${temporary_config:-}" "${temporary_config_identity:-}"
+    remove_tracked_path_if_unchanged "${temporary_layout:-}" "${temporary_layout_identity:-}"
+    exit "$cleanup_status"
+  }
+  trap 'cleanup_initial_write $?' EXIT
+  trap 'cleanup_initial_write 129' HUP
+  trap 'cleanup_initial_write 130' INT
+  trap 'cleanup_initial_write 143' TERM
+  temporary_config=$(mktemp "$cfg_root/.connector.json.XXXXXX") || \
+    fail "cannot create a private temporary configuration"
+  temporary_layout=$(mktemp "$cfg_root/.managed-layout.XXXXXX") || \
+    fail "cannot create a private temporary layout"
   control_origin=$(printf '%s' "$origin" | sed 's#^https://#wss://#')
   escaped_control=$(json_escape "$control_origin/codex-ws/device")
   escaped_pairing=$(json_escape "$origin/codex-api/v1/device-pairings/start")
@@ -140,7 +543,8 @@ write_initial_config() {
   escaped_display=$(json_escape "$display_name")
   escaped_state=$(json_escape "$state")
   escaped_workspace=$(json_escape "$workspace")
-  cat >"$temporary" <<EOF
+  escaped_codex=$(json_escape "$resolved_codex")
+  cat >"$temporary_config" <<EOF
 {
   "control_url": "$escaped_control",
   "pairing_url": "$escaped_pairing",
@@ -149,7 +553,7 @@ write_initial_config() {
   "state_dir": "$escaped_state",
   "workspace_roots": ["$escaped_workspace"],
   "sandbox_cap": "workspace-write",
-  "codex_binary": "codex",
+  "codex_binary": "$escaped_codex",
   "codex_version": "0.147.0",
   "schema_digest": "511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b",
   "heartbeat_interval": "20s",
@@ -159,8 +563,42 @@ write_initial_config() {
   "reconnect_max": "30s"
 }
 EOF
-  chmod 0600 "$temporary"
-  mv -f -- "$temporary" "$cfg"
+  chmod 0600 "$temporary_config"
+  assert_private_file "temporary Connector configuration" "$temporary_config"
+  config_sha=$(sha256_file "$temporary_config")
+  printf '%s\nconfig_root=%s\nstate_root=%s\nworkspace_root=%s\ncodex_home=%s\nconfig_sha256=%s\n' \
+    "sub2api-codex-connector-managed-layout-v2" \
+    "$cfg_root" "$state" "$workspace" "$protected" "$config_sha" >"$temporary_layout"
+  chmod 0600 "$temporary_layout"
+  assert_private_file "temporary managed layout" "$temporary_layout"
+  temporary_config_identity=$(path_identity "$temporary_config") || \
+    fail "cannot inspect the temporary configuration identity"
+  temporary_layout_identity=$(path_identity "$temporary_layout") || \
+    fail "cannot inspect the temporary layout identity"
+  cleanup_layout_identity=$temporary_layout_identity
+  ln "$temporary_layout" "$layout" || fail "managed layout already exists: $layout"
+  [ "$(path_identity "$layout")" = "$cleanup_layout_identity" ] || \
+    fail "managed layout changed while committing configuration"
+  cleanup_config_identity=$temporary_config_identity
+  ln "$temporary_config" "$cfg" || fail "configuration already exists: $cfg"
+  [ "$(path_identity "$cfg")" = "$cleanup_config_identity" ] || \
+    fail "configuration changed while committing configuration"
+  remove_tracked_path_if_unchanged "$temporary_layout" "$temporary_layout_identity"
+  remove_tracked_path_if_unchanged "$temporary_config" "$temporary_config_identity"
+  [ ! -e "$temporary_layout" ] && [ ! -L "$temporary_layout" ] || \
+    fail "temporary managed layout changed while committing configuration"
+  [ ! -e "$temporary_config" ] && [ ! -L "$temporary_config" ] || \
+    fail "temporary configuration changed while committing configuration"
+  temporary_layout=
+  temporary_config=
+  temporary_layout_identity=
+  temporary_config_identity=
+  assert_private_file "managed layout" "$layout"
+  assert_private_file "Connector configuration" "$cfg"
+  [ "$(sha256_file "$cfg")" = "$config_sha" ] || \
+    fail "configuration changed while committing the managed layout"
+  cleanup_layout_identity=
+  cleanup_config_identity=
   trap - EXIT HUP INT TERM
   umask "$old_umask"
   printf '%s\n' "Created $cfg"
@@ -181,8 +619,11 @@ darwin_plist() {
 }
 
 service_start() {
-  [ -f "$(config_path)" ] || fail "run '$0 init' first"
-  case "$(uname -s)" in
+  admitted_existing_config
+  if [ "$configuration_mode" = "legacy" ]; then
+    write_legacy_service_binding
+  fi
+  case "$host_os" in
     Linux)
       systemctl --user daemon-reload
       linux_service enable --now
@@ -196,35 +637,40 @@ service_start() {
       launchctl bootstrap "$domain" "$plist"
       launchctl kickstart -k "$domain/$service_label"
       ;;
-    *) fail "unsupported operating system" ;;
   esac
 }
 
 service_stop() {
-  case "$(uname -s)" in
+  case "$host_os" in
     Linux) linux_service disable --now ;;
     Darwin)
       domain=$(darwin_domain)
       launchctl bootout "$domain/$service_label" >/dev/null 2>&1 || true
       launchctl disable "$domain/$service_label"
       ;;
-    *) fail "unsupported operating system" ;;
   esac
 }
 
 purge_user_state() {
   [ "${1:-}" = "--yes" ] || fail "purge requires the explicit --yes argument"
-  cfg_root=$(config_root)
-  state=$(state_root)
-  protected=$(codex_home)
-  for path in "$cfg_root" "$state"; do
-    [ "${path#/}" != "$path" ] || fail "refusing a non-absolute purge path"
-    [ "$path" != "/" ] || fail "refusing to purge the filesystem root"
-    [ "$path" != "$HOME" ] || fail "refusing to purge HOME"
-    reject_codex_overlap "$path" "$protected"
-  done
-  service_stop || true
-  rm -rf -- "$cfg_root" "$state"
+  purge_cfg_root=$(canonical_prospective_directory "configuration directory" "$(config_root)")
+  purge_layout="$purge_cfg_root/$managed_layout_name"
+  if [ ! -e "$purge_layout" ] && [ ! -L "$purge_layout" ]; then
+    fail "purge refused because this legacy configuration has no verified managed layout; no files were changed. Revoke the device in the PWA, stop the service, and back up connector.json plus its state directory before following the documented migration or re-initialization path"
+  fi
+  read_managed_layout
+  expected_cfg_root=$admitted_config_root
+  expected_state=$admitted_state_root
+  expected_workspace=$admitted_workspace
+  expected_codex_home=$admitted_codex_home
+  service_stop
+  read_managed_layout
+  [ "$admitted_config_root" = "$expected_cfg_root" ] && \
+    [ "$admitted_state_root" = "$expected_state" ] && \
+    [ "$admitted_workspace" = "$expected_workspace" ] && \
+    [ "$admitted_codex_home" = "$expected_codex_home" ] || \
+    fail "Connector paths changed while stopping the service"
+  rm -rf -- "$admitted_state_root" "$admitted_config_root"
   printf '%s\n' "Removed Connector user configuration and state; Codex files were not touched."
 }
 
@@ -252,33 +698,40 @@ case "$command" in
   config-path) [ "$#" -eq 0 ] || usage; config_path ;;
   pair)
     [ "$#" -eq 0 ] || usage
-    [ -f "$(config_path)" ] || fail "run '$0 init' first"
-    exec "$(connector_binary)" -config "$(config_path)" -pair-only
+    admitted_existing_config
+    CODEX_HOME=$admitted_codex_home
+    export CODEX_HOME
+    exec "$(connector_binary)" -config "$admitted_config_path" -pair-only
     ;;
   start) [ "$#" -eq 0 ] || usage; service_start ;;
   stop) [ "$#" -eq 0 ] || usage; service_stop ;;
   restart) [ "$#" -eq 0 ] || usage; service_stop || true; service_start ;;
   status)
     [ "$#" -eq 0 ] || usage
-    case "$(uname -s)" in
+    case "$host_os" in
       Linux) linux_service status ;;
       Darwin) launchctl print "$(darwin_domain)/$service_label" ;;
-      *) fail "unsupported operating system" ;;
     esac
     ;;
   logs)
     [ "$#" -eq 0 ] || usage
-    case "$(uname -s)" in
+    case "$host_os" in
       Linux) exec journalctl --user-unit "$product.service" --no-pager -n 200 ;;
       Darwin) exec log show --last 1h --style compact --predicate 'process == "sub2api-codex-connector"' ;;
-      *) fail "unsupported operating system" ;;
     esac
     ;;
   purge-user-state) purge_user_state "${1:-}" ;;
   run-service)
     [ "$#" -eq 0 ] || usage
-    [ -f "$(config_path)" ] || fail "Connector configuration is missing"
-    exec "$(connector_binary)" -config "$(config_path)"
+    admitted_existing_config
+    if [ "$configuration_mode" = "legacy" ]; then
+      read_legacy_service_binding
+      PATH="$legacy_codex_dir:/usr/local/bin:/usr/bin:/bin"
+      export PATH
+    fi
+    CODEX_HOME=$admitted_codex_home
+    export CODEX_HOME
+    exec "$(connector_binary)" -config "$admitted_config_path"
     ;;
   *) usage ;;
 esac

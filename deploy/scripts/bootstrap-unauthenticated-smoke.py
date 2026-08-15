@@ -251,7 +251,13 @@ def verify_readiness(response: HTTPResponse) -> None:
     if not isinstance(payload, dict) or payload.get("status") != "ready":
         raise SmokeFailure("readiness response does not report ready")
     checks = payload.get("checks")
-    required = {"database", "database_migrations", "redis", "sub2api_contract"}
+    required = {
+        "connector_release",
+        "database",
+        "database_migrations",
+        "redis",
+        "sub2api_contract",
+    }
     if not isinstance(checks, dict) or not required.issubset(checks):
         raise SmokeFailure("readiness response is missing required dependency checks")
     if any(value != "ok" for value in checks.values()):

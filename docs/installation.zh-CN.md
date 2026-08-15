@@ -7,8 +7,8 @@
 当前有三条完全不同的路径：
 
 1. 隔离 E2E 路径现在可用，用一次性基础设施验证源码。
-2. 正式签名的 `connector-v*` Release 发布后，普通用户安装对应原生包，并在 PWA
-   自助完成配置。
+2. 正式签名的 `connector-v*` Release 发布后，普通用户选择对应原生包，并在安装后通过 PWA
+   自助完成配置。原生包安装可能需要本机操作系统管理员授权。
 3. 首个公开源码版本不能直接安装到生产。它尚未发布生产安装所需的完整签名证据。
 
 Connector 目前可从源码构建用于开发与评估。在上述签名 Release 出现之前，不提供受支持的
@@ -59,6 +59,9 @@ Codex app-server；它不会使用真实账号或真实供应商密钥。除非�
 | Fedora / RHEL `amd64`、`arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
 | macOS Intel、Apple 芯片 | 已签名并公证的 `.pkg` | `open ./sub2api-codex-connector_*.pkg` |
 
+此安装步骤不需要 Sub2API 管理员，但 Linux 会使用本机 `sudo`，macOS Installer 也可能要求
+本机管理员凭据。
+
 安装包只安装 Connector、用户级服务定义和管理命令，不会安装或升级 Codex。安装完成后，
 其余命令均由拥有 Codex 和目标工作区的普通用户执行。
 
@@ -77,8 +80,11 @@ sub2api-codex-connector-ctl init \
 命令会把配置写入以下路径，并自动使用 mode `0600`：
 
 ```text
-${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
+$HOME/.config/sub2api-codex-connector/connector.json
 ```
+
+这是正式版本的固定配置路径。非空的 `XDG_CONFIG_HOME` override 会被拒绝，避免交互命令与
+安装包提供的用户服务读取不同文件。
 
 确认实际路径：
 
@@ -86,10 +92,27 @@ ${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
 sub2api-codex-connector-ctl config-path
 ```
 
-私密配置只在设备本地创建并保存，不要将其提交到 Git、发送到聊天或交给管理员。多工作区
-属于高级本地配置：初始化后编辑此文件，将 `workspace_roots` 设为 1 到 32 个已存在的绝对
-目录；也可将 `sandbox_cap` 降为 `read-only`，其上限为 `workspace-write`。保持文件 mode
-`0600`。状态目录、工作区与 `CODEX_HOME` 不能互相包含。
+私密配置只在设备本地创建并保存，不要将其提交到 Git、发送到聊天或交给管理员。新初始化会
+把当前 `codex` 命令解析为绝对可执行路径，并把最终文件 SHA-256 绑定到私密 v2 受管布局。
+不要直接编辑 `connector.json`；摘要变化后，配对、启动和后台服务入口都会默认拒绝。当前
+正式命令一次只初始化一个工作区，尚未提供多工作区或沙箱上限的受控修改命令。需要更换
+工作区时，先在 PWA 撤销设备，再停止并清除 v2 受管状态，最后重新执行 `init`、`pair` 和
+`start`。
+
+### 无损迁移旧配置
+
+固定路径上已有的 mode `0600` 旧配置如果没有受管布局，仍可使用 `pair`、`start` 和
+`run-service`；Connector 会继续校验配置结构，并使用当前有效的 `CODEX_HOME`。由于没有可信
+删除边界，`purge-user-state` 会拒绝清除此类旧配置。请先以当前普通用户交互运行一次
+`sub2api-codex-connector-ctl start`：它会把未改变的配置摘要与当前 Codex 绝对路径写入私有
+绑定。绑定缺失或不再匹配时，后台启动会直接拒绝，不会静默使用错误程序。
+
+如果旧安装使用了非空 `XDG_CONFIG_HOME`，先停止 Connector，并以 mode `0600` 分别备份其
+`connector.json` 和 `state_dir` 指向的状态目录。确认
+`$HOME/.config/sub2api-codex-connector` 尚不存在后，把旧配置复制而不是移动到固定路径，将
+目标目录设为 `0700`、`connector.json` 设为 `0600`，取消设置 `XDG_CONFIG_HOME`，再运行
+`pair` 和 `start`。设备重新在线且确认状态保留前，不要删除旧文件或备份。如果固定路径已经
+存在，保持两份文件不动并人工处理冲突，绝不能覆盖。
 
 ## 配对并启动
 
@@ -109,8 +132,9 @@ sub2api-codex-connector-ctl status
 ```
 
 Linux 包安装用户级 `systemd` 服务，macOS 包安装 `launchd` agent。升级和卸载会保留用户的
-私密 Connector 状态。需要彻底清除时，先在 PWA 撤销设备，再运行
-`sub2api-codex-connector-ctl purge-user-state --yes`。
+私密 Connector 状态。对于 v2 受管配置，需要彻底清除时，先在 PWA 撤销设备，再运行
+`sub2api-codex-connector-ctl purge-user-state --yes`；没有可信布局的旧配置应按上述无损迁移
+指引处理。
 
 ## 从源码构建 Connector 用于开发
 

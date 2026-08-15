@@ -32,9 +32,15 @@ from control_api.models import (
     ThreadBinding,
     ThreadBindingStatus,
 )
-from control_api.realtime import BrowserSocketClose
+from control_api.realtime import BrowserSessionGate, BrowserSocketClose
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+
+
+def authorized_browser_session_gate() -> BrowserSessionGate:
+    gate = BrowserSessionGate()
+    gate.authorized.set()
+    return gate
 
 
 def load_migration(filename: str) -> ModuleType:
@@ -572,6 +578,7 @@ async def test_reverse_publish_notification_drains_durable_events_in_cursor_orde
             "42",
             queue,
             latest_cursor,
+            authorized_browser_session_gate(),
         )
     )
     try:
@@ -621,6 +628,7 @@ async def test_browser_forwarding_continues_when_byte_budget_not_row_limit_pages
             "42",
             queue,
             latest_cursor,
+            authorized_browser_session_gate(),
         )
     )
     try:
@@ -663,6 +671,7 @@ async def test_browser_forwarding_stops_before_delivery_when_authority_task_ends
             "42",
             queue,
             [0],
+            authorized_browser_session_gate(),
             (authority,),
         )
 

@@ -11,6 +11,8 @@ import uuid
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException, Request, status
 
 from .config import Settings
@@ -21,6 +23,94 @@ _PAIRING_CODE_PATTERN = re.compile(
     r"(?:-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}){3}$"
 )
 PAIRING_START_PROOF_DOMAIN = b"sub2api-codex-control/pairing-start/v2\0"
+SESSION_CREDENTIAL_DOMAIN = b"sub2api-codex-control/session-credential/v1\0"
+CONTROL_SESSION_DIGEST_PURPOSE = "control-session-v2"
+# RFC 6265 implementations commonly cap a complete cookie at 4096 bytes. Leave
+# room for the cookie name and security attributes rather than relying on a
+# browser accepting an oversized authentication cookie.
+MAX_CONTROL_SESSION_COOKIE_VALUE_BYTES = 3500
+
+
+class SessionCredentialTooLarge(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class SessionCredential:
+    session_id: uuid.UUID
+    access_token: str
+
+
+class SessionCredentialProtector:
+    """Seal the upstream access token into the opaque HttpOnly session cookie."""
+
+    def __init__(self, secret: str, *, random_handle_bytes: int = 32) -> None:
+        secret_bytes = secret.encode("utf-8")
+        self._key = hmac.new(
+            secret_bytes,
+            SESSION_CREDENTIAL_DOMAIN + b"key",
+            hashlib.sha256,
+        ).digest()
+        self._random_handle_bytes = random_handle_bytes
+
+    def seal(self, session_id: uuid.UUID, access_token: str) -> str:
+        handle = secrets.token_bytes(self._random_handle_bytes)
+        nonce = secrets.token_bytes(12)
+        plaintext = session_id.bytes + access_token.encode("utf-8")
+        ciphertext = AESGCM(self._key).encrypt(
+            nonce,
+            plaintext,
+            SESSION_CREDENTIAL_DOMAIN + handle,
+        )
+        token = ".".join(
+            (
+                "v1",
+                _base64url_encode(handle),
+                _base64url_encode(nonce + ciphertext),
+            )
+        )
+        if len(token.encode("ascii")) > MAX_CONTROL_SESSION_COOKIE_VALUE_BYTES:
+            raise SessionCredentialTooLarge(
+                "Sub2API access token is too large for a secure Control session cookie"
+            )
+        return token
+
+    def unseal(self, token: str) -> SessionCredential | None:
+        if len(token.encode("utf-8")) > MAX_CONTROL_SESSION_COOKIE_VALUE_BYTES:
+            return None
+        try:
+            version, encoded_handle, encoded_payload = token.split(".", 2)
+            if version != "v1":
+                return None
+            handle = _base64url_decode(encoded_handle)
+            payload = _base64url_decode(encoded_payload)
+            if len(handle) != self._random_handle_bytes or len(payload) < 12 + 16 + 16:
+                return None
+            plaintext = AESGCM(self._key).decrypt(
+                payload[:12],
+                payload[12:],
+                SESSION_CREDENTIAL_DOMAIN + handle,
+            )
+            if len(plaintext) <= 16:
+                return None
+            access_token = plaintext[16:].decode("utf-8")
+            if not access_token:
+                return None
+            return SessionCredential(
+                session_id=uuid.UUID(bytes=plaintext[:16]),
+                access_token=access_token,
+            )
+        except (InvalidTag, UnicodeDecodeError, ValueError):
+            return None
+
+
+def _base64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _base64url_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.b64decode(value + padding, altchars=b"-_", validate=True)
 
 
 class TokenDigester:

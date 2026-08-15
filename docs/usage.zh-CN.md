@@ -8,7 +8,7 @@
 
 ## 使用前准备
 
-普通用户需要准备以下内容，不需要管理员代为创建设备或生成配对码：
+普通用户需要准备以下内容，不需要 Sub2API 管理员代为创建设备或生成配对码：
 
 - 一个可以正常登录的 Sub2API 账号；
 - 已启用 Control 的同一 HTTPS 站点地址；
@@ -16,8 +16,9 @@
 - 至少一个已存在的绝对工作区路径；
 - 设备到 Control 站点 TCP 443 的出站网络。
 
-管理员只负责一次性部署站点、发布可信安装包和维护服务。用户自行完成 Connector 安装后的
-配置、配对、启动、日常操作、诊断和撤销。
+Sub2API 管理员负责部署站点、发布可信安装包和维护服务。用户自行完成 Connector 安装后的
+配置、配对、启动、日常操作、诊断和撤销；安装原生包仍可能需要本机 `sudo` 或 macOS
+管理员授权。
 
 ## 界面布局
 
@@ -55,6 +56,9 @@ https://control.example.com/codex/
 点击设备栏顶部的下载图标，或在“暂无设备”状态点击**安装 Connector**。选择操作系统、架构
 和包格式，下载安装包，再执行 PWA 给出的校验与安装命令。只有 SHA-256 完全一致时才继续。
 
+此步骤不需要 Sub2API 管理员协助；Linux 安装使用本机 `sudo`，macOS Installer 也可能要求
+本机管理员授权。
+
 完整安装命令和源码评估路径见[安装指南](installation.zh-CN.md)。安装包不会安装或升级 Codex，
 也不会修改 Codex 配置、登录文件、工作区、插件、shell 配置或防火墙。
 
@@ -70,11 +74,14 @@ sub2api-codex-connector-ctl init \
   --display-name "我的工作站"
 ```
 
-命令会在设备本地创建 mode `0600` 的私密配置，默认路径是：
+命令会在设备本地创建 mode `0600` 的私密配置，固定路径是：
 
 ```text
-${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
+$HOME/.config/sub2api-codex-connector/connector.json
 ```
+
+非空的 `XDG_CONFIG_HOME` override 会被拒绝，确保交互命令和安装包提供的后台服务始终读取
+同一个配置文件。
 
 可用以下命令确认实际路径：
 
@@ -82,8 +89,10 @@ ${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
 sub2api-codex-connector-ctl config-path
 ```
 
-状态目录、工作区与 `CODEX_HOME` 不能互相包含。浏览器不需要取得该文件；不要把
-`connector.json` 提交到 Git、发到聊天或交给管理员。
+配置、状态、工作区与 `CODEX_HOME` 不能互相包含。管理命令也会拒绝 symlink、所有者异常和
+可被组或其他用户写入的祖先目录。浏览器不需要取得该文件；不要把 `connector.json` 提交到
+Git、发到聊天或交给管理员。新初始化会记录 Codex 的绝对可执行路径，并把配置 SHA-256
+绑定到私密 v2 受管布局。
 
 ### 4. 配对设备
 
@@ -147,17 +156,34 @@ sub2api-codex-connector-ctl status
 
 ## 修改工作区或沙箱
 
-工作区和沙箱边界由设备本地配置拥有，不能从浏览器静默扩大。多工作区属于高级本地操作：
-先运行 `sub2api-codex-connector-ctl config-path`，再编辑该 mode `0600` 私密
-`connector.json`，将 `workspace_roots` 设为 1 到 32 个已存在的绝对目录。修改后重启用户服务：
+工作区和沙箱边界由设备本地配置拥有，不能从浏览器静默扩大。不要直接编辑 v2 受管
+`connector.json`：`pair`、`start` 和 `run-service` 都会校验其 SHA-256，发生漂移时默认拒绝。
+当前正式命令只支持一个工作区，尚未提供多工作区或沙箱上限的受控修改命令。
+
+需要更换工作区时，先在 PWA 撤销现有设备，再执行：
 
 ```sh
-sub2api-codex-connector-ctl restart
+sub2api-codex-connector-ctl stop
+sub2api-codex-connector-ctl purge-user-state --yes
+sub2api-codex-connector-ctl init --origin https://control.example.com \
+  --workspace /new/absolute/workspace --display-name "我的工作站"
+sub2api-codex-connector-ctl pair
+sub2api-codex-connector-ctl start
 sub2api-codex-connector-ctl status
 ```
 
-新增工作区必须已经存在且使用绝对路径。`sandbox_cap` 只能是 `read-only` 或
-`workspace-write`。Connector 启动校验失败时会拒绝连接，可通过日志查看不含秘密的错误信息。
+新工作区必须已经存在且使用绝对路径。多工作区和沙箱上限修改必须等待后续受控命令支持。
+
+### 旧固定路径配置与 XDG 迁移
+
+固定路径上安全、私密但没有受管布局的旧 `connector.json` 仍可使用 `pair`、`start` 和
+`run-service`；Connector 会校验其结构，并使用当前有效的 `CODEX_HOME`。由于没有可信删除
+边界，`purge-user-state` 会拒绝此类旧配置。
+
+旧安装若使用非空 `XDG_CONFIG_HOME`，先停止服务，并备份配置及 `state_dir` 指向的状态目录。
+确认固定目标不存在后，再把旧配置复制到固定路径，绝不能移动或覆盖；目标目录使用 `0700`、
+文件使用 `0600`。取消设置 `XDG_CONFIG_HOME` 后重新配对并启动。设备在线且确认状态保留前，
+继续保存旧文件和备份。
 
 ## 常用命令
 
@@ -198,8 +224,9 @@ sub2api-codex-connector-ctl logs
 sub2api-codex-connector-ctl purge-user-state --yes
 ```
 
-该命令拒绝 root，并拒绝删除任何与 `CODEX_HOME` 重叠的路径。它不会删除 Codex 配置、登录
-信息或工作区。
+对于 v2 受管配置，该命令拒绝 root；删除两个 Connector 自有目录前，会重新校验配置
+SHA-256、所有者、权限、symlink，以及记录的配置、状态、工作区和 `CODEX_HOME` 是否存在
+任意重叠。没有可信布局的旧配置会被拒绝清除。它不会删除 Codex 配置、登录信息或工作区。
 
 ## 故障排查
 
@@ -207,7 +234,9 @@ sub2api-codex-connector-ctl purge-user-state --yes
 | --- | --- |
 | PWA 显示“需要登录 Sub2API” | 先在同一域名 `/` 登录，再重新打开 `/codex/`；不要混用不同域名 |
 | 正式安装包暂不可用 | 站点尚未提供通过校验的 Release 元数据；不要改用来源不明的二进制 |
-| `init` 拒绝路径 | 确认路径存在且为绝对路径，并且不与状态目录或 `CODEX_HOME` 重叠 |
+| `init` 拒绝路径 | 使用本人所有、非 symlink、祖先目录不可被组或其他用户写入的绝对工作区；不得与配置、状态或 `CODEX_HOME` 重叠，并取消设置 `XDG_CONFIG_HOME` |
+| 受管配置被修改 | 不要直接编辑；先在 PWA 撤销设备，再停止、清除并重新初始化 |
+| `XDG_CONFIG_HOME` 被拒绝 | 按上文无损迁移：备份配置和状态，不覆盖固定路径，并保持目录 `0700`、文件 `0600` |
 | 配对一直不完成 | 保持 `pair` 运行，检查系统时间、HTTPS origin、出站 TCP 443/WSS 和配对码有效期 |
 | Codex 版本被拒绝 | 安装准确的 `codex-cli 0.147.0`；不要手改 `codex_version` 或 `schema_digest` 绕过校验 |
 | 服务启动失败 | 运行 `connector-ctl status` 和 `connector-ctl logs`，检查配置路径与 JSON |

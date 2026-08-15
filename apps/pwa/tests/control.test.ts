@@ -44,6 +44,64 @@ function response(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
 
+function releaseAsset(os: "linux" | "darwin", arch: "amd64" | "arm64", packageFormat: "deb" | "rpm" | "pkg") {
+  const filename = `sub2api-codex-connector_0.1.0_${os}_${arch}.${packageFormat}`;
+  return {
+    os,
+    arch,
+    package_format: packageFormat,
+    filename,
+    download_url: `https://github.com/peter2317238492/sub2api-codex-control/releases/download/connector-v0.1.0/${filename}`,
+    sha256: "a".repeat(64),
+    size: 1000,
+    signature_bundle: `${filename}.sigstore.json`,
+    sbom: {
+      format: "SPDX-2.3-json",
+      filename: `${filename}.spdx.json`,
+      sha256: "b".repeat(64),
+      size: 2000,
+      signature_bundle: `${filename}.spdx.json.sigstore.json`,
+    },
+    provenance: {
+      predicate_type: "https://slsa.dev/provenance/v1",
+      filename: `${filename}.intoto.json`,
+      sha256: "c".repeat(64),
+      size: 3000,
+      signature_bundle: `${filename}.intoto.json.sigstore.json`,
+      attestation_bundle: `${filename}.intoto.sigstore.json`,
+    },
+  };
+}
+
+const connectorReleaseMetadata = {
+  format_version: 1 as const,
+  release_mode: "release" as const,
+  releasable: true as const,
+  source_repository: "https://github.com/peter2317238492/sub2api-codex-control" as const,
+  source_commit: "d".repeat(40),
+  version: "0.1.0",
+  tag: "connector-v0.1.0",
+  codex_version: "0.147.0",
+  schema_digest: "5".repeat(64),
+  manifest: {
+    filename: "manifest.json",
+    sha256: "e".repeat(64),
+    size: 4000,
+    signature_bundle: "manifest.json.sigstore.json",
+  },
+  config_path_hint: "~/.config/sub2api-codex-connector/connector.json",
+  pair_command: "sub2api-codex-connector-ctl pair",
+  start_command: "sub2api-codex-connector-ctl start",
+  assets: [
+    releaseAsset("linux", "amd64", "deb"),
+    releaseAsset("linux", "amd64", "rpm"),
+    releaseAsset("linux", "arm64", "deb"),
+    releaseAsset("linux", "arm64", "rpm"),
+    releaseAsset("darwin", "amd64", "pkg"),
+    releaseAsset("darwin", "arm64", "pkg"),
+  ],
+};
+
 describe("Control store session isolation and event coalescing", () => {
   let threadFetches: number;
   let bootstrapCursor: string;
@@ -86,6 +144,7 @@ describe("Control store session isolation and event coalescing", () => {
               ],
               approvals: [],
               models_by_device: { "device-1": [] },
+              connector_release: connectorReleaseMetadata,
             }),
           );
         }
@@ -124,6 +183,7 @@ describe("Control store session isolation and event coalescing", () => {
     const oldSocket = MockWebSocket.instances[0];
     expect(oldSocket).toBeDefined();
     expect(store.devices).toHaveLength(1);
+    expect(store.connectorRelease).toEqual(connectorReleaseMetadata);
 
     store.reset();
     expect(store.devices).toEqual([]);
@@ -1724,6 +1784,7 @@ describe("Control store session isolation and event coalescing", () => {
     expect(store.selectedDeviceId).toBeNull();
     expect(store.selectedThreadId).toBeNull();
     expect(store.activeThread).toBeNull();
+    expect(store.connectorRelease).toEqual(connectorReleaseMetadata);
     store.reset();
   });
 

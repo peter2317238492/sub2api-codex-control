@@ -9,6 +9,11 @@
     <string>/usr/local/bin/sub2api-codex-connector-ctl</string>
     <string>run-service</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>XDG_CONFIG_HOME</key>
+    <string></string>
+  </dict>
   <key>RunAtLoad</key>
   <false/>
   <key>KeepAlive</key>

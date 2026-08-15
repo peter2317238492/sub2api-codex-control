@@ -439,7 +439,8 @@ describe("App session recovery", () => {
     await settle();
 
     expect(wrapper.get(".pair-waiting").text()).toContain("设备已完成配对");
-    expect(wrapper.get(".pair-waiting").text()).toContain("等待 Connector 上线");
+    expect(wrapper.get(".pair-waiting").text()).toContain("启动后台服务");
+    expect(wrapper.get(".pair-start-command").text()).toContain("sub2api-codex-connector-ctl start");
     expect(wrapper.find(".pair-dialog").exists()).toBe(true);
 
     MockWebSocket.instances.at(-1)?.message({

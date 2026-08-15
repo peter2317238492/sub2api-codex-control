@@ -8,10 +8,11 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from weakref import WeakValueDictionary
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,7 +34,9 @@ from .models import (
     PairingStatus,
 )
 from .security import (
+    CONTROL_SESSION_DIGEST_PURPOSE,
     CookieTokens,
+    SessionCredentialProtector,
     TokenDigester,
     canonicalize_ed25519_public_key,
     canonicalize_workspace_roots,
@@ -43,7 +46,14 @@ from .security import (
     random_token,
 )
 from .storage import KeyValueStore
-from .sub2api import Sub2APIUser
+from .sub2api import (
+    DisabledSub2APIUser,
+    InvalidSub2APIToken,
+    RevokedSub2APIToken,
+    Sub2APIIdentityVerifier,
+    Sub2APIRequestIdentity,
+    Sub2APIUser,
+)
 
 CONTROL_SESSION_REVOCATION_CHANNEL_PREFIX = "control-session-revoked"
 MAX_LIVE_PAIRINGS_GLOBAL = 2_048
@@ -145,27 +155,37 @@ class SessionService:
         settings: Settings,
         store: KeyValueStore,
         digester: TokenDigester,
+        identity_verifier: Sub2APIIdentityVerifier,
+        credential_protector: SessionCredentialProtector,
     ) -> None:
         self._settings = settings
         self._store = store
         self._digester = digester
+        self._identity_verifier = identity_verifier
+        self._credential_protector = credential_protector
         self._creation_locks: dict[str, asyncio.Lock] = {}
+        self._upstream_verification_locks: WeakValueDictionary[uuid.UUID, asyncio.Lock] = (
+            WeakValueDictionary()
+        )
+        self._invalidation_tasks: set[asyncio.Task[None]] = set()
 
     async def create(
         self,
         db: AsyncSession,
         user: Sub2APIUser,
         metadata: RequestMetadata,
+        access_token: str,
     ) -> CreatedSession:
         lock = self._creation_locks.setdefault(user.user_id, asyncio.Lock())
         async with lock:
-            return await self._create_serialized(db, user, metadata)
+            return await self._create_serialized(db, user, metadata, access_token)
 
     async def _create_serialized(
         self,
         db: AsyncSession,
         user: Sub2APIUser,
         metadata: RequestMetadata,
+        access_token: str,
     ) -> CreatedSession:
         now = datetime.now(UTC)
         if db.get_bind().dialect.name == "postgresql":
@@ -221,10 +241,12 @@ class SessionService:
             if total_count >= self._settings.owner_max_session_records:
                 raise SessionCapacityExceeded("retained control session limit reached")
 
-        session_token = random_token(self._settings.session_token_bytes)
+        session_id = uuid.uuid4()
+        session_token = self._credential_protector.seal(session_id, access_token)
         csrf_token = random_token(32)
         record = ControlSession(
-            token_hash=self._digester.digest("control-session", session_token),
+            id=session_id,
+            token_hash=self._digester.digest(CONTROL_SESSION_DIGEST_PURPOSE, session_token),
             csrf_token_hash=self._digester.digest("csrf", csrf_token),
             sub2api_user_id=user.user_id,
             username=user.username,
@@ -259,6 +281,7 @@ class SessionService:
             str(record.id),
             ttl_seconds=self._settings.session_ttl_seconds,
         )
+        await self._cache_upstream_verification(record)
         return CreatedSession(record, CookieTokens(session_token, csrf_token))
 
     async def resolve(
@@ -267,10 +290,12 @@ class SessionService:
         raw_token: str | None,
         *,
         touch: bool = True,
+        verify_upstream: bool = True,
+        force_upstream: bool = False,
     ) -> ControlSession | None:
         if not raw_token:
             return None
-        token_hash = self._digester.digest("control-session", raw_token)
+        token_hash = self._digester.digest(CONTROL_SESSION_DIGEST_PURPOSE, raw_token)
         cached_id = await self._cache_get(f"session:{token_hash}")
         record: ControlSession | None = None
         if cached_id is not None:
@@ -298,6 +323,25 @@ class SessionService:
             await self._cache_delete(f"session:{token_hash}")
             return None
 
+        credential = self._credential_protector.unseal(raw_token)
+        if credential is None or credential.session_id != record.id:
+            await self._cache_delete(f"session:{token_hash}")
+            return None
+
+        if verify_upstream and not await self._verify_upstream_identity(
+            db,
+            record,
+            credential.access_token,
+            force=force_upstream,
+        ):
+            return None
+        if verify_upstream:
+            await db.refresh(record, attribute_names=["revoked_at", "expires_at"])
+            now = datetime.now(UTC)
+            if record.revoked_at is not None or _utc(record.expires_at) <= now:
+                await self._cache_delete(f"session:{token_hash}")
+                return None
+
         remaining = max(1, int((_utc(record.expires_at) - now).total_seconds()))
         await self._cache_set(f"session:{token_hash}", str(record.id), ttl_seconds=remaining)
         if touch and (now - _utc(record.last_seen_at)).total_seconds() >= 30:
@@ -305,13 +349,166 @@ class SessionService:
             await db.commit()
         return record
 
+    async def _verify_upstream_identity(
+        self,
+        db: AsyncSession,
+        record: ControlSession,
+        access_token: str,
+        *,
+        force: bool,
+    ) -> bool:
+        marker_key = self._upstream_marker_key(record.id)
+        if not force:
+            cached_marker = await self._cache_get(marker_key)
+            if self._valid_upstream_marker(record, cached_marker):
+                return True
+
+        lock = self._upstream_verification_locks.setdefault(record.id, asyncio.Lock())
+        async with lock:
+            if not force:
+                cached_marker = await self._cache_get(marker_key)
+                if self._valid_upstream_marker(record, cached_marker):
+                    return True
+            try:
+                user = await self._identity_verifier.verify_access_token(
+                    access_token,
+                    Sub2APIRequestIdentity(
+                        client_ip=record.request_ip or "unknown",
+                        user_agent=record.user_agent or "",
+                    ),
+                )
+            except DisabledSub2APIUser:
+                await self._revoke_for_upstream_rejection(db, record, "USER_INACTIVE")
+                return False
+            except RevokedSub2APIToken:
+                await self._revoke_for_upstream_rejection(db, record, "TOKEN_REVOKED")
+                return False
+            except InvalidSub2APIToken:
+                await self._revoke_for_upstream_rejection(db, record, "TOKEN_INVALID")
+                return False
+
+            if user.user_id != record.sub2api_user_id:
+                await self._revoke_for_upstream_rejection(db, record, "USER_MISMATCH")
+                return False
+            if not secrets.compare_digest(user.token_version or "", record.token_version or ""):
+                await self._revoke_for_upstream_rejection(db, record, "TOKEN_VERSION_MISMATCH")
+                return False
+
+            await self._cache_upstream_verification(record)
+            return True
+
+    async def _cache_upstream_verification(self, record: ControlSession) -> None:
+        remaining = max(
+            1,
+            int((_utc(record.expires_at) - datetime.now(UTC)).total_seconds()),
+        )
+        await self._cache_set(
+            self._upstream_marker_key(record.id),
+            self._upstream_marker(record),
+            ttl_seconds=min(self._settings.session_upstream_recheck_seconds, remaining),
+        )
+
+    def _upstream_marker(self, record: ControlSession) -> str:
+        verified_at = int(datetime.now(UTC).timestamp())
+        signature = self._upstream_marker_signature(record, verified_at)
+        return f"v1.{verified_at}.{signature}"
+
+    def _valid_upstream_marker(
+        self,
+        record: ControlSession,
+        marker: str | None,
+    ) -> bool:
+        if marker is None:
+            return False
+        try:
+            version, raw_verified_at, signature = marker.split(".", 2)
+            if version != "v1" or not raw_verified_at.isascii() or not raw_verified_at.isdigit():
+                return False
+            if len(signature) != 64 or any(
+                character not in "0123456789abcdef" for character in signature
+            ):
+                return False
+            verified_at = int(raw_verified_at)
+        except ValueError:
+            return False
+        age = datetime.now(UTC).timestamp() - verified_at
+        if age < 0 or age >= self._settings.session_upstream_recheck_seconds:
+            return False
+        return secrets.compare_digest(
+            signature,
+            self._upstream_marker_signature(record, verified_at),
+        )
+
+    def _upstream_marker_signature(
+        self,
+        record: ControlSession,
+        verified_at: int,
+    ) -> str:
+        value = "\0".join(
+            (
+                str(record.id),
+                record.token_hash,
+                record.sub2api_user_id,
+                record.token_version or "",
+                str(verified_at),
+            )
+        )
+        return self._digester.digest("session-upstream-verification", value)
+
+    @staticmethod
+    def _upstream_marker_key(session_id: uuid.UUID) -> str:
+        return f"session-upstream-ok:{session_id}"
+
+    async def _revoke_for_upstream_rejection(
+        self,
+        db: AsyncSession,
+        record: ControlSession,
+        reason: str,
+    ) -> None:
+        now = datetime.now(UTC)
+        revoked_id = await db.scalar(
+            update(ControlSession)
+            .where(
+                ControlSession.id == record.id,
+                ControlSession.revoked_at.is_(None),
+            )
+            .values(revoked_at=now)
+            .returning(ControlSession.id)
+        )
+        if revoked_id is not None:
+            db.add(
+                AuditEvent(
+                    actor_user_id=record.sub2api_user_id,
+                    actor_session_id=record.id,
+                    action="session.upstream_revoke",
+                    outcome=AuditOutcome.DENIED,
+                    resource_type="control_session",
+                    resource_id=str(record.id),
+                    source_ip=record.request_ip,
+                    user_agent=record.user_agent,
+                    details={"reason": reason},
+                )
+            )
+        await db.commit()
+        record.revoked_at = now
+        self._schedule_revoked_session_invalidation(record)
+
+    def _schedule_revoked_session_invalidation(self, record: ControlSession) -> None:
+        task = asyncio.create_task(self._invalidate_revoked_session(record))
+        self._invalidation_tasks.add(task)
+        task.add_done_callback(self._invalidation_tasks.discard)
+
+    async def close(self) -> None:
+        if self._invalidation_tasks:
+            await asyncio.gather(*tuple(self._invalidation_tasks), return_exceptions=True)
+
     async def _cache_get(self, key: str) -> str | None:
         try:
             async with asyncio.timeout(self._settings.redis_command_timeout_seconds):
                 return await self._store.get(key)
         except Exception as exc:
             _LOGGER.warning(
-                "control session Redis cache read failed; using PostgreSQL authority",
+                "control session Redis cache read failed; bypassing Redis cache",
                 extra={"error_type": type(exc).__name__},
             )
             return None
@@ -380,18 +577,19 @@ class SessionService:
                         str(record.id),
                     ),
                     self._store.delete(f"session:{record.token_hash}"),
+                    self._store.delete(self._upstream_marker_key(record.id)),
                     return_exceptions=True,
                 )
         except TimeoutError:
             _LOGGER.warning(
-                "control session Redis invalidation timed out after durable logout",
+                "control session Redis invalidation timed out after durable revocation",
                 extra={"error_type": "TimeoutError"},
             )
             return
         for result in results:
             if isinstance(result, BaseException):
                 _LOGGER.warning(
-                    "control session Redis invalidation failed after durable logout",
+                    "control session Redis invalidation failed after durable revocation",
                     extra={"error_type": type(result).__name__},
                 )
 

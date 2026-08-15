@@ -194,6 +194,12 @@ class StaticRolloutContractTests(unittest.TestCase):
             r'\$source_root/deploy/scripts/(?:image-rollout-admission|image-rollout-smoke|rollout-bootstrap-images)',
         )
 
+    def test_direct_api_readiness_requires_connector_release_admission(self) -> None:
+        self.assertRegex(
+            self.script,
+            r'set\(checks\) != \{[^}]*"connector_release"[^}]*\}',
+        )
+
     def test_tools_builder_is_evidence_only_and_never_executed(self) -> None:
         self.assertIn("CONTROL_EXPECTED_TOOLS_ARCHIVE_SHA256", self.script)
         self.assertIn("CONTROL_EXPECTED_TOOLS_VERIFIER_SHA256", self.script)
