@@ -64,6 +64,11 @@ Connector** in the empty state. Select the operating system, architecture, and
 package format, download it, then run the checksum-and-install command shown by
 the PWA. Continue only when the SHA-256 matches exactly.
 
+The same asset must appear under the exact `connector-v*` tag on the
+[GitHub Releases page](https://github.com/peter2317238492/sub2api-codex-control/releases).
+Do not install an automatically generated source archive or mix assets from
+different tags. Stop if the PWA tag, filename, or checksum differs.
+
 This does not require Sub2API administrator assistance. Linux package installation
 uses local `sudo`; macOS Installer may request local administrator approval.
 

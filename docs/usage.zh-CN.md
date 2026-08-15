@@ -56,6 +56,10 @@ https://control.example.com/codex/
 点击设备栏顶部的下载图标，或在“暂无设备”状态点击**安装 Connector**。选择操作系统、架构
 和包格式，下载安装包，再执行 PWA 给出的校验与安装命令。只有 SHA-256 完全一致时才继续。
 
+同一文件必须存在于 [GitHub Releases 页面](https://github.com/peter2317238492/sub2api-codex-control/releases)
+的精确 `connector-v*` 标签下。不要安装 GitHub 自动生成的源码压缩包，也不要混用不同标签
+的文件；只要 PWA 显示的标签、文件名或校验值不一致，就应停止。
+
 此步骤不需要 Sub2API 管理员协助；Linux 安装使用本机 `sudo`，macOS Installer 也可能要求
 本机管理员授权。
 

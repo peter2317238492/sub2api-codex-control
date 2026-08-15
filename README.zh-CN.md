@@ -11,6 +11,7 @@
 <p align="center">
   <a href="README.md">English</a> ·
   <a href="#普通用户快速开始">快速开始</a> ·
+  <a href="https://github.com/peter2317238492/sub2api-codex-control/releases">发布下载</a> ·
   <a href="docs/installation.zh-CN.md">安装指南</a> ·
   <a href="docs/usage.zh-CN.md">使用手册</a> ·
   <a href="docs/operations.zh-CN.md">运维指南</a> ·
@@ -29,6 +30,20 @@
 > 当前仓库发布的是**源码候选版**，尚未发布正式签名的 GitHub Release 和受支持安装包。
 > 不要把可变工作区、自行构建的二进制或未签名镜像当作生产版本。只有 GitHub 出现不可变
 > 标签 Release 后，才应按对应发布说明安装。
+
+## 发布下载
+
+所有受支持的下载都会发布在仓库的
+[GitHub Releases 页面](https://github.com/peter2317238492/sub2api-codex-control/releases)。
+源码候选版仍在审查期间，该页面保持为空是正常现象。
+
+| 使用者 | Release 标签 | 受支持的下载路径 |
+| --- | --- | --- |
+| 普通用户 | `connector-v*` | 优先使用 Control PWA 显示的安装包与 SHA-256；同一签名 `.deb`、`.rpm` 或已公证 `.pkg` 必须存在于对应 GitHub Release |
+| 服务器管理员 | `control-v*` | 下载 online/offline 服务器包及其证据，再按[独立校验与安装流程](deploy/server-package/INSTALL.md)操作 |
+
+不要把 GitHub 自动生成的 **Source code** 压缩包当作生产安装包。如果 PWA 元数据、Release
+标签、文件名或 SHA-256 任一不完全一致，应立即停止，不要改用其他文件。
 
 ## 一眼看懂
 
@@ -241,7 +256,9 @@ SHA-256、所有者、权限、symlink，以及记录的配置、状态、工作
 5. 源码、镜像锁、SBOM、来源证明和回滚证据均已签名验证；
 6. 完成认证后的浏览器/设备验收与告警送达验证。
 
-从[部署手册](docs/runbooks/deployment.md)开始，并结合[备份与回滚](docs/runbooks/backups-and-rollback.md)
+先从 [Releases 页面](https://github.com/peter2317238492/sub2api-codex-control/releases)
+取得同一签名 `control-v*` 版本，按[服务器包独立校验流程](deploy/server-package/INSTALL.md)
+认证并解包，再继续执行[部署手册](docs/runbooks/deployment.md)，并结合[备份与回滚](docs/runbooks/backups-and-rollback.md)
 和[可观测性](docs/runbooks/observability.md)。直接执行迁移、直接 `docker compose up` 或从工作区
 部署都会绕过必要门禁，不属于受支持的生产路径。
 
