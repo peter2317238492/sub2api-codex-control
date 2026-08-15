@@ -372,7 +372,7 @@ def test_evidence_writer_is_no_replace_private_and_redacted(tmp_path: Path) -> N
         "ABCD-EFGH-JKLM-NPQR",
         "device-uuid",
         "thread-uuid",
-        "/Users/private/workspace",
+        "/Users/example/private-workspace",
         "https://private.example.invalid",
     )
 
