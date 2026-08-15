@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="README.md">English</a> ·
+  <a href="#普通用户快速开始">快速开始</a> ·
   <a href="docs/installation.zh-CN.md">安装指南</a> ·
   <a href="docs/usage.zh-CN.md">使用手册</a> ·
   <a href="docs/operations.zh-CN.md">运维指南</a> ·
@@ -17,6 +18,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/peter2317238492/sub2api-codex-control/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/peter2317238492/sub2api-codex-control/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="发布状态" src="https://img.shields.io/badge/status-release%20candidate-E6A23C">
   <img alt="Codex 版本" src="https://img.shields.io/badge/Codex-0.147.0-111827">
   <img alt="Sub2API 版本" src="https://img.shields.io/badge/Sub2API-0.1.176-2563EB">
@@ -27,6 +29,17 @@
 > 当前仓库发布的是**源码候选版**，尚未发布正式签名的 GitHub Release 和受支持安装包。
 > 不要把可变工作区、自行构建的二进制或未签名镜像当作生产版本。只有 GitHub 出现不可变
 > 标签 Release 后，才应按对应发布说明安装。
+
+## 一眼看懂
+
+| | 说明 |
+| --- | --- |
+| **解决什么问题** | 在手机或另一台电脑的浏览器中，查看并控制自己设备上的 Codex |
+| **如何连接** | 用户设备只主动建立出站 WSS，不开放入站端口 |
+| **谁可以使用** | 每个已登录的 Sub2API 普通用户，只能看到并管理自己的设备和线程 |
+| **谁负责配置** | 管理员一次性启用站点；之后安装、配置、配对、使用和撤销均由用户自助完成 |
+| **安全边界** | 固定八类 RPC、工作区白名单、沙箱上限、限时审批，不提供原始远程 shell |
+| **支持平台** | Connector 支持 Linux `amd64` / `arm64` 与 macOS Intel / Apple 芯片；暂不支持 Windows |
 
 ## 项目介绍
 
@@ -68,6 +81,10 @@ flowchart LR
 
 以下流程适用于正式 `connector-v*` Release 发布，并且你的 Sub2API 站点已启用 Control 之后。
 
+开始前准备好：已登录的 Sub2API 账号、安装了准确版本 Codex CLI 的 Linux 或 macOS 设备、
+至少一个允许远程使用的绝对工作区路径，以及到站点 TCP 443 的出站网络。你不需要管理员
+创建设备、下发配对码或代为修改 Connector 配置。
+
 ### 1. 登录
 
 先在正常站点根路径登录 Sub2API，再打开同一域名下的 Control PWA：
@@ -81,8 +98,8 @@ Control API。
 
 ### 2. 安装 Connector
 
-在 PWA 中打开 **设备 → 设置 Connector**，选择与你的系统和架构一致的安装包，安装前核对
-页面显示的 SHA-256。
+在左侧设备栏点击下载图标，或在空状态点击**安装 Connector**。选择与你的系统和架构一致的
+安装包，安装前核对页面显示的 SHA-256。
 
 | 平台 | 支持的安装包 | 安装命令 |
 | --- | --- | --- |
@@ -92,23 +109,32 @@ Control API。
 
 后续 Connector 命令必须由拥有 Codex 和工作区的普通用户执行，不要以 `root` 运行。
 
-### 3. 配置并配对
+### 3. 创建私密配置
 
-PWA 可以生成 `connector.json`；也可以使用安装包附带的命令创建相同的私密配置：
+推荐直接使用安装包附带的命令创建 mode `0600` 配置：
 
 ```sh
 sub2api-codex-connector-ctl init \
   --origin https://control.example.com \
   --workspace /absolute/path/to/workspace \
   --display-name "我的工作站"
+```
 
+如需一次配置多个工作区，也可以在 PWA 填写设备名称、状态目录、工作区和沙箱上限后下载
+`connector.json`，再按[安装指南](docs/installation.zh-CN.md#创建私密配置)放到正确的私密路径。
+不要从下载目录直接长期运行配置。
+
+### 4. 配对设备
+
+```sh
 sub2api-codex-connector-ctl pair
 ```
 
 `pair` 会提示一个 mode `0600` 文件路径，文件内是一组一次性配对码。保持命令运行，在 PWA
-输入配对码并等待设备上线。不要把配对码粘贴到聊天、日志或公开 Issue。
+点击**配对已有 Connector**，输入 16 位配对码并等待认领完成。不要把配对码粘贴到聊天、
+日志或公开 Issue。
 
-### 4. 启动服务
+### 5. 启动服务
 
 ```sh
 sub2api-codex-connector-ctl start
@@ -118,13 +144,23 @@ sub2api-codex-connector-ctl status
 Linux 包安装用户级 `systemd` 服务，macOS 包安装 `launchd` agent。安装和升级不会修改现有
 Codex 文件。
 
-### 5. 使用 Codex
+### 6. 使用 Codex
 
 1. 在 PWA 选择在线设备。
 2. 在该设备允许的工作区根目录内新建线程。
 3. 选择模型并发送文本输入。
 4. 仔细确认每个审批；过期或未处理的审批会自动拒绝。
 5. 可在 PWA 中引导或中断当前 turn、恢复托管线程，或归档空闲线程。
+
+## 界面速览
+
+| 区域 | 用途 |
+| --- | --- |
+| 顶栏 | 查看实时连接状态、打开待审批列表、刷新会话或安全退出 |
+| 设备栏 | 安装或配对 Connector、切换设备、查看在线状态及撤销设备 |
+| 线程栏 | 搜索、新建、选择和归档当前设备的托管线程 |
+| 对话区 | 发送消息；运行中继续输入会引导当前 turn；停止按钮会中断当前 turn |
+| 审批抽屉 | 查看来源、类型、详情和到期时间，再明确批准或拒绝一次性请求 |
 
 ## 常用命令
 
@@ -156,13 +192,25 @@ sub2api-codex-connector-ctl purge-user-state --yes
 | 现象 | 检查项 |
 | --- | --- |
 | PWA 自动返回 Sub2API | 先在 `/` 登录，再打开同一域名的 `/codex/`。 |
-| 配对一直不完成 | 保持 `connector-ctl pair` 运行，检查系统时间、HTTPS origin 和出站 WSS。 |
+| 配对一直不完成 | 保持 `connector-ctl pair` 运行，检查系统时间、HTTPS origin、出站 WSS 和配对码是否过期。 |
 | Codex 版本被拒绝 | 安装准确的 `codex-cli 0.147.0`；Connector 会主动阻止协议漂移。 |
 | 工作区被拒绝 | 使用已存在的绝对路径，且不要与 Connector 状态目录或 `CODEX_HOME` 重叠。 |
 | 设备离线 | 运行 `connector-ctl status` 和 `connector-ctl logs`，检查出站 TLS。 |
 | 审批突然消失 | 审批可能已过期、已处理、属于其他用户，或在重连后失效。 |
 
-撤销、注销和远程数据投影边界见完整[使用手册](docs/usage.zh-CN.md)。
+首次配置、日常对话、审批、恢复、归档、撤销、注销和数据边界见完整
+[使用手册](docs/usage.zh-CN.md)。
+
+## 用户与管理员边界
+
+| 普通用户自行完成 | 仅服务器管理员负责 |
+| --- | --- |
+| 下载匹配的 Connector、创建私密配置 | 部署并升级 Control 服务 |
+| 选择本地工作区和沙箱上限 | 配置 TLS、Nginx、数据库和 Redis 隔离 |
+| 配对、启动、诊断和撤销自己的设备 | 发布并签名可信安装包和镜像 |
+| 新建线程、对话、审批、中断和归档 | 执行备份、恢复演练、回滚和监控 |
+
+正常使用不需要管理员接触用户的设备、Codex 登录信息、工作区内容或配对码。
 
 ## 服务器管理员
 

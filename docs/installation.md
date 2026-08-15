@@ -60,9 +60,9 @@ public TLS, production WSS connectivity, or release authenticity.
 
 Use this path only after the repository publishes an immutable, signed
 `connector-v*` GitHub Release and the Control PWA displays that exact release.
-In the PWA, open **Devices -> Set up Connector**, select the operating system
-and architecture, and compare the downloaded file's SHA-256 with the value
-shown in the PWA.
+Click the download icon in the PWA device rail, or choose **Install Connector**
+in its empty state. Select the operating system and architecture, then compare
+the downloaded file's SHA-256 with the value shown in the PWA.
 
 | Platform | Package | Installation command |
 | --- | --- | --- |
@@ -70,21 +70,62 @@ shown in the PWA.
 | Fedora / RHEL `amd64`, `arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
 | macOS Intel, Apple silicon | signed and notarized `.pkg` | `sudo installer -pkg ./sub2api-codex-connector_*.pkg -target /` |
 
-Run the installed helper as the ordinary user who owns Codex and the intended
-workspace. Replace the example origin and workspace with your values:
+The package installs only the Connector, its user service, and its management
+command; it does not install or upgrade Codex. Run every command below as the
+ordinary user who owns Codex and the intended workspace.
+
+## Create private configuration
+
+The recommended path is to let the management command create the configuration.
+Replace the example origin and workspace with your values:
 
 ```sh
 sub2api-codex-connector-ctl init \
   --origin https://control.example.com \
   --workspace /absolute/path/to/workspace \
   --display-name "My workstation"
+```
 
+The command writes a mode-`0600` configuration at:
+
+```text
+${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
+```
+
+To configure multiple workspaces at once, use the PWA's **Generate
+configuration** step. Enter the device name, an absolute state directory, 1 to
+32 absolute workspace paths, and the sandbox cap. Place the downloaded
+`connector.json` at the same private path:
+
+```sh
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector"
+install -d -m 0700 "$config_dir"
+install -m 0600 "$HOME/Downloads/connector.json" "$config_dir/connector.json"
+```
+
+Do not run long-term from the downloads directory, commit this file, send it in
+chat, or give it to an operator. `state_dir` and every `workspace_roots` entry
+must be an existing absolute path. State, workspaces, and `CODEX_HOME` must not
+contain one another.
+
+Print the effective path with:
+
+```sh
+sub2api-codex-connector-ctl config-path
+```
+
+## Pair and start
+
+After creating the configuration, begin pairing:
+
+```sh
 sub2api-codex-connector-ctl pair
 ```
 
-Keep `pair` running. It reports a mode-`0600` file containing a one-time code;
-enter that code in the authenticated PWA. When the PWA shows the device as
-paired, start the user service and confirm its status:
+Keep `pair` running. It reports a mode-`0600` file containing a one-time code.
+Select **Pair existing Connector** in the authenticated PWA and enter that
+code. After the command confirms the claim and exits, start the user service
+and confirm its status:
 
 ```sh
 sub2api-codex-connector-ctl start
@@ -113,9 +154,9 @@ CGO_ENABLED=0 go build -trimpath -buildvcs=false \
 Create a private configuration directory and start from the example:
 
 ```sh
-install -d -m 0700 "$HOME/.config/sub2api-codex-control"
+install -d -m 0700 "$HOME/.config/sub2api-codex-connector"
 install -m 0600 connector.example.json \
-  "$HOME/.config/sub2api-codex-control/connector.json"
+  "$HOME/.config/sub2api-codex-connector/connector.json"
 ```
 
 Edit the private copy. Replace `control.example.com`, `display_name`,
@@ -141,7 +182,7 @@ With the Control plane already available, begin pairing:
 
 ```sh
 ./sub2api-codex-connector \
-  -config "$HOME/.config/sub2api-codex-control/connector.json" \
+  -config "$HOME/.config/sub2api-codex-connector/connector.json" \
   -pair-only
 ```
 

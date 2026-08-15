@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="#user-quick-start">Quick start</a> ·
   <a href="docs/installation.md">Installation</a> ·
   <a href="docs/usage.md">User guide</a> ·
   <a href="docs/operations.md">Operations</a> ·
@@ -17,6 +18,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/peter2317238492/sub2api-codex-control/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/peter2317238492/sub2api-codex-control/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Release status" src="https://img.shields.io/badge/status-release%20candidate-E6A23C">
   <img alt="Codex version" src="https://img.shields.io/badge/Codex-0.147.0-111827">
   <img alt="Sub2API version" src="https://img.shields.io/badge/Sub2API-0.1.176-2563EB">
@@ -29,6 +31,17 @@
 > a mutable checkout, an ad hoc binary, or an unsigned image as a production
 > release. Follow the release notes only after an immutable tagged Release
 > appears on GitHub.
+
+## At a glance
+
+| | Description |
+| --- | --- |
+| **Problem solved** | View and control Codex on your own device from a browser on another computer or phone |
+| **Connection model** | The user device makes an outbound WSS connection and opens no inbound port |
+| **Who can use it** | Every signed-in Sub2API user, isolated to their own devices and threads |
+| **Who configures it** | An operator enables the site once; users then install, configure, pair, use, and revoke devices themselves |
+| **Security boundary** | Eight fixed RPCs, workspace allowlists, sandbox caps, and expiring approvals; no raw remote shell |
+| **Platforms** | Connector supports Linux `amd64` / `arm64` and macOS Intel / Apple silicon; Windows is not supported yet |
 
 ## What it is
 
@@ -80,6 +93,11 @@ flowchart LR
 This flow applies after a signed `connector-v*` Release is published and your
 Sub2API operator has enabled Control.
 
+Before starting, have a signed-in Sub2API account, a Linux or macOS device with
+the exact supported Codex CLI, at least one absolute workspace path, and
+outbound TCP 443 access to the site. You do not need an administrator to create
+a device, issue a pairing code, or edit Connector configuration for you.
+
 ### 1. Sign in
 
 Sign in to Sub2API at the normal site root, then open the Control PWA on the
@@ -94,9 +112,9 @@ HttpOnly session. Your Sub2API refresh credential is not sent to Control.
 
 ### 2. Install the Connector
 
-In the PWA, open **Devices → Set up Connector** and select the package matching
-your operating system and architecture. Verify the displayed SHA-256 before
-installing.
+Click the download icon in the device rail, or select **Install Connector** in
+the empty state. Choose the package for your operating system and architecture,
+then verify the displayed SHA-256 before installing.
 
 | Platform | Supported package | Install with |
 | --- | --- | --- |
@@ -107,25 +125,36 @@ installing.
 Run Connector commands as the ordinary user who owns Codex and the workspace,
 not as `root`.
 
-### 3. Configure and pair
+### 3. Create private configuration
 
-The PWA can generate `connector.json`, or the installed helper can create the
-same private configuration:
+The recommended path is to let the installed helper create a mode-`0600`
+configuration:
 
 ```sh
 sub2api-codex-connector-ctl init \
   --origin https://your-sub2api.example \
   --workspace /absolute/path/to/workspace \
   --display-name "My workstation"
+```
 
+To configure multiple workspaces at once, fill in the device name, state
+directory, workspaces, and sandbox cap in the PWA and download
+`connector.json`. Place it at the private path described in the
+[installation guide](docs/installation.md#create-private-configuration); do not
+run long-term from the downloads directory.
+
+### 4. Pair the device
+
+```sh
 sub2api-codex-connector-ctl pair
 ```
 
 `pair` reports the path of a mode-`0600` file containing a one-time code. Keep
-the command running, enter that code in the PWA, and wait until the device is
-shown as online. Do not paste the code into chat, logs, or an issue.
+the command running, select **Pair existing Connector** in the PWA, enter the
+16-character code, and wait for the claim to complete. Do not paste the code
+into chat, logs, or an issue.
 
-### 4. Start the service
+### 5. Start the service
 
 ```sh
 sub2api-codex-connector-ctl start
@@ -135,7 +164,7 @@ sub2api-codex-connector-ctl status
 The package installs a user-level `systemd` service on Linux or a `launchd`
 agent on macOS. It preserves existing Codex files during install and upgrade.
 
-### 5. Control Codex
+### 6. Control Codex
 
 1. Select an online device.
 2. Create a thread inside one of its allowed workspace roots.
@@ -143,6 +172,16 @@ agent on macOS. It preserves existing Codex files during install and upgrade.
 4. Review each approval request; stale or unanswered requests are denied.
 5. Steer or interrupt the active turn, resume a managed thread, or archive an
    idle thread from the PWA.
+
+## Interface tour
+
+| Area | Purpose |
+| --- | --- |
+| Header | See live connection state, open pending approvals, renew the session, or sign out |
+| Device rail | Install or pair a Connector, switch devices, see status, and revoke a device |
+| Thread list | Search, create, select, and archive managed threads for the selected device |
+| Conversation | Send a message; typing while running steers the turn; the stop button interrupts it |
+| Approval drawer | Review origin, type, details, and expiry before approving or denying a one-shot request |
 
 ## Everyday Commands
 
@@ -176,14 +215,26 @@ That command refuses root execution and refuses any path overlapping
 | Symptom | Check |
 | --- | --- |
 | PWA returns to Sub2API | Sign in at `/` first, then reopen `/codex/` on the same host. |
-| Pairing does not complete | Keep `connector-ctl pair` running, check system time, HTTPS origin, and outbound WSS. |
+| Pairing does not complete | Keep `connector-ctl pair` running; check system time, HTTPS origin, outbound WSS, and code expiry. |
 | Codex version is rejected | Install exactly `codex-cli 0.147.0`; protocol drift is intentionally blocked. |
 | Workspace is rejected | Use an existing absolute path outside Connector state and `CODEX_HOME`. |
 | Device is offline | Run `connector-ctl status` and `connector-ctl logs`; verify outbound TLS access. |
 | Approval disappeared | It expired, was already resolved, belonged to another user, or became stale after reconnect. |
 
-See the complete [usage guide](docs/usage.md) for revocation, logout, and the
-remote data-projection boundary.
+See the complete [usage guide](docs/usage.md) for first-time setup, daily use,
+approvals, recovery, archiving, revocation, logout, and the remote data boundary.
+
+## User and operator boundary
+
+| Ordinary users handle | Server operators handle |
+| --- | --- |
+| Downloading the matching Connector and creating private configuration | Deploying and upgrading the Control services |
+| Selecting local workspaces and the sandbox cap | TLS, Nginx, database, and Redis isolation |
+| Pairing, starting, diagnosing, and revoking their own devices | Publishing and signing trusted packages and images |
+| Threads, turns, approvals, interruption, and archiving | Backups, restore rehearsals, rollback, and monitoring |
+
+Normal use never requires an operator to access a user's device, Codex login,
+workspace contents, or pairing code.
 
 ## For Server Operators
 
