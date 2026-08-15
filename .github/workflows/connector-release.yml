@@ -1,9 +1,7 @@
 name: Connector protected release
 
 on:
-  push:
-    tags:
-      - "connector-v*"
+  workflow_dispatch:
 
 permissions: {}
 
@@ -16,8 +14,18 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
+  source-only-guard:
+    name: Binary release disabled until the formal package gates close
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail closed before any signing or release write
+        run: |
+          echo "Connector binary publication remains disabled until protected signing environments and package gates are complete." >&2
+          exit 1
+
   build:
     name: Test and build reproducible candidates
+    needs: source-only-guard
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:

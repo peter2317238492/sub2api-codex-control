@@ -1,9 +1,7 @@
 name: Control images protected release
 
 on:
-  push:
-    tags:
-      - "control-v*"
+  workflow_dispatch:
 
 permissions: {}
 
@@ -17,8 +15,18 @@ env:
   COSIGN_EXPERIMENTAL: "1"
 
 jobs:
+  source-only-guard:
+    name: Binary release disabled until the formal package gates close
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail closed before any registry or release write
+        run: |
+          echo "Control binary publication remains disabled until server packages, protected environments, and production gates are complete." >&2
+          exit 1
+
   validate:
     name: Validate exact source and run release gates
+    needs: source-only-guard
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:

@@ -114,5 +114,6 @@ jobs:
       - name: Test and vet
         working-directory: connector
         run: |
+          python3 -m unittest discover -s release/tests -v
           go test -race -count=1 ./...
           go vet ./...

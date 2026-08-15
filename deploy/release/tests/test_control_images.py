@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -68,10 +69,23 @@ class ControlImageReleaseTests(unittest.TestCase):
         self._write_provenance(
             "postgres-tools", POSTGRES_TOOLS_REPOSITORY, POSTGRES_TOOLS_DIGEST
         )
+        self._write_source_bundle()
         control_images.command_create_lock(
             argparse.Namespace(
                 **self.common,
                 output_dir=str(self.release_dir),
+                source_archive=str(
+                    self.release_dir
+                    / control_images.source_bundle_tool.ARCHIVE_FILENAME
+                ),
+                source_manifest=str(
+                    self.release_dir
+                    / control_images.source_bundle_tool.MANIFEST_FILENAME
+                ),
+                source_attestation=str(
+                    self.release_dir
+                    / control_images.source_bundle_tool.ATTESTATION_FILENAME
+                ),
                 control_api_repository=API_REPOSITORY,
                 control_api_digest=API_DIGEST,
                 control_api_sbom=str(self.release_dir / "control-api.spdx.json"),
@@ -119,6 +133,71 @@ class ControlImageReleaseTests(unittest.TestCase):
                 digest=digest,
                 output=str(self.release_dir / f"{component}.provenance.json"),
             )
+        )
+
+    def _write_source_bundle(self) -> None:
+        tool = control_images.source_bundle_tool
+        components = {
+            "format_version": 1,
+            "components": [
+                {
+                    "id": "fixture",
+                    "license_files": [
+                        {"path": "third_party/licenses/Fixture-LICENSE.txt"}
+                    ],
+                }
+            ],
+        }
+        contents = {
+            "README.md": b"public source fixture\n",
+            "LICENSE": b"fixture license\n",
+            "NOTICE": b"fixture notice\n",
+            "THIRD_PARTY_NOTICES.md": b"fixture third-party notices\n",
+            "scripts/check-licenses.py": b"#!/usr/bin/env python3\n",
+            "scripts/check-public-tree.py": b"#!/usr/bin/env python3\n",
+            "third_party/components.json": tool.canonical_json(components),
+            "third_party/licenses/Fixture-LICENSE.txt": b"fixture dependency license\n",
+        }
+        records = [
+            {
+                "mode": "0555" if path.startswith("scripts/") else "0444",
+                "path": path,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size": len(content),
+            }
+            for path, content in sorted(contents.items())
+        ]
+        manifest = tool.manifest_bytes(records)
+        manifest_path = self.release_dir / tool.MANIFEST_FILENAME
+        manifest_path.write_bytes(manifest)
+        archive_path = self.release_dir / tool.ARCHIVE_FILENAME
+        epoch = 1_700_000_000
+        with archive_path.open("wb") as raw:
+            tool.write_archive_stream(raw, records, contents, epoch)
+        attestation = {
+            "$schema": tool.SCHEMA_ID,
+            "format_version": tool.FORMAT_VERSION,
+            "release": RELEASE,
+            "source": {
+                "commit": SOURCE_COMMIT,
+                "repository": SOURCE_REPOSITORY,
+            },
+            "source_date_epoch": epoch,
+            "file_count": len(records),
+            "total_bytes": sum(record["size"] for record in records),
+            "manifest": {
+                "filename": tool.MANIFEST_FILENAME,
+                "sha256": tool.sha256_file(manifest_path),
+                "size": manifest_path.stat().st_size,
+            },
+            "archive": {
+                "filename": tool.ARCHIVE_FILENAME,
+                "sha256": tool.sha256_file(archive_path),
+                "size": archive_path.stat().st_size,
+            },
+        }
+        (self.release_dir / tool.ATTESTATION_FILENAME).write_bytes(
+            tool.canonical_json(attestation)
         )
 
     def _verify_args(self, **overrides: str) -> argparse.Namespace:
@@ -242,6 +321,19 @@ class ControlImageReleaseTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        source_bundle = lock["source_bundle"]
+        self.assertEqual(
+            values["CONTROL_SOURCE_ARCHIVE_SHA256"],
+            source_bundle["archive"]["sha256"],
+        )
+        self.assertEqual(
+            values["CONTROL_SOURCE_ATTESTATION_SHA256"],
+            source_bundle["attestation"]["sha256"],
+        )
+        self.assertEqual(
+            values["CONTROL_SOURCE_MANIFEST_SHA256"],
+            source_bundle["manifest"]["sha256"],
+        )
         release_inputs = lock["release_inputs"]["files"]
         self.assertEqual(
             values["CONTROL_VERSIONS_LOCK_SHA256"],
@@ -280,6 +372,9 @@ class ControlImageReleaseTests(unittest.TestCase):
                 "CONTROL_RELEASE_EVIDENCE_SHA256S",
                 "CONTROL_RELEASE_INPUT_SHA256S",
                 "CONTROL_RELEASE_LOCK_SHA256",
+                "CONTROL_SOURCE_ARCHIVE_SHA256",
+                "CONTROL_SOURCE_ATTESTATION_SHA256",
+                "CONTROL_SOURCE_MANIFEST_SHA256",
                 "CONTROL_SOURCE_REPOSITORY",
                 "CONTROL_SUB2API_AUTH_CONTRACT_PATH",
                 "CONTROL_SUB2API_AUTH_CONTRACT_SHA256",
@@ -294,6 +389,13 @@ class ControlImageReleaseTests(unittest.TestCase):
         for component in control_images.COMPONENTS:
             expected_files.add(f"{component}.spdx.json")
             expected_files.add(f"{component}.provenance.json")
+        expected_files.update(
+            {
+                control_images.source_bundle_tool.ARCHIVE_FILENAME,
+                control_images.source_bundle_tool.MANIFEST_FILENAME,
+                control_images.source_bundle_tool.ATTESTATION_FILENAME,
+            }
+        )
         self.assertEqual(
             {entry.name for entry in self.release_dir.iterdir()}, expected_files
         )
@@ -426,6 +528,24 @@ class ControlImageReleaseTests(unittest.TestCase):
                     )
                 path.write_bytes(original)
 
+    def test_tampered_source_asset_for_each_type_is_rejected(self) -> None:
+        for filename in (
+            control_images.source_bundle_tool.ARCHIVE_FILENAME,
+            control_images.source_bundle_tool.MANIFEST_FILENAME,
+            control_images.source_bundle_tool.ATTESTATION_FILENAME,
+        ):
+            with self.subTest(filename=filename):
+                path = self.release_dir / filename
+                original = path.read_bytes()
+                path.write_bytes(original + b"x")
+                with self.assertRaisesRegex(
+                    control_images.ReleaseError, "source bundle"
+                ):
+                    control_images.validate_release_directory(
+                        self.release_dir, expect_bundle=True
+                    )
+                path.write_bytes(original)
+
     def test_missing_bundle_is_rejected(self) -> None:
         (self.release_dir / control_images.BUNDLE_FILENAME).unlink()
         with self.assertRaisesRegex(
@@ -522,6 +642,16 @@ class ControlImageReleaseTests(unittest.TestCase):
         arguments = argparse.Namespace(
             **self.common,
             output_dir=str(self.release_dir),
+            source_archive=str(
+                self.release_dir / control_images.source_bundle_tool.ARCHIVE_FILENAME
+            ),
+            source_manifest=str(
+                self.release_dir / control_images.source_bundle_tool.MANIFEST_FILENAME
+            ),
+            source_attestation=str(
+                self.release_dir
+                / control_images.source_bundle_tool.ATTESTATION_FILENAME
+            ),
             control_api_repository=API_REPOSITORY,
             control_api_digest=API_DIGEST,
             control_api_sbom=str(outside),
@@ -554,14 +684,17 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
         self.assertEqual(set(images["required"]), set(control_images.COMPONENTS))
         self.assertEqual(set(images["properties"]), set(control_images.COMPONENTS))
 
-    def test_workflow_actions_are_commit_pinned_and_release_only_on_tag_push(
+    def test_workflow_actions_are_commit_pinned_and_release_is_guarded(
         self,
     ) -> None:
         workflow = (
             REPO_ROOT / ".github/workflows/control-images-release.yml"
         ).read_text()
-        self.assertIn('tags:\n      - "control-v*"', workflow)
-        self.assertNotIn("workflow_dispatch", workflow)
+        self.assertNotIn('tags:\n      - "control-v*"', workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("source-only-guard:", workflow)
+        self.assertIn("needs: source-only-guard", workflow)
+        self.assertIn("exit 1", workflow)
         self.assertIn("permissions: {}", workflow)
         for action in re.findall(r"uses:\s+([^\s#]+)", workflow):
             reference = action.rsplit("@", 1)[-1]
@@ -575,6 +708,85 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
         self.assertIn("--component postgres-tools", workflow)
         self.assertIn("--expected-postgres-tools-repository", workflow)
         self.assertIn("for component in control-api pwa postgres-tools", workflow)
+
+    def test_binary_release_workflows_are_unreachable_in_source_only_mode(self) -> None:
+        for filename, forbidden_tag in (
+            ("control-images-release.yml", "control-v*"),
+            ("connector-release.yml", "connector-v*"),
+        ):
+            with self.subTest(filename=filename):
+                workflow = (REPO_ROOT / ".github/workflows" / filename).read_text()
+                self.assertNotIn(forbidden_tag, workflow.split("jobs:", 1)[0])
+                self.assertIn("workflow_dispatch:", workflow.split("jobs:", 1)[0])
+                self.assertRegex(
+                    workflow,
+                    r"source-only-guard:[\s\S]*?exit 1",
+                )
+                publish_jobs = re.findall(
+                    r"^  ([A-Za-z0-9_-]+):\n(?:(?:    .*|\s*)\n)*?"
+                    r"    needs: ([A-Za-z0-9_-]+)",
+                    workflow,
+                    flags=re.MULTILINE,
+                )
+                self.assertIn(
+                    ("validate", "source-only-guard")
+                    if filename.startswith("control")
+                    else ("build", "source-only-guard"),
+                    publish_jobs,
+                )
+
+    def test_ci_runs_on_main_and_pull_requests(self) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text()
+        trigger = workflow.split("permissions:", 1)[0]
+        self.assertIn("push:", trigger)
+        self.assertIn("branches:\n      - main", trigger)
+        self.assertIn("pull_request:", trigger)
+        self.assertIn("scripts/check-public-tree.py", workflow)
+        self.assertIn("scripts/check-licenses.py", workflow)
+        self.assertIn("deploy/release/tests", workflow)
+
+    def test_source_bundle_is_verified_before_any_registry_login_or_push(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github/workflows/control-images-release.yml"
+        ).read_text()
+        build = workflow.index("  build:")
+        source = workflow.index(
+            "Build and verify the deterministic source bundle before registry access",
+            build,
+        )
+        login = workflow.index("Log in to the release registry", source)
+        push = workflow.index("push: true", login)
+        lock = workflow.index("control_images.py create-lock", push)
+        self.assertLess(source, login)
+        self.assertLess(login, push)
+        self.assertLess(push, lock)
+        self.assertIn("source_bundle.py build", workflow[source:login])
+        self.assertIn("source_bundle.py verify", workflow[source:login])
+        self.assertIn(
+            'archive_sha256=$(digest "$RELEASE_DIR/source.tar")', workflow[source:login]
+        )
+        self.assertNotIn("source.tar.gz", workflow)
+        self.assertIn('--source-archive "$RELEASE_DIR/source.tar"', workflow[lock:])
+        self.assertIn(
+            '--source-manifest "$RELEASE_DIR/source-files.manifest"', workflow[lock:]
+        )
+        self.assertIn(
+            '--source-attestation "$RELEASE_DIR/source-attestation.json"',
+            workflow[lock:],
+        )
+
+    def test_connector_release_checks_public_source_before_build_or_upload(
+        self,
+    ) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/connector-release.yml").read_text()
+        build = workflow.index("  build:")
+        public_check = workflow.index("scripts/check-public-tree.py", build)
+        license_check = workflow.index("scripts/check-licenses.py", public_check)
+        compile_step = workflow.index("release.py prepare", license_check)
+        upload = workflow.index("actions/upload-artifact@", compile_step)
+        self.assertLess(public_check, license_check)
+        self.assertLess(license_check, compile_step)
+        self.assertLess(compile_step, upload)
 
     def test_workflow_verifies_runtime_constraints_before_installing_dev_extras(
         self,
