@@ -14,6 +14,10 @@
 Connector 目前可从源码构建用于开发与评估。在上述签名 Release 出现之前，不提供受支持的
 预编译 Connector。
 
+受支持的发布资产只会出现在仓库的
+[GitHub Releases 页面](https://github.com/peter2317238492/sub2api-codex-control/releases)。
+不要把 GitHub 自动生成的源码压缩包当作安装包。
+
 本文命令假设使用 Linux 或 macOS 的 POSIX shell。当前源码支持这两个 Connector 运行目标，
 不支持 Windows Connector。
 
@@ -49,7 +53,12 @@ Codex app-server；它不会使用真实账号或真实供应商密钥。除非�
 ## 安装签名 Connector 包
 
 仅在仓库发布不可变、已签名的 `connector-v*` GitHub Release，并且 Control PWA 显示同一
-精确版本后使用此流程。在 PWA 的设备栏点击下载图标，或在空状态点击**安装 Connector**，
+精确版本后使用此流程。打开
+[Releases 页面](https://github.com/peter2317238492/sub2api-codex-control/releases)，选择该
+精确 `connector-v*` 标签，并确认 PWA 指向完全相同的标签、文件名和 SHA-256。Release
+说明会列出六个受支持的原生包，不要混用其他标签的文件。
+
+在 PWA 的设备栏点击下载图标，或在空状态点击**安装 Connector**，
 选择操作系统和架构，下载安装包，再执行页面给出的校验与安装命令。只有下载文件的 SHA-256
 完全一致时才继续安装。
 
@@ -184,6 +193,16 @@ Control 平面已经可用时，开始配对：
 
 保持进程运行，在已登录的 PWA 中认领 stderr 提示的私密 `pairing-code.json` 文件内配对码。
 命令确认认领并退出后，去掉 `-pair-only` 启动长期运行的 Connector。
+
+## 安装 Control 服务器包
+
+服务器管理员应从 [GitHub Releases 页面](https://github.com/peter2317238492/sub2api-codex-control/releases)
+取得匹配的签名 `control-v*` 版本，不能使用仓库工作区或 GitHub 自动生成的源码压缩包。下载
+online 或 offline 服务器包时，必须同时取得 manifest、独立 verifier 与签名证据；先认证
+verifier，再校验完整 Release 目录，并且只安装校验后解出的包。
+
+完整命令与信任参数见[服务器包安装指南](../deploy/server-package/INSTALL.md)。正式
+[部署手册](runbooks/deployment.md)只接受经过验证的包生命周期 wrapper 作为入口。
 
 ## 生产前置条件
 

@@ -19,6 +19,10 @@ The Connector can currently be built from source for development and
 evaluation. Until the signed Release described above exists, no prebuilt
 Connector binary is supported.
 
+Supported release assets will appear only on the repository's
+[GitHub Releases page](https://github.com/peter2317238492/sub2api-codex-control/releases).
+Do not use GitHub's automatically generated source archives as installers.
+
 Commands in this guide assume a POSIX shell on Linux or macOS. The Connector
 source supports those targets; Windows is not a supported runtime target in
 this source version.
@@ -61,6 +65,10 @@ public TLS, production WSS connectivity, or release authenticity.
 
 Use this path only after the repository publishes an immutable, signed
 `connector-v*` GitHub Release and the Control PWA displays that exact release.
+Open the [Releases page](https://github.com/peter2317238492/sub2api-codex-control/releases),
+select that exact `connector-v*` tag, and confirm the PWA points to the same
+tag, filename, and SHA-256. The release notes identify the six supported native
+assets; do not substitute an asset from another tag.
 Click the download icon in the PWA device rail, or choose **Install Connector**
 in its empty state. Select the operating system and architecture, download the
 package, and run the checksum-and-install command shown by the PWA. Continue
@@ -220,6 +228,20 @@ the private `pairing-code.json` path reported on stderr. After the command
 confirms the claim and exits, start the long-lived Connector without
 `-pair-only`.
 
+## Install the Control server package
+
+Server operators use the matching signed `control-v*` entry on the
+[GitHub Releases page](https://github.com/peter2317238492/sub2api-codex-control/releases),
+not a repository checkout or generated source archive. Download the online or
+offline server package together with its manifest, standalone verifier, and
+signature evidence. Authenticate the verifier before executing it, verify the
+exact release directory, and install only the extracted verified package.
+
+The complete commands and trust inputs are maintained in the
+[server package installation guide](../deploy/server-package/INSTALL.md). The
+production [deployment runbook](runbooks/deployment.md) treats the verified
+package lifecycle wrapper as the only supported entry point.
+
 ## Production prerequisites
 
 Do not attempt a production installation from a mutable checkout or ad hoc
@@ -238,7 +260,7 @@ one exact source revision:
 - a reviewed Nginx integration, one verified pre-change recovery snapshot, and
   private deployment records outside the source tree;
 - successful authenticated HTTP, browser WSS, device WSS, Connector, approval,
-  reconnect, and revocation checks against the intended origin.
+  reconnect, revocation, and logout checks against the intended origin.
 
 The repository contains deployment machinery and policy documentation, but
 their presence is not a release. See [the deployment runbook](runbooks/deployment.md)

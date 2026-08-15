@@ -11,6 +11,7 @@
 <p align="center">
   <a href="README.zh-CN.md">简体中文</a> ·
   <a href="#user-quick-start">Quick start</a> ·
+  <a href="https://github.com/peter2317238492/sub2api-codex-control/releases">Releases</a> ·
   <a href="docs/installation.md">Installation</a> ·
   <a href="docs/usage.md">User guide</a> ·
   <a href="docs/operations.md">Operations</a> ·
@@ -31,6 +32,21 @@
 > a mutable checkout, an ad hoc binary, or an unsigned image as a production
 > release. Follow the release notes only after an immutable tagged Release
 > appears on GitHub.
+
+## Downloads
+
+All supported downloads will be published on the repository's
+[GitHub Releases page](https://github.com/peter2317238492/sub2api-codex-control/releases).
+That page is intentionally empty while this source candidate is under review.
+
+| Audience | Release tag | Supported path |
+| --- | --- | --- |
+| Ordinary users | `connector-v*` | Prefer the package and SHA-256 shown by the Control PWA; the same signed `.deb`, `.rpm`, or notarized `.pkg` must exist in the matching GitHub Release |
+| Server operators | `control-v*` | Download the online or offline server package and its evidence, then follow the [standalone verification and installation procedure](deploy/server-package/INSTALL.md) |
+
+Never install GitHub's automatically generated **Source code** archives as a
+production package. If the PWA metadata, release tag, filename, or SHA-256 do
+not agree exactly, stop rather than substituting another asset.
 
 ## At a glance
 
@@ -274,7 +290,10 @@ exact release:
 5. signed source, image lock, SBOM, provenance, and rollback evidence;
 6. authenticated browser/device acceptance and alert-delivery evidence.
 
-Start with the [deployment runbook](docs/runbooks/deployment.md), then use the
+Start from the matching signed `control-v*` entry on the
+[Releases page](https://github.com/peter2317238492/sub2api-codex-control/releases),
+authenticate and extract it with the [server package verifier](deploy/server-package/INSTALL.md),
+and continue with the [deployment runbook](docs/runbooks/deployment.md). Then use the
 [backup and rollback](docs/runbooks/backups-and-rollback.md) and
 [observability](docs/runbooks/observability.md) runbooks. Direct migration,
 direct `docker compose up`, and deployment from a checkout bypass required
