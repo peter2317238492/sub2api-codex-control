@@ -40,7 +40,7 @@
 | 使用者 | Release 标签 | 受支持的下载路径 |
 | --- | --- | --- |
 | 普通用户 | `connector-v*` | 优先使用 Control PWA 显示的安装包与 SHA-256；同一签名 `.deb`、`.rpm` 或已公证 `.pkg` 必须存在于对应 GitHub Release |
-| 服务器管理员 | `control-v*` | 下载 online/offline 服务器包及其证据，再按[独立校验与安装流程](deploy/server-package/INSTALL.md)操作 |
+| 服务器管理员 | `control-v*` | 下载 online/offline 服务器包及其证据，再按[正式部署流程](docs/runbooks/deployment.md)操作 |
 
 不要把 GitHub 自动生成的 **Source code** 压缩包当作生产安装包。如果 PWA 元数据、Release
 标签、文件名或 SHA-256 任一不完全一致，应立即停止，不要改用其他文件。
@@ -257,8 +257,8 @@ SHA-256、所有者、权限、symlink，以及记录的配置、状态、工作
 6. 完成认证后的浏览器/设备验收与告警送达验证。
 
 先从 [Releases 页面](https://github.com/peter2317238492/sub2api-codex-control/releases)
-取得同一签名 `control-v*` 版本，按[服务器包独立校验流程](deploy/server-package/INSTALL.md)
-认证并解包，再继续执行[部署手册](docs/runbooks/deployment.md)，并结合[备份与回滚](docs/runbooks/backups-and-rollback.md)
+取得同一签名 `control-v*` 版本，按[部署手册](docs/runbooks/deployment.md)认证、解包和安装，
+并结合[备份与回滚](docs/runbooks/backups-and-rollback.md)
 和[可观测性](docs/runbooks/observability.md)。直接执行迁移、直接 `docker compose up` 或从工作区
 部署都会绕过必要门禁，不属于受支持的生产路径。
 

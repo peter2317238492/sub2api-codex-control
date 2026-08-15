@@ -201,8 +201,8 @@ Control 平面已经可用时，开始配对：
 online 或 offline 服务器包时，必须同时取得 manifest、独立 verifier 与签名证据；先认证
 verifier，再校验完整 Release 目录，并且只安装校验后解出的包。
 
-完整命令与信任参数见[服务器包安装指南](../deploy/server-package/INSTALL.md)。正式
-[部署手册](runbooks/deployment.md)只接受经过验证的包生命周期 wrapper 作为入口。
+完整命令与信任参数见正式[部署手册](runbooks/deployment.md)，该手册只接受经过验证的包
+生命周期 wrapper 作为入口。
 
 ## 生产前置条件
 

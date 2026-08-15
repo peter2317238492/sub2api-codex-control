@@ -237,10 +237,9 @@ offline server package together with its manifest, standalone verifier, and
 signature evidence. Authenticate the verifier before executing it, verify the
 exact release directory, and install only the extracted verified package.
 
-The complete commands and trust inputs are maintained in the
-[server package installation guide](../deploy/server-package/INSTALL.md). The
-production [deployment runbook](runbooks/deployment.md) treats the verified
-package lifecycle wrapper as the only supported entry point.
+The complete commands and trust inputs are maintained in the production
+[deployment runbook](runbooks/deployment.md), which treats the verified package
+lifecycle wrapper as the only supported entry point.
 
 ## Production prerequisites
 
