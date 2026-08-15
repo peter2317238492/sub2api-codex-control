@@ -67,7 +67,7 @@ flowchart LR
 
 ## 核心能力
 
-- **普通用户自助管理。** 登录后可在 PWA 选择安装包、生成私密配置、配对并撤销自己的设备。
+- **普通用户自助管理。** 登录后可选择匹配的安装包、复制本地初始化命令、配对并撤销自己的设备。
 - **只允许八类操作。** 远程仅开放 `model/list`、`thread/start`、`thread/list`、
   `thread/read`、`thread/resume`、`turn/start`、`turn/steer` 和 `turn/interrupt`。
 - **审批默认拒绝。** 命令、文件变更和权限审批均为单次、限时、绑定连接世代；超时或失联即拒绝。
@@ -96,22 +96,23 @@ https://control.example.com/codex/
 Control 会将当前 Sub2API access 会话换成短期 HttpOnly 会话。Sub2API refresh 凭据不会进入
 Control API。
 
-### 2. 安装 Connector
+### 2. 下载、校验并安装
 
 在左侧设备栏点击下载图标，或在空状态点击**安装 Connector**。选择与你的系统和架构一致的
-安装包，安装前核对页面显示的 SHA-256。
+安装包，下载后执行 PWA 给出的校验与安装命令。只有 SHA-256 完全一致时才继续安装。
 
 | 平台 | 支持的安装包 | 安装命令 |
 | --- | --- | --- |
 | Debian / Ubuntu `amd64`、`arm64` | `.deb` | `sudo apt install ./sub2api-codex-connector_*.deb` |
 | Fedora / RHEL `amd64`、`arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
-| macOS Intel、Apple 芯片 | 已签名并公证的 `.pkg` | `sudo installer -pkg ./sub2api-codex-connector_*.pkg -target /` |
+| macOS Intel、Apple 芯片 | 已签名并公证的 `.pkg` | `open ./sub2api-codex-connector_*.pkg` |
 
 后续 Connector 命令必须由拥有 Codex 和工作区的普通用户执行，不要以 `root` 运行。
 
 ### 3. 创建私密配置
 
-推荐直接使用安装包附带的命令创建 mode `0600` 配置：
+正式向导一次初始化一个工作区。在 PWA 填写设备名称和绝对工作区路径后，以拥有 Codex 的
+普通用户执行页面给出的命令，创建 mode `0600` 私密配置：
 
 ```sh
 sub2api-codex-connector-ctl init \
@@ -120,21 +121,21 @@ sub2api-codex-connector-ctl init \
   --display-name "我的工作站"
 ```
 
-如需一次配置多个工作区，也可以在 PWA 填写设备名称、状态目录、工作区和沙箱上限后下载
-`connector.json`，再按[安装指南](docs/installation.zh-CN.md#创建私密配置)放到正确的私密路径。
-不要从下载目录直接长期运行配置。
+多工作区属于设备本地高级配置，参见[修改工作区或沙箱](docs/usage.zh-CN.md#修改工作区或沙箱)。
 
-### 4. 配对设备
+### 4. 配对并认领设备
 
 ```sh
 sub2api-codex-connector-ctl pair
 ```
 
 `pair` 会提示一个 mode `0600` 文件路径，文件内是一组一次性配对码。保持命令运行，在 PWA
-点击**配对已有 Connector**，输入 16 位配对码并等待认领完成。不要把配对码粘贴到聊天、
-日志或公开 Issue。
+点击**配对已有 Connector**并输入 16 位配对码，直到命令确认认领并退出。不要把配对码粘贴
+到聊天、日志或公开 Issue。
 
 ### 5. 启动服务
+
+只有 `pair` 已确认网页认领后，才以同一普通用户启动后台服务：
 
 ```sh
 sub2api-codex-connector-ctl start

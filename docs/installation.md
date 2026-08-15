@@ -61,14 +61,15 @@ public TLS, production WSS connectivity, or release authenticity.
 Use this path only after the repository publishes an immutable, signed
 `connector-v*` GitHub Release and the Control PWA displays that exact release.
 Click the download icon in the PWA device rail, or choose **Install Connector**
-in its empty state. Select the operating system and architecture, then compare
-the downloaded file's SHA-256 with the value shown in the PWA.
+in its empty state. Select the operating system and architecture, download the
+package, and run the checksum-and-install command shown by the PWA. Continue
+only when the downloaded file's SHA-256 matches exactly.
 
 | Platform | Package | Installation command |
 | --- | --- | --- |
 | Debian / Ubuntu `amd64`, `arm64` | `.deb` | `sudo apt install ./sub2api-codex-connector_*.deb` |
 | Fedora / RHEL `amd64`, `arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
-| macOS Intel, Apple silicon | signed and notarized `.pkg` | `sudo installer -pkg ./sub2api-codex-connector_*.pkg -target /` |
+| macOS Intel, Apple silicon | signed and notarized `.pkg` | `open ./sub2api-codex-connector_*.pkg` |
 
 The package installs only the Connector, its user service, and its management
 command; it does not install or upgrade Codex. Run every command below as the
@@ -76,8 +77,9 @@ ordinary user who owns Codex and the intended workspace.
 
 ## Create private configuration
 
-The recommended path is to let the management command create the configuration.
-Replace the example origin and workspace with your values:
+The formal wizard initializes one workspace. Enter the device name and an
+existing absolute workspace path in the PWA, then run its displayed management
+command as the ordinary Codex user. The equivalent form is:
 
 ```sh
 sub2api-codex-connector-ctl init \
@@ -92,27 +94,18 @@ The command writes a mode-`0600` configuration at:
 ${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
 ```
 
-To configure multiple workspaces at once, use the PWA's **Generate
-configuration** step. Enter the device name, an absolute state directory, 1 to
-32 absolute workspace paths, and the sandbox cap. Place the downloaded
-`connector.json` at the same private path:
-
-```sh
-config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector"
-install -d -m 0700 "$config_dir"
-install -m 0600 "$HOME/Downloads/connector.json" "$config_dir/connector.json"
-```
-
-Do not run long-term from the downloads directory, commit this file, send it in
-chat, or give it to an operator. `state_dir` and every `workspace_roots` entry
-must be an existing absolute path. State, workspaces, and `CODEX_HOME` must not
-contain one another.
-
 Print the effective path with:
 
 ```sh
 sub2api-codex-connector-ctl config-path
 ```
+
+The private configuration is created and kept on the device. Do not commit it,
+send it in chat, or give it to an operator. For advanced multi-root use, edit
+this local file after initialization and set `workspace_roots` to 1 to 32
+existing absolute directories. You may also lower `sandbox_cap` to `read-only`;
+its maximum is `workspace-write`. Preserve mode `0600`. State, workspaces, and
+`CODEX_HOME` must not contain one another.
 
 ## Pair and start
 
@@ -124,8 +117,9 @@ sub2api-codex-connector-ctl pair
 
 Keep `pair` running. It reports a mode-`0600` file containing a one-time code.
 Select **Pair existing Connector** in the authenticated PWA and enter that
-code. After the command confirms the claim and exits, start the user service
-and confirm its status:
+code. Keep the command running until it confirms the browser claim and exits.
+Only then start the user service, as the same ordinary user, and confirm its
+status:
 
 ```sh
 sub2api-codex-connector-ctl start
