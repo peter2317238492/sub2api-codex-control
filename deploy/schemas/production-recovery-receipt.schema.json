@@ -1,0 +1,824 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.example/schemas/production-recovery-receipt.schema.json",
+  "title": "Sub2API Codex Control production recovery evidence",
+  "oneOf": [
+    { "$ref": "#/$defs/isolatedRestore" },
+    { "$ref": "#/$defs/datastoreIsolation" },
+    { "$ref": "#/$defs/writerUnfreezePlan" },
+    { "$ref": "#/$defs/writerFreeze" },
+    { "$ref": "#/$defs/writerUnfreezeProof" },
+    { "$ref": "#/$defs/writerUnfreezeExecution" },
+    { "$ref": "#/$defs/boundedReversePlan" },
+    { "$ref": "#/$defs/boundedReverseExecution" },
+    { "$ref": "#/$defs/postSuccessReverseAdmission" },
+    { "$ref": "#/$defs/boundedUninstallPlan" },
+    { "$ref": "#/$defs/boundedUninstallExecution" }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time", "pattern": "Z$" },
+    "imageId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "containerIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["container_id", "image_id", "running", "started_at", "restart_count"],
+      "properties": {
+        "container_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "image_id": { "$ref": "#/$defs/imageId" },
+        "running": { "type": "boolean" },
+        "started_at": { "type": "string", "minLength": 1 },
+        "restart_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "isolatedRestore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format_version", "type", "status", "started_at", "completed_at",
+        "backup_admission_path", "backup_admission_sha256",
+        "backup_receipt_sha256", "snapshot_directory",
+        "snapshot_manifest_sha256", "isolation", "postgresql", "redis"
+      ],
+      "properties": {
+        "format_version": { "const": 1 },
+        "type": { "const": "production-isolated-restore-v1" },
+        "status": { "const": "succeeded" },
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "backup_admission_path": { "type": "string", "pattern": "^/" },
+        "backup_admission_sha256": { "$ref": "#/$defs/sha256" },
+        "backup_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "snapshot_directory": { "type": "string", "pattern": "^/" },
+        "snapshot_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "isolation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["docker_network_mode", "published_ports", "temporary_containers_removed"],
+          "properties": {
+            "docker_network_mode": { "const": "none" },
+            "published_ports": { "const": 0 },
+            "temporary_containers_removed": { "const": true }
+          }
+        },
+        "postgresql": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["image_id", "restore_completed", "databases"],
+          "properties": {
+            "image_id": { "$ref": "#/$defs/imageId" },
+            "restore_completed": { "const": true },
+            "databases": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["database", "dump", "dump_sha256", "schema_count", "table_count", "sequence_count"],
+                "properties": {
+                  "database": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$" },
+                  "dump": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+\\.dump$" },
+                  "dump_sha256": { "$ref": "#/$defs/sha256" },
+                  "schema_count": { "type": "integer", "minimum": 0 },
+                  "table_count": { "type": "integer", "minimum": 0 },
+                  "sequence_count": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        },
+        "redis": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["image_id", "restore_completed", "rdb_sha256", "key_count"],
+          "properties": {
+            "image_id": { "$ref": "#/$defs/imageId" },
+            "restore_completed": { "const": true },
+            "rdb_sha256": { "$ref": "#/$defs/sha256" },
+            "key_count": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "datastoreIsolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format_version", "type", "status", "completed_at",
+        "deployment_plan_sha256", "backup_admission_sha256",
+        "backup_receipt_sha256", "snapshot_manifest_sha256", "postgresql", "redis"
+      ],
+      "properties": {
+        "format_version": { "const": 1 },
+        "type": { "const": "production-datastore-isolation-v1" },
+        "status": { "const": "passed" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "deployment_plan_sha256": { "$ref": "#/$defs/sha256" },
+        "backup_admission_sha256": { "$ref": "#/$defs/sha256" },
+        "backup_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "snapshot_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "postgresql": {
+          "type": "object",
+          "required": [
+            "container", "admin_database", "control_role", "control_database",
+            "sub2api_database", "role_flags_exact", "membership_count",
+            "database_owner_exact", "schema_and_object_owners_exact",
+            "public_connect_revoked", "control_to_sub2api_connect_denied",
+            "control_positive_connection"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "container": { "type": "string", "minLength": 1 },
+            "admin_database": { "type": "string", "minLength": 1 },
+            "control_role": { "type": "string", "minLength": 1 },
+            "control_database": { "type": "string", "minLength": 1 },
+            "sub2api_database": { "type": "string", "minLength": 1 },
+            "role_flags_exact": { "const": true },
+            "membership_count": { "const": 0 },
+            "database_owner_exact": { "const": true },
+            "schema_and_object_owners_exact": { "const": true },
+            "public_connect_revoked": { "const": true },
+            "control_to_sub2api_connect_denied": { "const": true },
+            "control_positive_connection": { "const": true }
+          }
+        },
+        "redis": {
+          "type": "object",
+          "required": [
+            "container", "control_user", "prefix", "authenticated", "acl_exact", "aclfile_configured",
+            "anonymous_access_denied", "enabled_nopass_users_absent",
+            "inside_prefix_read_write_passed", "outside_prefix_read_denied",
+            "outside_prefix_write_denied", "inside_channel_publish_passed",
+            "outside_channel_publish_denied", "administrative_command_denied"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "container": { "type": "string", "minLength": 1 },
+            "control_user": { "type": "string", "minLength": 1, "not": { "const": "default" } },
+            "prefix": { "type": "string", "minLength": 1 },
+            "authenticated": { "const": true },
+            "acl_exact": { "const": true },
+            "aclfile_configured": { "const": true },
+            "anonymous_access_denied": { "const": true },
+            "enabled_nopass_users_absent": { "const": true },
+            "inside_prefix_read_write_passed": { "const": true },
+            "outside_prefix_read_denied": { "const": true },
+            "outside_prefix_write_denied": { "const": true },
+            "inside_channel_publish_passed": { "const": true },
+            "outside_channel_publish_denied": { "const": true },
+            "administrative_command_denied": { "const": true }
+          }
+        }
+      }
+    },
+    "writerUnfreezePlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format_version", "type", "status", "created_at", "limits", "bindings", "steps"],
+      "properties": {
+        "format_version": { "const": 1 },
+        "type": { "const": "production-writer-unfreeze-plan-v1" },
+        "status": { "const": "admitted" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_steps", "max_attempts_per_step", "total_timeout_seconds", "post_unfreeze_verification_timeout_seconds", "database_restore_allowed", "exact_container_ids_required"],
+          "properties": {
+            "max_steps": { "const": 2 },
+            "max_attempts_per_step": { "const": 1 },
+            "total_timeout_seconds": { "type": "integer", "minimum": 240, "maximum": 240 },
+            "post_unfreeze_verification_timeout_seconds": { "const": 120 },
+            "database_restore_allowed": { "const": false },
+            "exact_container_ids_required": { "const": true }
+          }
+        },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["current_control_containers_sha256"],
+          "properties": {
+            "current_control_containers_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ordinal", "action", "service", "previous", "max_attempts", "timeout_seconds"],
+            "properties": {
+              "ordinal": { "type": "integer", "minimum": 1, "maximum": 2 },
+              "action": { "enum": ["start-exact-prior-container", "keep-exact-prior-container-stopped", "require-absent"] },
+              "service": { "enum": ["control-api", "control-api-replica"] },
+              "previous": {
+                "anyOf": [
+                  { "$ref": "#/$defs/containerIdentity" },
+                  { "type": "null" }
+                ]
+              },
+              "max_attempts": { "const": 1 },
+              "timeout_seconds": { "const": 60 }
+            }
+          }
+        }
+      }
+    },
+    "writerFreeze": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format_version", "type", "status", "completed_at", "bindings", "no_write_window", "writers"],
+      "properties": {
+        "format_version": { "const": 1 },
+        "type": { "const": "production-writer-freeze-v1" },
+        "status": { "const": "passed" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["current_control_containers_sha256", "unfreeze_plan_sha256", "stopped_before_backup_sha256", "stopped_after_backup_sha256"],
+          "properties": {
+            "current_control_containers_sha256": { "$ref": "#/$defs/sha256" },
+            "unfreeze_plan_sha256": { "$ref": "#/$defs/sha256" },
+            "stopped_before_backup_sha256": { "$ref": "#/$defs/sha256" },
+            "stopped_after_backup_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "no_write_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["all_writers_stopped", "container_restart_observed", "exact_container_ids_preserved"],
+          "properties": {
+            "all_writers_stopped": { "const": true },
+            "container_restart_observed": { "const": false },
+            "exact_container_ids_preserved": { "const": true }
+          }
+        },
+        "writers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["control-api", "control-api-replica"],
+          "properties": {
+            "control-api": { "$ref": "#/$defs/writerFreezeState" },
+            "control-api-replica": { "$ref": "#/$defs/writerFreezeState" }
+          }
+        }
+      }
+    },
+    "writerFreezeState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous", "stopped"],
+      "properties": {
+        "previous": { "anyOf": [{ "$ref": "#/$defs/containerIdentity" }, { "type": "null" }] },
+        "stopped": { "anyOf": [{ "$ref": "#/$defs/containerIdentity" }, { "type": "null" }] }
+      }
+    },
+    "writerUnfreezeProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format_version", "type", "status", "completed_at", "unfreeze_plan_sha256", "expected_containers_sha256", "observed_containers_sha256", "exact_container_ids_restored", "database_restore_performed", "writers"],
+      "properties": {
+        "format_version": { "const": 1 },
+        "type": { "const": "production-writer-unfreeze-proof-v1" },
+        "status": { "const": "passed" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "unfreeze_plan_sha256": { "$ref": "#/$defs/sha256" },
+        "expected_containers_sha256": { "$ref": "#/$defs/sha256" },
+        "observed_containers_sha256": { "$ref": "#/$defs/sha256" },
+        "exact_container_ids_restored": { "const": true },
+        "database_restore_performed": { "const": false },
+        "writers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "control-api": { "$ref": "#/$defs/containerIdentity" },
+            "control-api-replica": { "$ref": "#/$defs/containerIdentity" }
+          }
+        }
+      }
+    },
+    "writerUnfreezeExecution": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "succeeded" } } },
+          "then": { "properties": { "proof": { "type": "object" } } }
+        }
+      ],
+      "required": ["format_version", "type", "status", "trigger_stage", "unfreeze_plan_path", "unfreeze_plan_sha256", "proof", "bounded", "max_attempts_per_step", "database_restore_performed", "exact_container_ids_required", "completed_at"],
+      "properties": {
+        "format_version": { "const": 1 },
+        "type": { "const": "production-writer-unfreeze-execution-v1" },
+        "status": { "enum": ["succeeded", "failed"] },
+        "trigger_stage": { "type": "string", "minLength": 1 },
+        "unfreeze_plan_path": { "type": "string", "pattern": "^/" },
+        "unfreeze_plan_sha256": { "$ref": "#/$defs/sha256" },
+        "proof": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "sha256"],
+              "properties": {
+                "path": { "type": "string", "pattern": "^/" },
+                "sha256": { "$ref": "#/$defs/sha256" }
+              }
+            }
+          ]
+        },
+        "bounded": { "const": true },
+        "max_attempts_per_step": { "const": 1 },
+        "database_restore_performed": { "const": false },
+        "exact_container_ids_required": { "const": true },
+        "completed_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "boundedReverseExecution": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "required": ["status"], "properties": { "status": { "const": "succeeded" } } },
+          "then": {
+            "properties": {
+              "database_mutators_frozen": { "const": true },
+              "mutator_freeze": { "type": "object" },
+              "writer_exposure_after_database_mutation": { "const": false }
+            }
+          }
+        },
+        {
+          "if": { "required": ["status", "database_mutation_observed"], "properties": { "status": { "const": "succeeded" }, "database_mutation_observed": { "const": true } } },
+          "then": {
+            "properties": {
+              "database_restore_performed": { "const": true },
+              "no_writer_exposure_since_backup_proven": { "const": true },
+              "writer_exposure_after_database_mutation": { "const": false }
+            }
+          }
+        },
+        {
+          "if": { "required": ["status", "database_mutation_observed"], "properties": { "status": { "const": "succeeded" }, "database_mutation_observed": { "const": false } } },
+          "then": { "properties": { "database_restore_performed": { "const": false } } }
+        },
+        {
+          "if": { "required": ["trigger_stage"], "properties": { "trigger_stage": { "pattern": "^lifecycle-post-success:" } } },
+          "then": {
+            "properties": {
+              "post_success_admission": { "type": "object" },
+              "database_mutation_observed": { "const": false },
+              "application_mutation_observed": { "const": true },
+              "database_restore_performed": { "const": false }
+            }
+          }
+        }
+      ],
+      "required": ["format_version", "type", "status", "trigger_stage", "reverse_plan_path", "reverse_plan_sha256", "bounded", "max_attempts_per_step", "database_mutators_frozen", "mutator_freeze", "post_success_admission", "database_mutation_observed", "application_mutation_observed", "writer_exposure_started", "writer_exposure_after_database_mutation", "no_writer_exposure_since_backup_proven", "database_restore_policy", "database_restore_performed", "completed_at"],
+      "properties": {
+        "format_version": { "const": 1 },
+        "type": { "const": "production-bounded-reverse-execution-v1" },
+        "status": { "enum": ["succeeded", "failed"] },
+        "trigger_stage": { "type": "string", "minLength": 1 },
+        "reverse_plan_path": { "type": "string", "pattern": "^/" },
+        "reverse_plan_sha256": { "$ref": "#/$defs/sha256" },
+        "bounded": { "const": true },
+        "max_attempts_per_step": { "const": 1 },
+        "database_mutators_frozen": { "type": "boolean" },
+        "mutator_freeze": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "sha256"],
+              "properties": {
+                "path": { "type": "string", "pattern": "^/" },
+                "sha256": { "$ref": "#/$defs/sha256" }
+              }
+            }
+          ]
+        },
+        "post_success_admission": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "sha256"],
+              "properties": {
+                "path": { "type": "string", "pattern": "^/" },
+                "sha256": { "$ref": "#/$defs/sha256" }
+              }
+            }
+          ]
+        },
+        "database_mutation_observed": { "type": "boolean" },
+        "application_mutation_observed": { "type": "boolean" },
+        "writer_exposure_started": { "type": "boolean" },
+        "writer_exposure_after_database_mutation": { "type": "boolean" },
+        "no_writer_exposure_since_backup_proven": {
+          "type": ["boolean", "null"]
+        },
+        "database_restore_policy": { "const": "only-before-writer-exposure-after-observed-mutation" },
+        "database_restore_performed": { "type": "boolean" },
+        "completed_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "postSuccessReverseAdmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format_version", "type", "status", "admitted_at", "trigger_stage", "deployment_record", "reverse_plan", "application_only", "database_restore_allowed", "database_revision", "compose_project", "sub2api_network", "auth_evidence"],
+      "properties": {
+        "format_version": { "const": 1 },
+        "type": { "const": "production-post-success-reverse-admission-v1" },
+        "status": { "const": "admitted" },
+        "admitted_at": { "$ref": "#/$defs/timestamp" },
+        "trigger_stage": {
+          "type": "string",
+          "pattern": "^lifecycle-post-success:[0-9]{8}T[0-9]{6}Z-[0-9]+-[0-9]+-(install|upgrade|rollback)-[0-9a-f]{32}$"
+        },
+        "deployment_record": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": { "type": "string", "pattern": "^/" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "reverse_plan": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": { "type": "string", "pattern": "^/" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "application_only": { "const": true },
+        "database_restore_allowed": { "const": false },
+        "database_revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "compose_project": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
+        "sub2api_network": { "type": "string", "minLength": 1 },
+        "auth_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "nonce", "expected_user_id", "base_url"],
+          "properties": {
+            "path": { "type": "string", "pattern": "^/" },
+            "nonce": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "expected_user_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "base_url": { "const": "http://127.0.0.1:8080" }
+          }
+        }
+      }
+    },
+    "uninstallPreservedResources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sub2api_runtime", "postgresql", "redis", "application_data", "secrets",
+        "backups", "deployment_records", "container_images", "connector_user_state",
+        "nginx_configuration", "logrotate_policy"
+      ],
+      "properties": {
+        "sub2api_runtime": { "const": true },
+        "postgresql": { "const": true },
+        "redis": { "const": true },
+        "application_data": { "const": true },
+        "secrets": { "const": true },
+        "backups": { "const": true },
+        "deployment_records": { "const": true },
+        "container_images": { "const": true },
+        "connector_user_state": { "const": true },
+        "nginx_configuration": { "const": true },
+        "logrotate_policy": { "const": true }
+      }
+    },
+    "uninstallPackageBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_path", "manifest_sha256", "verification_receipt_path",
+        "verification_receipt_sha256", "mode", "release", "release_tag"
+      ],
+      "properties": {
+        "manifest_path": { "type": "string", "pattern": "^/" },
+        "manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "verification_receipt_path": { "type": "string", "pattern": "^/" },
+        "verification_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "mode": { "enum": ["online", "offline"] },
+        "release": { "type": "string", "minLength": 1 },
+        "release_tag": { "type": "string", "minLength": 1 }
+      }
+    },
+    "uninstallContainerTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "container_id", "container_name", "image_id", "compose_project",
+        "compose_service", "compose_oneoff", "network", "labels"
+      ],
+      "properties": {
+        "container_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "container_name": { "type": "string", "pattern": "^/", "maxLength": 256 },
+        "image_id": { "$ref": "#/$defs/imageId" },
+        "compose_project": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
+        "compose_service": { "enum": ["control-api", "control-api-replica", "codex-pwa"] },
+        "compose_oneoff": { "const": false },
+        "network": { "type": "string", "minLength": 1 },
+        "labels": {
+          "type": "object",
+          "required": [
+            "com.docker.compose.project", "com.docker.compose.service",
+            "com.docker.compose.oneoff", "com.docker.compose.container-number",
+            "com.docker.compose.project.config_files"
+          ],
+          "properties": {
+            "com.docker.compose.project": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
+            "com.docker.compose.service": { "enum": ["control-api", "control-api-replica", "codex-pwa"] },
+            "com.docker.compose.oneoff": { "const": "False" },
+            "com.docker.compose.container-number": { "const": "1" },
+            "com.docker.compose.project.config_files": { "type": "string", "pattern": "^/" }
+          },
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "boundedUninstallPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format_version", "type", "status", "admitted_at", "trigger_stage",
+        "deployment_record", "active_package", "compose_project", "targets", "limits",
+        "one_off_containers_absent", "preserved"
+      ],
+      "properties": {
+        "format_version": { "const": 1 },
+        "type": { "const": "production-bounded-uninstall-plan-v1" },
+        "status": { "const": "admitted" },
+        "admitted_at": { "$ref": "#/$defs/timestamp" },
+        "trigger_stage": {
+          "type": "string",
+          "pattern": "^lifecycle-uninstall:[0-9]{8}T[0-9]{6}Z-[0-9]+-[0-9]+-uninstall-[0-9a-f]{32}$"
+        },
+        "deployment_record": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": { "type": "string", "pattern": "^/" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "active_package": { "$ref": "#/$defs/uninstallPackageBinding" },
+        "compose_project": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
+        "targets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["containers", "pwa_network"],
+          "properties": {
+            "containers": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["control-api", "control-api-replica", "codex-pwa"],
+              "properties": {
+                "control-api": { "$ref": "#/$defs/uninstallContainerTarget" },
+                "control-api-replica": { "$ref": "#/$defs/uninstallContainerTarget" },
+                "codex-pwa": { "$ref": "#/$defs/uninstallContainerTarget" }
+              }
+            },
+            "pwa_network": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "network_id", "name", "compose_project", "driver", "internal",
+                "enable_ipv6", "options", "container_id", "compose_network", "labels",
+                "member_container_ids"
+              ],
+              "properties": {
+                "network_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "name": { "type": "string", "minLength": 1 },
+                "compose_project": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
+                "driver": { "const": "bridge" },
+                "internal": { "const": false },
+                "enable_ipv6": { "const": false },
+                "options": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "com.docker.network.bridge.enable_ip_masquerade",
+                    "com.docker.network.bridge.enable_icc"
+                  ],
+                  "properties": {
+                    "com.docker.network.bridge.enable_ip_masquerade": { "const": "false" },
+                    "com.docker.network.bridge.enable_icc": { "const": "false" }
+                  }
+                },
+                "container_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "compose_network": { "const": "pwa-network" },
+                "labels": {
+                  "type": "object",
+                  "required": ["com.docker.compose.project", "com.docker.compose.network"],
+                  "properties": {
+                    "com.docker.compose.project": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
+                    "com.docker.compose.network": { "const": "pwa-network" }
+                  },
+                  "additionalProperties": { "type": "string" }
+                },
+                "member_container_ids": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                }
+              }
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_attempts_per_step", "total_timeout_seconds",
+            "container_stop_timeout_seconds", "container_remove_timeout_seconds",
+            "network_remove_timeout_seconds", "exact_ids_required", "drift_fail_closed"
+          ],
+          "properties": {
+            "max_attempts_per_step": { "const": 1 },
+            "total_timeout_seconds": { "const": 240 },
+            "container_stop_timeout_seconds": { "const": 30 },
+            "container_remove_timeout_seconds": { "const": 15 },
+            "network_remove_timeout_seconds": { "const": 30 },
+            "exact_ids_required": { "const": true },
+            "drift_fail_closed": { "const": true }
+          }
+        },
+        "one_off_containers_absent": { "const": true },
+        "preserved": { "$ref": "#/$defs/uninstallPreservedResources" }
+      }
+    },
+    "boundedUninstallExecution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format_version", "type", "status", "trigger_stage", "uninstall_plan_path",
+        "uninstall_plan_sha256", "deployment_record", "active_package", "removed",
+        "network_empty_evidence", "postconditions", "preserved", "bounded",
+        "max_attempts_per_step", "completed_at"
+      ],
+      "properties": {
+        "format_version": { "const": 1 },
+        "type": { "const": "production-bounded-uninstall-execution-v1" },
+        "status": { "const": "succeeded" },
+        "trigger_stage": {
+          "type": "string",
+          "pattern": "^lifecycle-uninstall:[0-9]{8}T[0-9]{6}Z-[0-9]+-[0-9]+-uninstall-[0-9a-f]{32}$"
+        },
+        "uninstall_plan_path": { "type": "string", "pattern": "^/" },
+        "uninstall_plan_sha256": { "$ref": "#/$defs/sha256" },
+        "deployment_record": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": { "type": "string", "pattern": "^/" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "active_package": { "$ref": "#/$defs/uninstallPackageBinding" },
+        "removed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["containers", "pwa_network"],
+          "properties": {
+            "containers": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "service", "container_id", "container_name", "image_id",
+                  "compose_project", "compose_service", "compose_oneoff", "network", "labels"
+                ],
+                "properties": {
+                  "service": { "enum": ["control-api", "control-api-replica", "codex-pwa"] },
+                  "container_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                  "container_name": { "type": "string", "pattern": "^/", "maxLength": 256 },
+                  "image_id": { "$ref": "#/$defs/imageId" },
+                  "compose_project": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
+                  "compose_service": { "enum": ["control-api", "control-api-replica", "codex-pwa"] },
+                  "compose_oneoff": { "const": false },
+                  "network": { "type": "string", "minLength": 1 },
+                  "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+                }
+              }
+            },
+            "pwa_network": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "network_id", "name", "labels", "member_container_ids_at_admission",
+                "members_after_container_removal"
+              ],
+              "properties": {
+                "network_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "name": { "type": "string", "minLength": 1 },
+                "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+                "member_container_ids_at_admission": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                },
+                "members_after_container_removal": { "const": [] }
+              }
+            }
+          }
+        },
+        "network_empty_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": { "type": "string", "pattern": "^/" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "postconditions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "project_containers_absent", "one_off_containers_absent",
+            "pwa_network_zero_members_before_removal", "pwa_network_absent"
+          ],
+          "properties": {
+            "project_containers_absent": { "const": true },
+            "one_off_containers_absent": { "const": true },
+            "pwa_network_zero_members_before_removal": { "const": true },
+            "pwa_network_absent": { "const": true }
+          }
+        },
+        "preserved": { "$ref": "#/$defs/uninstallPreservedResources" },
+        "bounded": { "const": true },
+        "max_attempts_per_step": { "const": 1 },
+        "completed_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "boundedReversePlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format_version", "type", "status", "created_at", "limits", "bindings", "forward_steps", "reverse_steps"],
+      "properties": {
+        "format_version": { "const": 1 },
+        "type": { "const": "production-bounded-reverse-plan-v1" },
+        "status": { "const": "admitted" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_reverse_steps", "max_attempts_per_step", "total_timeout_seconds", "post_reverse_verification_timeout_seconds", "automatic_reverse_on_failure", "database_restore_requires_write_freeze", "database_restore_policy", "writer_exposure_after_database_mutation_allowed", "application_reverse_preserves_database", "migration_required"],
+          "properties": {
+            "max_reverse_steps": { "type": "integer", "minimum": 1, "maximum": 8 },
+            "max_attempts_per_step": { "const": 1 },
+            "total_timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 900 },
+            "post_reverse_verification_timeout_seconds": { "const": 120 },
+            "automatic_reverse_on_failure": { "const": true },
+            "database_restore_requires_write_freeze": { "const": true },
+            "database_restore_policy": { "const": "only-before-writer-exposure-after-observed-mutation" },
+            "writer_exposure_after_database_mutation_allowed": { "const": false },
+            "application_reverse_preserves_database": { "const": true },
+            "migration_required": { "type": "boolean" }
+          }
+        },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deployment_plan_sha256", "release_images_sha256", "revisions_sha256", "premigration_backup_sha256", "full_backup_admission_sha256", "isolated_restore_receipt_sha256", "datastore_isolation_receipt_sha256", "writer_unfreeze_plan_sha256", "writer_freeze_receipt_sha256", "current_control_containers_sha256", "rollback_compose_sha256"],
+          "properties": {
+            "deployment_plan_sha256": { "$ref": "#/$defs/sha256" },
+            "release_images_sha256": { "$ref": "#/$defs/sha256" },
+            "revisions_sha256": { "$ref": "#/$defs/sha256" },
+            "premigration_backup_sha256": { "$ref": "#/$defs/sha256" },
+            "full_backup_admission_sha256": { "$ref": "#/$defs/sha256" },
+            "isolated_restore_receipt_sha256": { "$ref": "#/$defs/sha256" },
+            "datastore_isolation_receipt_sha256": { "$ref": "#/$defs/sha256" },
+            "writer_unfreeze_plan_sha256": { "$ref": "#/$defs/sha256" },
+            "writer_freeze_receipt_sha256": { "$ref": "#/$defs/sha256" },
+            "current_control_containers_sha256": { "$ref": "#/$defs/sha256" },
+            "rollback_compose_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "forward_steps": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "object" } },
+        "reverse_steps": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "object" } }
+      }
+    }
+  }
+}

@@ -20,6 +20,7 @@
     "signing",
     "checksums_file",
     "local_unsigned_marker",
+    "connector_release_metadata",
     "targets"
   ],
   "properties": {
@@ -58,7 +59,7 @@
       "additionalProperties": false,
       "required": ["go_version", "source_date_epoch", "created_at", "builder_id", "invocation_id", "started_at", "finished_at", "reproducibility_passes"],
       "properties": {
-        "go_version": { "type": "string" },
+        "go_version": { "type": "string", "pattern": "^go[0-9]+\\.[0-9]+\\.[0-9]+$" },
         "source_date_epoch": { "type": "integer", "minimum": 0 },
         "created_at": { "type": "string", "format": "date-time" },
         "builder_id": { "type": "string" },
@@ -92,6 +93,12 @@
     },
     "checksums_file": { "const": "SHA256SUMS" },
     "local_unsigned_marker": { "type": ["string", "null"] },
+    "connector_release_metadata": {
+      "oneOf": [
+        { "$ref": "#/$defs/fileDescriptor" },
+        { "type": "null" }
+      ]
+    },
     "targets": {
       "type": "array",
       "minItems": 1,
@@ -102,6 +109,15 @@
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "gitCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "filename": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "fileDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "signature_bundle"],
+      "properties": {
+        "filename": { "$ref": "#/$defs/filename" },
+        "signature_bundle": { "$ref": "#/$defs/filename" }
+      }
+    },
     "fileEvidence": {
       "type": "object",
       "additionalProperties": false,
@@ -188,10 +204,66 @@
         }
       ]
     },
+    "nativePackageSignature": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "status"],
+          "properties": {
+            "policy": { "const": "none" },
+            "status": { "const": "not-required" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "status", "fingerprint", "evidence", "public_key"],
+          "properties": {
+            "policy": { "const": "rpm-openpgp" },
+            "status": { "const": "verified" },
+            "fingerprint": { "type": "string", "pattern": "^[A-F0-9]{40,64}$" },
+            "evidence": { "$ref": "#/$defs/fileEvidence" },
+            "public_key": { "$ref": "#/$defs/fileEvidence" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "status", "team_identifier", "application_identity", "installer_identity", "evidence"],
+          "properties": {
+            "policy": { "const": "apple-developer-id-installer-notarized-stapled" },
+            "status": { "const": "verified" },
+            "team_identifier": { "type": "string", "pattern": "^[A-Z0-9]{10}$" },
+            "application_identity": {
+              "type": "string",
+              "pattern": "^Developer ID Application: .+ \\([A-Z0-9]{10}\\)$"
+            },
+            "installer_identity": {
+              "type": "string",
+              "pattern": "^Developer ID Installer: .+ \\([A-Z0-9]{10}\\)$"
+            },
+            "evidence": { "$ref": "#/$defs/fileEvidence" }
+          }
+        }
+      ]
+    },
+    "nativePackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "artifact", "sbom", "provenance", "native_signature"],
+      "properties": {
+        "format": { "enum": ["deb", "rpm", "pkg"] },
+        "artifact": { "$ref": "#/$defs/artifactEvidence" },
+        "sbom": { "$ref": "#/$defs/sbomEvidence" },
+        "provenance": { "$ref": "#/$defs/provenanceEvidence" },
+        "native_signature": { "$ref": "#/$defs/nativePackageSignature" }
+      }
+    },
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "os", "arch", "artifact", "sbom", "provenance", "native_signature"],
+      "required": ["id", "os", "arch", "artifact", "sbom", "provenance", "native_signature", "packages"],
       "properties": {
         "id": { "enum": ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"] },
         "os": { "enum": ["linux", "darwin"] },
@@ -199,7 +271,12 @@
         "artifact": { "$ref": "#/$defs/artifactEvidence" },
         "sbom": { "$ref": "#/$defs/sbomEvidence" },
         "provenance": { "$ref": "#/$defs/provenanceEvidence" },
-        "native_signature": { "$ref": "#/$defs/nativeSignature" }
+        "native_signature": { "$ref": "#/$defs/nativeSignature" },
+        "packages": {
+          "type": "array",
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/nativePackage" }
+        }
       }
     }
   }

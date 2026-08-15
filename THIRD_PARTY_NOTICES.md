@@ -23,7 +23,9 @@ package's own distribution remains authoritative for its complete notices.
 | Vue | 3.5.39 | PWA runtime dependency | MIT |
 | Pinia | 3.0.4 | PWA runtime dependency | MIT |
 | Lucide | 1.24.0 | PWA icon dependency | ISC and MIT |
-| Go standard library | 1.24.0 | Connector build/runtime dependency | BSD-3-Clause |
+| Go standard library | 1.26.5 | Connector build/runtime dependency | BSD-3-Clause |
+| Crane | 0.21.7 | Pinned OCI acquisition tool | Apache-2.0 |
+| Trivy | 0.74.0 | Pinned vulnerability scanner | Apache-2.0 |
 | coder/websocket | 1.8.14 | Connector dependency | ISC |
 | santhosh-tekuri/jsonschema | 6.0.2 | Connector dependency | Apache-2.0 |
 | dlclark/regexp2 | 1.11.0 | Test-only transitive Connector dependency | MIT |
@@ -32,6 +34,10 @@ package's own distribution remains authoritative for its complete notices.
 Exact upstream URLs, relationships, license files, and SHA-256 digests are in
 [`third_party/components.json`](third_party/components.json). Verbatim license
 and notice texts are stored below `third_party/`.
+
+The Connector is compiled with Go `1.26.5`; its `go 1.24.0` module directive is
+the source-language compatibility baseline, not the linked standard-library
+version.
 
 ## Trademark and affiliation
 

@@ -94,8 +94,18 @@ def create_backup_receipt(
 
     artifacts = {
         "sub2api-postgres.dump": b"PGDUMP-CUSTOM-FIXTURE\x00\x01",
+        "postgres-additional-databases.json": b'{"codex_control":"backed_up"}\n',
         "redis-logical.rdb": b"REDIS0011fixture-rdb-payload",
         "nginx-effective-config.txt": b"events {}\nhttp {}\n",
+        "docker-container-inspect.json": b"[]\n",
+        "docker-network-inspect.json": b"[]\n",
+        "docker-networks.json": b"[]\n",
+        "release-records.tar.gz": b"release-records-fixture",
+        "release-records.contents.txt": b"deployment-fixture/deployment.json\n",
+        "release-records-inventory.json": b'{"entries":[]}\n',
+        "release-evidence-inventory.json": b"[]\n",
+        "release-evidence-release-verification.json": b'{"status":"verified"}\n',
+        "release-evidence-source-verification.json": b'{"status":"verified"}\n',
     }
     for name, content in artifacts.items():
         path = snapshot / name
@@ -103,6 +113,18 @@ def create_backup_receipt(
         path.chmod(0o600)
 
     identities = container_identities()
+    release_evidence = [
+        {
+            "source": str(root / name.removeprefix("release-evidence-")),
+            "artifact": name,
+            "sha256": sha256(snapshot / name),
+            "size": (snapshot / name).stat().st_size,
+        }
+        for name in (
+            "release-evidence-release-verification.json",
+            "release-evidence-source-verification.json",
+        )
+    ]
     record = {
         "schema_version": 1,
         "status": "ready",
@@ -110,6 +132,23 @@ def create_backup_receipt(
         "snapshot_directory": snapshot.name,
         "containers": identities,
         "sources": {},
+        "release_evidence": release_evidence,
+        "docker_networks": [
+            {
+                "name": "sub2api-network",
+                "id": "9" * 64,
+                "driver": "bridge",
+                "scope": "local",
+                "internal": False,
+                "attachable": False,
+                "ingress": False,
+                "enable_ipv6": False,
+                "ipam": {"Driver": "default"},
+                "options": {},
+                "containers": [],
+            }
+        ],
+        "owner_uid": os.geteuid(),
         "redis": {
             "logical_rdb_validator": "redis-check-rdb",
             "persistence_path": "/data",
@@ -221,9 +260,9 @@ def compose_config(backup_dir: Path) -> dict[str, Any]:
         "CONTROL_CSRF_HEADER_NAME": "x-csrf-token",
         "CONTROL_SUB2API_BASE_URL": "http://sub2api:8080",
         "CONTROL_SUB2API_AUTH_ME_PATH": "/api/v1/auth/me",
-        "CONTROL_SUB2API_EXPECTED_VERSION": "0.1.175",
-        "CONTROL_SUB2API_EXPECTED_COMMIT": "93c32fa",
-        "CONTROL_SUB2API_CONTRACT_MARKER": "0.1.175/93c32fa",
+        "CONTROL_SUB2API_EXPECTED_VERSION": "0.1.176",
+        "CONTROL_SUB2API_EXPECTED_COMMIT": "e803e38",
+        "CONTROL_SUB2API_CONTRACT_MARKER": "0.1.176/e803e38",
         "CONTROL_TRUST_FORWARDED_FOR": "true",
         "CONTROL_ALLOWED_ORIGINS_CSV": "https://control.example.invalid",
         "CONTROL_DATABASE_PASSWORD_FILE": "/run/secrets/control_db_password",
@@ -515,6 +554,8 @@ class BackupReceiptTests(unittest.TestCase):
             str(self.result_file),
             "--max-age-seconds",
             "900",
+            "--expected-owner-uid",
+            str(os.geteuid()),
             "--current-identities",
             str(self.identities_file),
             success=success,
@@ -614,6 +655,8 @@ class BackupReceiptTests(unittest.TestCase):
             str(self.result_file),
             "--max-age-seconds",
             "1800",
+            "--expected-owner-uid",
+            str(os.geteuid()),
             "--current-identities",
             str(self.identities_file),
             "--stale-exception-file",
@@ -1490,8 +1533,8 @@ class APIImageContractTests(unittest.TestCase):
         self.expected = {
             "appserver_schema_digest": "5" * 64,
             "codex_expected_version": "0.147.0",
-            "sub2api_expected_commit": "93c32fa",
-            "sub2api_expected_version": "0.1.175",
+            "sub2api_expected_commit": "e803e38",
+            "sub2api_expected_version": "0.1.176",
         }
         write_json(
             self.versions_lock,
@@ -1502,7 +1545,7 @@ class APIImageContractTests(unittest.TestCase):
                 },
                 "sub2api": {
                     "runtime_version": self.expected["sub2api_expected_version"],
-                    "runtime_commit": "93c32fa" + "b" * 33,
+                    "runtime_commit": "e803e38" + "b" * 33,
                 },
             },
         )
@@ -1583,7 +1626,7 @@ class APIImageContractTests(unittest.TestCase):
 
         write_json(self.observed, self.expected)
         lock = json.loads(self.versions_lock.read_text(encoding="utf-8"))
-        lock["sub2api"]["runtime_commit"] = "93c32fa"
+        lock["sub2api"]["runtime_commit"] = "e803e38"
         write_json(self.versions_lock, lock)
         result, _ = self.invoke(success=False)
         self.assertIn("invalid Codex or Sub2API contract tuple", result.stderr)

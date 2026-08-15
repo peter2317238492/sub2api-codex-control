@@ -10,7 +10,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  CONTROL_VULNERABILITY_DIR: dist/control-vulnerability
+  IMAGE_TRUST_DIR: dist/control-image-trust
   RELEASE_DIR: dist/control-images
+  SERVER_PACKAGE_DIR: dist/server-packages
+  SERVER_PACKAGE_RECEIPT_DIR: dist/control-server-package-receipts
   PYTHONDONTWRITEBYTECODE: "1"
   COSIGN_EXPERIMENTAL: "1"
 
@@ -377,6 +381,20 @@ jobs:
             --ref "$GITHUB_REF" \
             --commit "$GITHUB_SHA"
 
+      - name: Recheck the remote annotated tag before requesting an OIDC identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${GITHUB_REF_NAME}" "refs/tags/${GITHUB_REF_NAME}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$GITHUB_SHA"
+
       - name: Receive the unsigned evidence
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -409,6 +427,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          install -d -m 0700 "$IMAGE_TRUST_DIR"
           owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
           [[ "$owner" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]
           API_REPOSITORY="ghcr.io/${owner}/sub2api-codex-control-api"
@@ -448,6 +467,20 @@ jobs:
             --bundle "$RELEASE_DIR/control-images.lock.sigstore.json" \
             "$RELEASE_DIR/control-images.lock.json"
 
+          cosign initialize
+          trusted_root="$HOME/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json"
+          test -f "$trusted_root"
+          install -m 0600 "$trusted_root" "$IMAGE_TRUST_DIR/trusted_root.json"
+          for component in control-api pwa postgres-tools; do
+            case "$component" in
+              control-api) image_ref=$api_ref ;;
+              pwa) image_ref=$pwa_ref ;;
+              postgres-tools) image_ref=$postgres_tools_ref ;;
+              *) exit 1 ;;
+            esac
+            cosign save "$image_ref" --dir "$IMAGE_TRUST_DIR/$component"
+          done
+
       - name: Verify exact issuer, workflow, commit, ref, subjects, and predicates
         shell: bash
         run: |
@@ -474,69 +507,54 @@ jobs:
             --expected-pwa-repository "$PWA_REPOSITORY" \
             --expected-postgres-tools-repository "$POSTGRES_TOOLS_REPOSITORY"
 
-      - name: Promote only the signed and verified digests to the final image tags
-        env:
-          API_DIGEST: ${{ needs.build.outputs.api_digest }}
-          POSTGRES_TOOLS_DIGEST: ${{ needs.build.outputs.postgres_tools_digest }}
-          PWA_DIGEST: ${{ needs.build.outputs.pwa_digest }}
+      - name: Verify all exported image trust bundles without registry access
         shell: bash
         run: |
           set -euo pipefail
-          assert_remote_tag() {
-            remote_tags=$(git ls-remote --tags \
-              "https://github.com/${GITHUB_REPOSITORY}.git" \
-              "refs/tags/${GITHUB_REF_NAME}" "refs/tags/${GITHUB_REF_NAME}^{}")
-            direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}" '$2 == ref {print $1}')
-            peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}^{}" '$2 == ref {print $1}')
-            test -n "$direct"
-            test -n "$peeled"
-            test "$direct" != "$peeled"
-            test "$peeled" = "$GITHUB_SHA"
-          }
           owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
           [[ "$owner" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]
-          [[ "$GITHUB_REF_NAME" =~ ^control-v[0-9A-Za-z.-]+$ ]]
-          API_REPOSITORY="ghcr.io/${owner}/sub2api-codex-control-api"
-          PWA_REPOSITORY="ghcr.io/${owner}/sub2api-codex-control-pwa"
-          POSTGRES_TOOLS_REPOSITORY="ghcr.io/${owner}/sub2api-codex-postgres-tools"
-          [[ "$API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          [[ "$PWA_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          [[ "$POSTGRES_TOOLS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          assert_remote_tag
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
           for component in control-api pwa postgres-tools; do
             case "$component" in
-              control-api)
-                repository=$API_REPOSITORY
-                digest=$API_DIGEST
-                ;;
-              pwa)
-                repository=$PWA_REPOSITORY
-                digest=$PWA_DIGEST
-                ;;
-              postgres-tools)
-                repository=$POSTGRES_TOOLS_REPOSITORY
-                digest=$POSTGRES_TOOLS_DIGEST
-                ;;
+              control-api) image_ref="ghcr.io/${owner}/sub2api-codex-control-api@${{ needs.build.outputs.api_digest }}" ;;
+              pwa) image_ref="ghcr.io/${owner}/sub2api-codex-control-pwa@${{ needs.build.outputs.pwa_digest }}" ;;
+              postgres-tools) image_ref="ghcr.io/${owner}/sub2api-codex-postgres-tools@${{ needs.build.outputs.postgres_tools_digest }}" ;;
               *) exit 1 ;;
             esac
-            existing_digest=""
-            if existing=$(
-              docker buildx imagetools inspect "${repository}:${GITHUB_REF_NAME}" 2>/dev/null
-            ); then
-              existing_digest=$(printf '%s\n' "$existing" | awk '$1 == "Digest:" {print $2; exit}')
-              test "$existing_digest" = "$digest"
-            else
-              docker buildx imagetools create \
-                --tag "${repository}:${GITHUB_REF_NAME}" \
-                "${repository}@${digest}"
-            fi
-            promoted_digest=$(
-              docker buildx imagetools inspect "${repository}:${GITHUB_REF_NAME}" |
-                awk '$1 == "Digest:" {print $2; exit}'
+            common=(
+              --offline
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+              --certificate-identity "$identity"
+              --certificate-github-workflow-sha "$GITHUB_SHA"
+              --certificate-github-workflow-trigger push
+              --certificate-github-workflow-repository "$GITHUB_REPOSITORY"
+              --certificate-github-workflow-ref "$GITHUB_REF"
+              -a "component=$component"
+              -a "release_tag=$GITHUB_REF_NAME"
+              -a "source_commit=$GITHUB_SHA"
             )
-            test "$promoted_digest" = "$digest"
+            signature_claims="$RUNNER_TEMP/$component.offline-signature.json"
+            cosign verify "${common[@]}" \
+              --trusted-root "$IMAGE_TRUST_DIR/trusted_root.json" \
+              --local-image "$IMAGE_TRUST_DIR/$component" > "$signature_claims"
+            jq -e --arg digest "${image_ref#*@}" '
+              type == "array" and length > 0 and
+              any(.[];
+                ((.critical // .Critical).image // (.critical // .Critical).Image)
+                | (."docker-manifest-digest" // ."Docker-manifest-digest") == $digest)
+            ' "$signature_claims" >/dev/null
+            cosign verify-attestation "${common[@]}" \
+              --trusted-root "$IMAGE_TRUST_DIR/trusted_root.json" \
+              --local-image "$IMAGE_TRUST_DIR/$component" \
+              --type spdxjson \
+              >/dev/null
+            cosign verify-attestation "${common[@]}" \
+              --trusted-root "$IMAGE_TRUST_DIR/trusted_root.json" \
+              --local-image "$IMAGE_TRUST_DIR/$component" \
+              --type slsaprovenance1 \
+              >/dev/null
           done
-          assert_remote_tag
 
       - name: Transfer the signed and verified atomic release
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -547,11 +565,1213 @@ jobs:
           compression-level: 0
           retention-days: 1
 
-  publish:
-    name: Publish immutable release evidence
-    needs: attest
+      - name: Transfer the offline-verifiable image trust bundles
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: control-image-trust-${{ github.run_attempt }}
+          path: dist/control-image-trust
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  package-build:
+    name: Build online and offline server packages from authenticated releases
+    needs:
+      - build
+      - attest
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 60
+    environment: control-server-release-compatibility
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    outputs:
+      connector_source_commit: ${{ steps.connector.outputs.source_commit }}
+      connector_tag: ${{ steps.connector.outputs.tag }}
+      connector_release_id: ${{ steps.connector.outputs.release_id }}
+      connector_workflow_run_id: ${{ steps.connector.outputs.workflow_run_id }}
+      connector_workflow_run_attempt: ${{ steps.connector.outputs.workflow_run_attempt }}
+    steps:
+      - name: Check out the exact reviewed package builder
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Fix and recheck the externally approved Connector release
+        id: connector
+        env:
+          CONNECTOR_RELEASE_ID: ${{ vars.CONNECTOR_RELEASE_ID }}
+          CONNECTOR_RELEASE_SOURCE_COMMIT: ${{ vars.CONNECTOR_RELEASE_SOURCE_COMMIT }}
+          CONNECTOR_RELEASE_TAG: ${{ vars.CONNECTOR_RELEASE_TAG }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ vars.CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ID: ${{ vars.CONNECTOR_RELEASE_WORKFLOW_RUN_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CONNECTOR_RELEASE_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CONNECTOR_RELEASE_TAG" =~ ^connector-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$CONNECTOR_RELEASE_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CONNECTOR_RELEASE_WORKFLOW_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${CONNECTOR_RELEASE_TAG}" \
+            "refs/tags/${CONNECTOR_RELEASE_TAG}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${CONNECTOR_RELEASE_TAG}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${CONNECTOR_RELEASE_TAG}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+          {
+            printf 'source_commit=%s\n' "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+            printf 'tag=%s\n' "$CONNECTOR_RELEASE_TAG"
+            printf 'release_id=%s\n' "$CONNECTOR_RELEASE_ID"
+            printf 'workflow_run_id=%s\n' "$CONNECTOR_RELEASE_WORKFLOW_RUN_ID"
+            printf 'workflow_run_attempt=%s\n' "$CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Receive the signed Connector public-verification aggregate
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-public-verification-aggregate-${{ vars.CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT }}
+          path: ${{ runner.temp }}/connector-public-aggregate
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ vars.CONNECTOR_RELEASE_WORKFLOW_RUN_ID }}
+
+      - name: Receive the signed Control image evidence and offline trust
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-images-signed-${{ github.run_attempt }}
+          path: dist/control-images
+
+      - name: Receive the detached image trust closure
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-image-trust-${{ github.run_attempt }}
+          path: dist/control-image-trust
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Authenticate the Connector aggregate before reading its descriptor
+        env:
+          CONNECTOR_RELEASE_ID: ${{ steps.connector.outputs.release_id }}
+          CONNECTOR_RELEASE_SOURCE_COMMIT: ${{ steps.connector.outputs.source_commit }}
+          CONNECTOR_RELEASE_TAG: ${{ steps.connector.outputs.tag }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ steps.connector.outputs.workflow_run_attempt }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ID: ${{ steps.connector.outputs.workflow_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aggregate_dir="$RUNNER_TEMP/connector-public-aggregate"
+          test "$(find "$aggregate_dir" -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3
+          test "$(find "$aggregate_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 3
+          aggregate="$aggregate_dir/connector-public-verification-aggregate.json"
+          bundle="$aggregate.sigstore.json"
+          descriptor="$aggregate_dir/connector-public-release-descriptor.json"
+          test -f "$aggregate"
+          test ! -L "$aggregate"
+          test -f "$bundle"
+          test ! -L "$bundle"
+          test -f "$descriptor"
+          test ! -L "$descriptor"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
+          python3 connector/release/release.py verify-aggregate \
+            --aggregate "$aggregate" \
+            --bundle "$bundle" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$CONNECTOR_RELEASE_SOURCE_COMMIT" \
+            --certificate-github-workflow-trigger push \
+            --expected-release-id "$CONNECTOR_RELEASE_ID" \
+            --expected-workflow-run-id "$CONNECTOR_RELEASE_WORKFLOW_RUN_ID" \
+            --expected-workflow-run-attempt "$CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT" \
+            --expected-tag "$CONNECTOR_RELEASE_TAG" \
+            --expected-source-commit "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+          descriptor_name=$(jq -er '.public_release.descriptor.filename' "$aggregate")
+          test "$descriptor_name" = connector-public-release-descriptor.json
+          descriptor_sha=$(jq -er '.public_release.descriptor.sha256' "$aggregate")
+          descriptor_size=$(jq -er '.public_release.descriptor.size' "$aggregate")
+          test "$(sha256sum "$descriptor" | awk '{print $1}')" = "$descriptor_sha"
+          test "$(stat -c %s "$descriptor")" = "$descriptor_size"
+
+      - name: Reconstruct and compare the current immutable Connector Release
+        env:
+          CONNECTOR_RELEASE_ID: ${{ steps.connector.outputs.release_id }}
+          CONNECTOR_RELEASE_SOURCE_COMMIT: ${{ steps.connector.outputs.source_commit }}
+          CONNECTOR_RELEASE_TAG: ${{ steps.connector.outputs.tag }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ steps.connector.outputs.workflow_run_attempt }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ID: ${{ steps.connector.outputs.workflow_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$RUNNER_TEMP/connector-release-current.json"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${CONNECTOR_RELEASE_TAG}" \
+            --output "$response"
+          jq -e \
+            --arg tag "$CONNECTOR_RELEASE_TAG" \
+            --argjson release_id "$CONNECTOR_RELEASE_ID" '
+              .id == $release_id and
+              .tag_name == $tag and
+              .draft == false and
+              .prerelease == false and
+              .immutable == true and
+              (.assets | length == 135) and
+              all(.assets[]; .state == "uploaded")
+            ' "$response" >/dev/null
+          aggregate="$RUNNER_TEMP/connector-public-aggregate/connector-public-verification-aggregate.json"
+          receipt_name=$(jq -er '.vulnerability_evidence.receipt.filename' "$aggregate")
+          test "$receipt_name" = vulnerability-receipt.json
+          receipt_url=$(jq -er --arg name "$receipt_name" \
+            '.assets[] | select(.name == $name) | .browser_download_url' "$response")
+          test "$receipt_url" = \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CONNECTOR_RELEASE_TAG}/${receipt_name}"
+          receipt="$RUNNER_TEMP/connector-public-vulnerability-receipt.json"
+          test ! -e "$receipt"
+          curl --fail --silent --show-error --location --retry 3 \
+            --proto '=https' --tlsv1.2 "$receipt_url" --output "$receipt"
+          test "$(sha256sum "$receipt" | awk '{print $1}')" = \
+            "$(jq -er '.vulnerability_evidence.receipt.sha256' "$aggregate")"
+          test "$(stat -c %s "$receipt")" = \
+            "$(jq -er '.vulnerability_evidence.receipt.size' "$aggregate")"
+          current="$RUNNER_TEMP/connector-public-release-current.json"
+          python3 connector/release/release.py create-public-release-descriptor \
+            --github-release-response "$response" \
+            --vulnerability-receipt "$receipt" \
+            --source-commit "$CONNECTOR_RELEASE_SOURCE_COMMIT" \
+            --github-run-id "$CONNECTOR_RELEASE_WORKFLOW_RUN_ID" \
+            --github-run-attempt "$CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT" \
+            --output "$current"
+          cmp "$current" \
+            "$RUNNER_TEMP/connector-public-aggregate/connector-public-release-descriptor.json"
+
+      - name: Download and authenticate the generated Connector metadata
+        env:
+          CONNECTOR_RELEASE_SOURCE_COMMIT: ${{ steps.connector.outputs.source_commit }}
+          CONNECTOR_RELEASE_TAG: ${{ steps.connector.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aggregate="$RUNNER_TEMP/connector-public-aggregate/connector-public-verification-aggregate.json"
+          response="$RUNNER_TEMP/connector-release-current.json"
+          metadata_dir="$RUNNER_TEMP/connector-metadata"
+          install -d -m 0700 "$metadata_dir"
+          metadata_name=$(jq -er '.evidence.release_metadata.filename' "$aggregate")
+          metadata_bundle=$(jq -er '.evidence.release_metadata.signature_bundle' "$aggregate")
+          test "$metadata_name" = connector-release-metadata.json
+          test "$metadata_bundle" = connector-release-metadata.json.sigstore.json
+          for name in "$metadata_name" "$metadata_bundle"; do
+            matches=$(jq --arg name "$name" '[.assets[] | select(.name == $name)] | length' "$response")
+            test "$matches" = 1
+            url=$(jq -er --arg name "$name" '.assets[] | select(.name == $name) | .browser_download_url' "$response")
+            test "$url" = "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CONNECTOR_RELEASE_TAG}/${name}"
+            curl --fail --silent --show-error --location --retry 3 \
+              --proto '=https' --tlsv1.2 "$url" --output "$metadata_dir/$name"
+          done
+          expected_sha=$(jq -er '.evidence.release_metadata.sha256' "$aggregate")
+          expected_size=$(jq -er '.evidence.release_metadata.size' "$aggregate")
+          test "$(sha256sum "$metadata_dir/$metadata_name" | awk '{print $1}')" = "$expected_sha"
+          test "$(stat -c %s "$metadata_dir/$metadata_name")" = "$expected_size"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
+          cosign verify-blob "$metadata_dir/$metadata_name" \
+            --bundle "$metadata_dir/$metadata_bundle" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$CONNECTOR_RELEASE_SOURCE_COMMIT" \
+            --certificate-github-workflow-trigger push >/dev/null
+
+      - name: Authenticate the signed Control image root before packaging
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          [[ "$owner" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
+          deploy/release/verify-control-images.sh \
+            --release-dir "$RELEASE_DIR" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" \
+            --expected-source-repository "$source_repository" \
+            --expected-source-commit "$GITHUB_SHA" \
+            --expected-release-tag "$GITHUB_REF_NAME" \
+            --expected-api-repository "${{ needs.build.outputs.api_repository }}" \
+            --expected-pwa-repository "${{ needs.build.outputs.pwa_repository }}" \
+            --expected-postgres-tools-repository "${{ needs.build.outputs.postgres_tools_repository }}"
+
+      - name: Install and verify the pinned deterministic OCI exporter
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$RUNNER_TEMP/control-tools"
+          python3 -I deploy/server-package/oci_toolchain.py install \
+            --destination "$RUNNER_TEMP/control-tools/crane"
+          python3 -I deploy/server-package/oci_toolchain.py verify \
+            --crane "$RUNNER_TEMP/control-tools/crane"
+
+      - name: Export each immutable Linux image twice and compare its OCI archive
+        env:
+          API_DIGEST: ${{ needs.build.outputs.api_digest }}
+          API_REPOSITORY: ${{ needs.build.outputs.api_repository }}
+          POSTGRES_TOOLS_DIGEST: ${{ needs.build.outputs.postgres_tools_digest }}
+          POSTGRES_TOOLS_REPOSITORY: ${{ needs.build.outputs.postgres_tools_repository }}
+          PWA_DIGEST: ${{ needs.build.outputs.pwa_digest }}
+          PWA_REPOSITORY: ${{ needs.build.outputs.pwa_repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$PWA_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$POSTGRES_TOOLS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          output="$RUNNER_TEMP/control-oci"
+          receipt="$RUNNER_TEMP/oci-export-receipt.json"
+          temporary=$(mktemp "$RUNNER_TEMP/.oci-export-receipt.XXXXXX")
+          trap 'rm -f "$temporary"' EXIT
+          test ! -e "$output"
+          test ! -e "$receipt"
+          python3 -I deploy/server-package/oci_toolchain.py export-images \
+            --crane "$RUNNER_TEMP/control-tools/crane" \
+            --output-dir "$output" \
+            --image "control-api=${API_REPOSITORY}@${API_DIGEST}" \
+            --image "pwa=${PWA_REPOSITORY}@${PWA_DIGEST}" \
+            --image "postgres-tools=${POSTGRES_TOOLS_REPOSITORY}@${POSTGRES_TOOLS_DIGEST}" \
+            > "$temporary"
+          test -s "$temporary"
+          python3 - "$temporary" "$receipt" <<'PY'
+          import os
+          import stat
+          import sys
+
+          source, destination = map(os.path.abspath, sys.argv[1:])
+          if os.path.dirname(source) != os.path.dirname(destination):
+              raise SystemExit("OCI receipt promotion must stay on one filesystem")
+          descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+          try:
+              metadata = os.fstat(descriptor)
+              if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                  raise SystemExit("temporary OCI receipt is not a private regular file")
+              os.fchmod(descriptor, 0o444)
+              os.fsync(descriptor)
+              os.link(source, destination, follow_symlinks=False)
+          finally:
+              os.close(descriptor)
+          os.unlink(source)
+          directory = os.open(os.path.dirname(destination), os.O_RDONLY | os.O_DIRECTORY)
+          try:
+              os.fsync(directory)
+          finally:
+              os.close(directory)
+          promoted = os.stat(destination, follow_symlinks=False)
+          if promoted.st_nlink != 1 or stat.S_IMODE(promoted.st_mode) != 0o444:
+              raise SystemExit("promoted OCI receipt permissions are not immutable")
+          PY
+          test -s "$receipt"
+
+      - name: Build the deterministic online and offline server package closure
+        env:
+          CONNECTOR_RELEASE_ID: ${{ steps.connector.outputs.release_id }}
+          CONNECTOR_RELEASE_SOURCE_COMMIT: ${{ steps.connector.outputs.source_commit }}
+          CONNECTOR_RELEASE_TAG: ${{ steps.connector.outputs.tag }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ steps.connector.outputs.workflow_run_attempt }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ID: ${{ steps.connector.outputs.workflow_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=${GITHUB_REF_NAME#control-v}
+          source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")
+          [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
+          connector_identity="${source_repository}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
+          install -d -m 0700 dist
+          test ! -e "$SERVER_PACKAGE_DIR"
+          common=(
+            --release-dir "$RELEASE_DIR"
+            --image-trust-dir "$IMAGE_TRUST_DIR"
+            --oci-export-receipt "$RUNNER_TEMP/oci-export-receipt.json"
+            --image-archive "control-api=$RUNNER_TEMP/control-oci/control-api.oci.tar"
+            --image-archive "pwa=$RUNNER_TEMP/control-oci/pwa.oci.tar"
+            --image-archive "postgres-tools=$RUNNER_TEMP/control-oci/postgres-tools.oci.tar"
+            --output-dir "$SERVER_PACKAGE_DIR"
+            --release "$release"
+            --source-date-epoch "$source_date_epoch"
+            --cosign "$(command -v cosign)"
+            --expected-cosign-version v3.0.6
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --certificate-identity "$identity"
+            --certificate-github-workflow-sha "$GITHUB_SHA"
+            --certificate-github-workflow-trigger push
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY"
+            --certificate-github-workflow-ref "$GITHUB_REF"
+            --expected-source-repository "$source_repository"
+            --expected-source-commit "$GITHUB_SHA"
+            --expected-release-tag "$GITHUB_REF_NAME"
+            --expected-api-repository "${{ needs.build.outputs.api_repository }}"
+            --expected-pwa-repository "${{ needs.build.outputs.pwa_repository }}"
+            --expected-postgres-tools-repository "${{ needs.build.outputs.postgres_tools_repository }}"
+            --connector-certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --connector-certificate-identity "$connector_identity"
+            --connector-certificate-github-workflow-sha "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+            --connector-certificate-github-workflow-trigger push
+            --expected-connector-repository "$source_repository"
+            --expected-connector-source-commit "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+            --expected-connector-tag "$CONNECTOR_RELEASE_TAG"
+            --expected-connector-release-id "$CONNECTOR_RELEASE_ID"
+            --expected-connector-workflow-run-id "$CONNECTOR_RELEASE_WORKFLOW_RUN_ID"
+            --expected-connector-workflow-run-attempt "$CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT"
+            --connector-release-metadata "$RUNNER_TEMP/connector-metadata/connector-release-metadata.json"
+            --connector-release-metadata-bundle "$RUNNER_TEMP/connector-metadata/connector-release-metadata.json.sigstore.json"
+            --connector-verification-aggregate "$RUNNER_TEMP/connector-public-aggregate/connector-public-verification-aggregate.json"
+            --connector-verification-aggregate-bundle "$RUNNER_TEMP/connector-public-aggregate/connector-public-verification-aggregate.json.sigstore.json"
+          )
+          python3 -I deploy/server-package/server_package.py build "${common[@]}"
+
+      - name: Transfer only the authenticated unsigned server package closure
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: control-server-packages-unsigned-${{ github.run_attempt }}
+          path: dist/server-packages
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  package-sign:
+    name: Sign and verify the complete server package closure
+    needs:
+      - build
+      - package-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: control-server-release-sigstore
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the exact reviewed package verifier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Receive only the authenticated unsigned package closure
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-server-packages-unsigned-${{ github.run_attempt }}
+          path: dist/server-packages
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Recheck both annotated tags before requesting a signing identity
+        env:
+          CONNECTOR_RELEASE_SOURCE_COMMIT: ${{ needs.package-build.outputs.connector_source_commit }}
+          CONNECTOR_RELEASE_TAG: ${{ needs.package-build.outputs.connector_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_tag() {
+            tag=$1
+            commit=$2
+            remote_tags=$(git ls-remote --tags \
+              "https://github.com/${GITHUB_REPOSITORY}.git" \
+              "refs/tags/${tag}" "refs/tags/${tag}^{}")
+            direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${tag}" '$2 == ref {print $1}')
+            peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${tag}^{}" '$2 == ref {print $1}')
+            test -n "$direct"
+            test -n "$peeled"
+            test "$direct" != "$peeled"
+            test "$peeled" = "$commit"
+          }
+          check_tag "$GITHUB_REF_NAME" "$GITHUB_SHA"
+          check_tag "$CONNECTOR_RELEASE_TAG" "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+
+      - name: Sign and independently verify both package modes
+        env:
+          CONNECTOR_RELEASE_ID: ${{ needs.package-build.outputs.connector_release_id }}
+          CONNECTOR_RELEASE_SOURCE_COMMIT: ${{ needs.package-build.outputs.connector_source_commit }}
+          CONNECTOR_RELEASE_TAG: ${{ needs.package-build.outputs.connector_tag }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ needs.package-build.outputs.connector_workflow_run_attempt }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ID: ${{ needs.package-build.outputs.connector_workflow_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
+          connector_identity="${source_repository}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
+          policy=(
+            --cosign "$(command -v cosign)"
+            --expected-cosign-version v3.0.6
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --certificate-identity "$identity"
+            --certificate-github-workflow-sha "$GITHUB_SHA"
+            --certificate-github-workflow-trigger push
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY"
+            --certificate-github-workflow-ref "$GITHUB_REF"
+            --expected-source-repository "$source_repository"
+            --expected-source-commit "$GITHUB_SHA"
+            --expected-release-tag "$GITHUB_REF_NAME"
+            --expected-api-repository "${{ needs.build.outputs.api_repository }}"
+            --expected-pwa-repository "${{ needs.build.outputs.pwa_repository }}"
+            --expected-postgres-tools-repository "${{ needs.build.outputs.postgres_tools_repository }}"
+            --connector-certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --connector-certificate-identity "$connector_identity"
+            --connector-certificate-github-workflow-sha "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+            --connector-certificate-github-workflow-trigger push
+            --expected-connector-repository "$source_repository"
+            --expected-connector-source-commit "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+            --expected-connector-tag "$CONNECTOR_RELEASE_TAG"
+            --expected-connector-release-id "$CONNECTOR_RELEASE_ID"
+            --expected-connector-workflow-run-id "$CONNECTOR_RELEASE_WORKFLOW_RUN_ID"
+            --expected-connector-workflow-run-attempt "$CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT"
+          )
+          python3 -I deploy/server-package/server_package.py sign \
+            --output-dir "$SERVER_PACKAGE_DIR" "${policy[@]}"
+          receipt_dir="$RUNNER_TEMP/control-server-package-receipts"
+          test ! -e "$receipt_dir"
+          install -d -m 0700 "$receipt_dir"
+          for mode in online offline; do
+            receipt="$receipt_dir/control-server-package-${mode}-verification.json"
+            extract_to="$RUNNER_TEMP/control-server-package-${mode}-extract-parent"
+            test ! -e "$receipt"
+            test ! -e "$extract_to"
+            install -d -m 0700 "$extract_to"
+            python3 -I deploy/server-package/server_package.py verify-release \
+              --release-dir "$SERVER_PACKAGE_DIR" \
+              --extract-to "$extract_to" \
+              --mode "$mode" \
+              --verification-receipt "$receipt" \
+              "${policy[@]}"
+            bundle="${receipt}.sigstore.json"
+            cosign sign-blob --yes --bundle "$bundle" "$receipt"
+            cosign verify-blob "$receipt" \
+              --bundle "$bundle" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity "$identity" \
+              --certificate-github-workflow-sha "$GITHUB_SHA" \
+              --certificate-github-workflow-trigger push \
+              --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+              --certificate-github-workflow-ref "$GITHUB_REF" >/dev/null
+          done
+          diff -u \
+            <(printf '%s\n' \
+              control-server-package-offline-verification.json \
+              control-server-package-offline-verification.json.sigstore.json \
+              control-server-package-online-verification.json \
+              control-server-package-online-verification.json.sigstore.json | sort) \
+            <(find "$receipt_dir" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
+
+      - name: Transfer only the signed and verified server package closure
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: control-server-packages-signed-${{ github.run_attempt }}
+          path: dist/server-packages
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Transfer only the signed online and offline verification receipts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: control-server-package-receipts-signed-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/control-server-package-receipts
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  vulnerability-scan:
+    name: Scan authenticated source, images, and server packages
+    needs:
+      - build
+      - package-build
+      - package-sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out the independently trusted vulnerability policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install the pinned Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Receive the signed Control image root
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-images-signed-${{ github.run_attempt }}
+          path: dist/control-images
+
+      - name: Receive the signed server package root and complete inventory
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-server-packages-signed-${{ github.run_attempt }}
+          path: dist/server-packages
+
+      - name: Authenticate both release roots before parsing scan identities
+        env:
+          CONNECTOR_RELEASE_ID: ${{ needs.package-build.outputs.connector_release_id }}
+          CONNECTOR_RELEASE_SOURCE_COMMIT: ${{ needs.package-build.outputs.connector_source_commit }}
+          CONNECTOR_RELEASE_TAG: ${{ needs.package-build.outputs.connector_tag }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ needs.package-build.outputs.connector_workflow_run_attempt }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ID: ${{ needs.package-build.outputs.connector_workflow_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
+          connector_identity="${source_repository}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
+          deploy/release/verify-control-images.sh \
+            --release-dir "$RELEASE_DIR" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" \
+            --expected-source-repository "$source_repository" \
+            --expected-source-commit "$GITHUB_SHA" \
+            --expected-release-tag "$GITHUB_REF_NAME" \
+            --expected-api-repository "${{ needs.build.outputs.api_repository }}" \
+            --expected-pwa-repository "${{ needs.build.outputs.pwa_repository }}" \
+            --expected-postgres-tools-repository "${{ needs.build.outputs.postgres_tools_repository }}" \
+            >/dev/null
+          package_policy=(
+            --cosign "$(command -v cosign)"
+            --expected-cosign-version v3.0.6
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --certificate-identity "$identity"
+            --certificate-github-workflow-sha "$GITHUB_SHA"
+            --certificate-github-workflow-trigger push
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY"
+            --certificate-github-workflow-ref "$GITHUB_REF"
+            --expected-source-repository "$source_repository"
+            --expected-source-commit "$GITHUB_SHA"
+            --expected-release-tag "$GITHUB_REF_NAME"
+            --expected-api-repository "${{ needs.build.outputs.api_repository }}"
+            --expected-pwa-repository "${{ needs.build.outputs.pwa_repository }}"
+            --expected-postgres-tools-repository "${{ needs.build.outputs.postgres_tools_repository }}"
+            --connector-certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --connector-certificate-identity "$connector_identity"
+            --connector-certificate-github-workflow-sha "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+            --connector-certificate-github-workflow-trigger push
+            --expected-connector-repository "$source_repository"
+            --expected-connector-source-commit "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+            --expected-connector-tag "$CONNECTOR_RELEASE_TAG"
+            --expected-connector-release-id "$CONNECTOR_RELEASE_ID"
+            --expected-connector-workflow-run-id "$CONNECTOR_RELEASE_WORKFLOW_RUN_ID"
+            --expected-connector-workflow-run-attempt "$CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT"
+          )
+          python3 -I deploy/server-package/server_package.py verify-release \
+            --release-dir "$SERVER_PACKAGE_DIR" "${package_policy[@]}" >/dev/null
+
+      - name: Install the policy-pinned scan toolchain
+        id: trivy
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 0700 "$CONTROL_VULNERABILITY_DIR"
+          install -d -m 0700 "$RUNNER_TEMP/control-vulnerability-tools"
+          python3 -I deploy/server-package/oci_toolchain.py install \
+            --destination "$RUNNER_TEMP/control-vulnerability-tools/crane"
+          python3 -I deploy/server-package/oci_toolchain.py verify \
+            --crane "$RUNNER_TEMP/control-vulnerability-tools/crane"
+          scanner=$(scripts/install-trivy.sh \
+            security/vulnerability-policy.json \
+            "$RUNNER_TEMP/trivy-0.74.0" \
+            "$CONTROL_VULNERABILITY_DIR/trivy-install-receipt.json")
+          test -x "$scanner"
+          printf 'path=%s\n' "$scanner" >> "$GITHUB_OUTPUT"
+          printf 'crane=%s\n' "$RUNNER_TEMP/control-vulnerability-tools/crane" >> "$GITHUB_OUTPUT"
+
+      - name: Derive all targets from the signed roots and scan them
+        env:
+          CRANE: ${{ steps.trivy.outputs.crane }}
+          TRIVY: ${{ steps.trivy.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 0700 "$CONTROL_VULNERABILITY_DIR/control"
+          install -d -m 0700 "$CONTROL_VULNERABILITY_DIR/server"
+          cache="$RUNNER_TEMP/control-trivy-cache"
+          install -d -m 0700 "$cache"
+          empty_config="$CONTROL_VULNERABILITY_DIR/trivy-empty.yaml"
+          empty_ignore="$CONTROL_VULNERABILITY_DIR/trivy-empty.ignore"
+          : > "$empty_config"
+          : > "$empty_ignore"
+          python3 -I deploy/server-package/oci_toolchain.py verify --crane "$CRANE"
+          install -d -m 0700 "$RUNNER_TEMP/control-vulnerability-crane-home"
+          timeout 900 env -i \
+            HOME="$RUNNER_TEMP/control-vulnerability-crane-home" PATH="$PATH" \
+            "$CRANE" pull --format=oci --annotate-ref \
+            ghcr.io/aquasecurity/trivy-db:2 \
+            "$CONTROL_VULNERABILITY_DIR/trivy-db-oci"
+          python3 -I deploy/server-package/oci_toolchain.py verify --crane "$CRANE"
+          timeout 900 env -i \
+            HOME="$RUNNER_TEMP/control-vulnerability-crane-home" PATH="$PATH" \
+            "$CRANE" pull --format=oci --annotate-ref \
+            ghcr.io/aquasecurity/trivy-java-db:1 \
+            "$CONTROL_VULNERABILITY_DIR/trivy-java-db-oci"
+          "$TRIVY" --cache-dir "$cache" --config "$empty_config" \
+            image --db-repository ghcr.io/aquasecurity/trivy-db:2 \
+            --download-db-only --no-progress
+          "$TRIVY" --cache-dir "$cache" --config "$empty_config" \
+            image --java-db-repository ghcr.io/aquasecurity/trivy-java-db:1 \
+            --download-java-db-only --no-progress
+          test -f "$cache/db/metadata.json"
+          test -f "$cache/db/trivy.db"
+          test -f "$cache/java-db/metadata.json"
+          test -f "$cache/java-db/trivy-java.db"
+          install -m 0600 "$cache/db/metadata.json" \
+            "$CONTROL_VULNERABILITY_DIR/trivy-db-metadata.json"
+          install -m 0600 "$cache/db/trivy.db" \
+            "$CONTROL_VULNERABILITY_DIR/trivy.db"
+          install -m 0600 "$cache/java-db/metadata.json" \
+            "$CONTROL_VULNERABILITY_DIR/trivy-java-db-metadata.json"
+          install -m 0600 "$cache/java-db/trivy-java.db" \
+            "$CONTROL_VULNERABILITY_DIR/trivy-java.db"
+          install -m 0600 security/vulnerability-dispositions.json \
+            "$CONTROL_VULNERABILITY_DIR/vulnerability-dispositions.json"
+
+          for name in \
+            control-images.lock.json \
+            control-images.lock.sigstore.json \
+            control-api.spdx.json \
+            pwa.spdx.json \
+            postgres-tools.spdx.json
+          do
+            test -f "$RELEASE_DIR/$name"
+            test ! -L "$RELEASE_DIR/$name"
+            install -m 0600 "$RELEASE_DIR/$name" \
+              "$CONTROL_VULNERABILITY_DIR/control/$name"
+          done
+
+          for name in \
+            server-packages.manifest.json \
+            server-packages.manifest.json.sigstore.json \
+            connector-release-metadata.json \
+            connector-release-metadata.json.sigstore.json \
+            connector-public-verification-aggregate.json \
+            connector-public-verification-aggregate.json.sigstore.json
+          do
+            test -f "$SERVER_PACKAGE_DIR/$name"
+            test ! -L "$SERVER_PACKAGE_DIR/$name"
+            install -m 0600 "$SERVER_PACKAGE_DIR/$name" \
+              "$CONTROL_VULNERABILITY_DIR/server/$name"
+          done
+          jq -r '
+            .packages
+            | to_entries[]
+            | .value.delivery.parts[].filename, .value.sbom.filename
+          ' "$SERVER_PACKAGE_DIR/server-packages.manifest.json" | sort -u \
+            > "$RUNNER_TEMP/control-server-vulnerability-files.txt"
+          while IFS= read -r name; do
+            [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]
+            test -f "$SERVER_PACKAGE_DIR/$name"
+            test ! -L "$SERVER_PACKAGE_DIR/$name"
+            test ! -e "$CONTROL_VULNERABILITY_DIR/server/$name"
+            ln "$SERVER_PACKAGE_DIR/$name" "$CONTROL_VULNERABILITY_DIR/server/$name"
+          done < "$RUNNER_TEMP/control-server-vulnerability-files.txt"
+
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          scan_common=(
+            --policy security/vulnerability-policy.json
+            --scanner "$TRIVY"
+            --scanner-install-receipt "$CONTROL_VULNERABILITY_DIR/trivy-install-receipt.json"
+            --cache-dir "$cache"
+            --config "$empty_config"
+            --ignorefile "$empty_ignore"
+            --vulnerability-db-metadata "$CONTROL_VULNERABILITY_DIR/trivy-db-metadata.json"
+            --vulnerability-db "$CONTROL_VULNERABILITY_DIR/trivy.db"
+            --vulnerability-db-oci-layout "$CONTROL_VULNERABILITY_DIR/trivy-db-oci"
+            --java-db-metadata "$CONTROL_VULNERABILITY_DIR/trivy-java-db-metadata.json"
+            --java-db "$CONTROL_VULNERABILITY_DIR/trivy-java.db"
+            --java-db-oci-layout "$CONTROL_VULNERABILITY_DIR/trivy-java-db-oci"
+          )
+          python3 -I scripts/run-vulnerability-scan.py "${scan_common[@]}" \
+            --target-name source \
+            --target-kind source \
+            --target-identity "git:$GITHUB_SHA" \
+            --subject "$source_repository" \
+            --source-repository "$source_repository" \
+            --source-commit "$GITHUB_SHA" \
+            --raw-report "$CONTROL_VULNERABILITY_DIR/vulnerability-source.raw.json" \
+            --report "$CONTROL_VULNERABILITY_DIR/vulnerability-source.json" \
+            --execution-receipt "$CONTROL_VULNERABILITY_DIR/scan-execution-source.json"
+
+          jq -r '
+            .images
+            | to_entries[]
+            | [.key, .value.repository, .value.digest]
+            | @tsv
+          ' "$RELEASE_DIR/control-images.lock.json" \
+            > "$RUNNER_TEMP/control-image-vulnerability-targets.tsv"
+          diff -u \
+            <(printf '%s\n' control-api postgres-tools pwa) \
+            <(cut -f 1 "$RUNNER_TEMP/control-image-vulnerability-targets.tsv" | sort)
+          while IFS=$'\t' read -r component repository digest; do
+            [[ "$component" =~ ^(control-api|pwa|postgres-tools)$ ]]
+            [[ "$repository" =~ ^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+$ ]]
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            case "$component" in
+              control-api) target=control-api-image ;;
+              pwa) target=pwa-image ;;
+              postgres-tools) target=postgres-tools-image ;;
+              *) exit 1 ;;
+            esac
+            selector=$(jq -cnS --arg component "$component" '{component:$component}')
+            python3 -I scripts/run-vulnerability-scan.py "${scan_common[@]}" \
+              --target-name "$target" \
+              --target-kind container \
+              --target-identity "$digest" \
+              --subject "${repository}@${digest}" \
+              --release-root-id control \
+              --release-root-kind control-images-lock-v1 \
+              --release-root-selector "$selector" \
+              --raw-report "$CONTROL_VULNERABILITY_DIR/vulnerability-${target}.raw.json" \
+              --report "$CONTROL_VULNERABILITY_DIR/vulnerability-${target}.json" \
+              --execution-receipt "$CONTROL_VULNERABILITY_DIR/scan-execution-${target}.json"
+          done < "$RUNNER_TEMP/control-image-vulnerability-targets.tsv"
+
+          jq -r '
+            .packages
+            | to_entries[]
+            | [.key, .value.sha256, .value.sbom.filename, .value.sbom.sha256]
+            | @tsv
+          ' "$SERVER_PACKAGE_DIR/server-packages.manifest.json" \
+            > "$RUNNER_TEMP/control-package-vulnerability-targets.tsv"
+          diff -u \
+            <(printf '%s\n' offline online) \
+            <(cut -f 1 "$RUNNER_TEMP/control-package-vulnerability-targets.tsv" | sort)
+          while IFS=$'\t' read -r mode artifact_sha sbom sbom_sha; do
+            [[ "$mode" =~ ^(online|offline)$ ]]
+            [[ "$artifact_sha" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$sbom" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]
+            [[ "$sbom_sha" =~ ^[0-9a-f]{64}$ ]]
+            target="server-${mode}-linux-amd64"
+            selector=$(jq -cnS --arg mode "$mode" '{mode:$mode}')
+            python3 -I scripts/run-vulnerability-scan.py "${scan_common[@]}" \
+              --target-name "$target" \
+              --target-kind file \
+              --target-identity "sha256:$artifact_sha" \
+              --subject "$target.$sbom_sha.spdx.json" \
+              --subject-file "$CONTROL_VULNERABILITY_DIR/server/$sbom" \
+              --release-root-id server \
+              --release-root-kind server-packages-manifest-v1 \
+              --release-root-selector "$selector" \
+              --raw-report "$CONTROL_VULNERABILITY_DIR/vulnerability-${target}.raw.json" \
+              --report "$CONTROL_VULNERABILITY_DIR/vulnerability-${target}.json" \
+              --execution-receipt "$CONTROL_VULNERABILITY_DIR/scan-execution-${target}.json"
+          done < "$RUNNER_TEMP/control-package-vulnerability-targets.tsv"
+
+          jq -n \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg source_repository "$source_repository" '
+              {
+                format_version: 1,
+                profile: "control-release",
+                source_commit: $source_commit,
+                source_repository: $source_repository,
+                core_roots: [
+                  {
+                    id: "control",
+                    kind: "control-images-lock-v1",
+                    path: "control/control-images.lock.json",
+                    signature_bundle_path: "control/control-images.lock.sigstore.json"
+                  },
+                  {
+                    id: "server",
+                    kind: "server-packages-manifest-v1",
+                    path: "server/server-packages.manifest.json",
+                    signature_bundle_path: "server/server-packages.manifest.json.sigstore.json"
+                  }
+                ],
+                targets: [
+                  {name: "source", report_path: "vulnerability-source.json", scan_execution_path: "scan-execution-source.json"},
+                  {name: "control-api-image", report_path: "vulnerability-control-api-image.json", scan_execution_path: "scan-execution-control-api-image.json"},
+                  {name: "pwa-image", report_path: "vulnerability-pwa-image.json", scan_execution_path: "scan-execution-pwa-image.json"},
+                  {name: "postgres-tools-image", report_path: "vulnerability-postgres-tools-image.json", scan_execution_path: "scan-execution-postgres-tools-image.json"},
+                  {name: "server-online-linux-amd64", report_path: "vulnerability-server-online-linux-amd64.json", scan_execution_path: "scan-execution-server-online-linux-amd64.json"},
+                  {name: "server-offline-linux-amd64", report_path: "vulnerability-server-offline-linux-amd64.json", scan_execution_path: "scan-execution-server-offline-linux-amd64.json"}
+                ]
+              }
+            ' > "$CONTROL_VULNERABILITY_DIR/vulnerability-inputs.json"
+          python3 -I scripts/build-vulnerability-manifest.py \
+            --inputs "$CONTROL_VULNERABILITY_DIR/vulnerability-inputs.json" \
+            --policy security/vulnerability-policy.json \
+            --output "$CONTROL_VULNERABILITY_DIR/vulnerability-manifest.json"
+          rm "$CONTROL_VULNERABILITY_DIR/vulnerability-inputs.json"
+          python3 -I scripts/check-vulnerabilities.py create-receipt \
+            --manifest "$CONTROL_VULNERABILITY_DIR/vulnerability-manifest.json" \
+            --policy security/vulnerability-policy.json \
+            --dispositions "$CONTROL_VULNERABILITY_DIR/vulnerability-dispositions.json" \
+            --profile control-release \
+            --source-commit "$GITHUB_SHA" \
+            --receipt "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json"
+          jq -e '
+              (.evidence_inventory | length) == 53
+              and ([.evidence_inventory[].path
+                | select((startswith("control/") or startswith("server/")) | not)]
+                | length) == 41
+            ' "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json" >/dev/null
+          rm \
+            "$CONTROL_VULNERABILITY_DIR/server/connector-release-metadata.json" \
+            "$CONTROL_VULNERABILITY_DIR/server/connector-release-metadata.json.sigstore.json" \
+            "$CONTROL_VULNERABILITY_DIR/server/connector-public-verification-aggregate.json" \
+            "$CONTROL_VULNERABILITY_DIR/server/connector-public-verification-aggregate.json.sigstore.json"
+          diff -u \
+            <(jq -r '.evidence_inventory[].path, "vulnerability-receipt.json"' \
+              "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json" | sort) \
+            <(cd "$CONTROL_VULNERABILITY_DIR" && find . -type f | sed 's#^\./##' | sort)
+          unique="$RUNNER_TEMP/control-vulnerability-unique"
+          test ! -e "$unique"
+          install -d -m 0700 "$unique"
+          jq -r '
+              .evidence_inventory[]
+              | select(.path | (startswith("control/") or startswith("server/")) | not)
+              | [.path, .sha256, (.size | tostring)]
+              | @tsv
+            ' "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json" \
+            > "$RUNNER_TEMP/control-vulnerability-unique.tsv"
+          test "$(wc -l < "$RUNNER_TEMP/control-vulnerability-unique.tsv" | tr -d ' ')" = 41
+          while IFS=$'\t' read -r path expected_sha expected_size; do
+            [[ "$path" =~ ^[A-Za-z0-9][A-Za-z0-9._+@-]*(/[A-Za-z0-9][A-Za-z0-9._+@-]*)*$ ]]
+            [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$expected_size" =~ ^(0|[1-9][0-9]*)$ ]]
+            case "$path" in control/*|server/*) exit 1 ;; esac
+            source="$CONTROL_VULNERABILITY_DIR/$path"
+            destination="$unique/$path"
+            test -f "$source"
+            test ! -L "$source"
+            test "$(sha256sum "$source" | awk '{print $1}')" = "$expected_sha"
+            test "$(stat -c %s "$source")" = "$expected_size"
+            test ! -e "$destination"
+            install -d -m 0700 "$(dirname "$destination")"
+            install -m 0600 "$source" "$destination"
+          done < "$RUNNER_TEMP/control-vulnerability-unique.tsv"
+          install -m 0600 "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json" \
+            "$unique/vulnerability-receipt.json"
+          diff -u \
+            <(jq -r '
+                .evidence_inventory[].path
+                | select((startswith("control/") or startswith("server/")) | not)
+              ' "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json" \
+              | { sort; printf '%s\n' vulnerability-receipt.json; } | sort) \
+            <(cd "$unique" && find . -type f | sed 's#^\./##' | sort)
+          test "$(find "$unique" -type f | wc -l | tr -d ' ')" = 42
+
+      - name: Transfer only the unique closed vulnerability evidence
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: control-vulnerability-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/control-vulnerability-unique
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  vulnerability-attest:
+    name: Reconstruct signed roots, replay admission, and sign the receipt
+    needs:
+      - build
+      - package-build
+      - package-sign
+      - vulnerability-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: control-server-release-sigstore
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
+    steps:
+      - name: Check out the independently trusted receipt verifier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install the pinned Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Receive the unique vulnerability evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-vulnerability-${{ github.run_attempt }}
+          path: dist/control-vulnerability
+
+      - name: Receive the signed Control image root
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-images-signed-${{ github.run_attempt }}
+          path: dist/control-images
+
+      - name: Receive the signed server package root and complete inventory
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-server-packages-signed-${{ github.run_attempt }}
+          path: dist/server-packages
+
+      - name: Recheck the remote annotated tag before requesting OIDC
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${GITHUB_REF_NAME}" "refs/tags/${GITHUB_REF_NAME}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$GITHUB_SHA"
+
+      - name: Authenticate roots, reconstruct their targets, and replay admission
+        env:
+          CONNECTOR_RELEASE_ID: ${{ needs.package-build.outputs.connector_release_id }}
+          CONNECTOR_RELEASE_SOURCE_COMMIT: ${{ needs.package-build.outputs.connector_source_commit }}
+          CONNECTOR_RELEASE_TAG: ${{ needs.package-build.outputs.connector_tag }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ needs.package-build.outputs.connector_workflow_run_attempt }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ID: ${{ needs.package-build.outputs.connector_workflow_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
+          connector_identity="${source_repository}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
+          deploy/release/verify-control-images.sh \
+            --release-dir "$RELEASE_DIR" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" \
+            --expected-source-repository "$source_repository" \
+            --expected-source-commit "$GITHUB_SHA" \
+            --expected-release-tag "$GITHUB_REF_NAME" \
+            --expected-api-repository "${{ needs.build.outputs.api_repository }}" \
+            --expected-pwa-repository "${{ needs.build.outputs.pwa_repository }}" \
+            --expected-postgres-tools-repository "${{ needs.build.outputs.postgres_tools_repository }}" \
+            >/dev/null
+          package_policy=(
+            --cosign "$(command -v cosign)"
+            --expected-cosign-version v3.0.6
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --certificate-identity "$identity"
+            --certificate-github-workflow-sha "$GITHUB_SHA"
+            --certificate-github-workflow-trigger push
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY"
+            --certificate-github-workflow-ref "$GITHUB_REF"
+            --expected-source-repository "$source_repository"
+            --expected-source-commit "$GITHUB_SHA"
+            --expected-release-tag "$GITHUB_REF_NAME"
+            --expected-api-repository "${{ needs.build.outputs.api_repository }}"
+            --expected-pwa-repository "${{ needs.build.outputs.pwa_repository }}"
+            --expected-postgres-tools-repository "${{ needs.build.outputs.postgres_tools_repository }}"
+            --connector-certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --connector-certificate-identity "$connector_identity"
+            --connector-certificate-github-workflow-sha "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+            --connector-certificate-github-workflow-trigger push
+            --expected-connector-repository "$source_repository"
+            --expected-connector-source-commit "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+            --expected-connector-tag "$CONNECTOR_RELEASE_TAG"
+            --expected-connector-release-id "$CONNECTOR_RELEASE_ID"
+            --expected-connector-workflow-run-id "$CONNECTOR_RELEASE_WORKFLOW_RUN_ID"
+            --expected-connector-workflow-run-attempt "$CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT"
+          )
+          python3 -I deploy/server-package/server_package.py verify-release \
+            --release-dir "$SERVER_PACKAGE_DIR" "${package_policy[@]}" >/dev/null
+
+          install -d -m 0700 "$CONTROL_VULNERABILITY_DIR/control"
+          install -d -m 0700 "$CONTROL_VULNERABILITY_DIR/server"
+          for name in \
+            control-images.lock.json \
+            control-images.lock.sigstore.json \
+            control-api.spdx.json \
+            pwa.spdx.json \
+            postgres-tools.spdx.json
+          do
+            install -m 0600 "$RELEASE_DIR/$name" \
+              "$CONTROL_VULNERABILITY_DIR/control/$name"
+          done
+          for name in \
+            server-packages.manifest.json \
+            server-packages.manifest.json.sigstore.json \
+            connector-release-metadata.json \
+            connector-release-metadata.json.sigstore.json \
+            connector-public-verification-aggregate.json \
+            connector-public-verification-aggregate.json.sigstore.json
+          do
+            install -m 0600 "$SERVER_PACKAGE_DIR/$name" \
+              "$CONTROL_VULNERABILITY_DIR/server/$name"
+          done
+          jq -r '
+            .packages
+            | to_entries[]
+            | .value.delivery.parts[].filename, .value.sbom.filename
+          ' "$SERVER_PACKAGE_DIR/server-packages.manifest.json" | sort -u \
+            > "$RUNNER_TEMP/control-server-vulnerability-replay-files.txt"
+          while IFS= read -r name; do
+            [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]
+            test ! -e "$CONTROL_VULNERABILITY_DIR/server/$name"
+            ln "$SERVER_PACKAGE_DIR/$name" "$CONTROL_VULNERABILITY_DIR/server/$name"
+          done < "$RUNNER_TEMP/control-server-vulnerability-replay-files.txt"
+
+          cosign verify-blob "$CONTROL_VULNERABILITY_DIR/control/control-images.lock.json" \
+            --bundle "$CONTROL_VULNERABILITY_DIR/control/control-images.lock.sigstore.json" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" >/dev/null
+          cosign verify-blob "$CONTROL_VULNERABILITY_DIR/server/server-packages.manifest.json" \
+            --bundle "$CONTROL_VULNERABILITY_DIR/server/server-packages.manifest.json.sigstore.json" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" >/dev/null
+          python3 -I scripts/check-vulnerabilities.py verify-receipt \
+            --manifest "$CONTROL_VULNERABILITY_DIR/vulnerability-manifest.json" \
+            --policy security/vulnerability-policy.json \
+            --dispositions "$CONTROL_VULNERABILITY_DIR/vulnerability-dispositions.json" \
+            --profile control-release \
+            --source-commit "$GITHUB_SHA" \
+            --receipt "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json" \
+            --max-receipt-age-hours 24
+          rm \
+            "$CONTROL_VULNERABILITY_DIR/server/connector-release-metadata.json" \
+            "$CONTROL_VULNERABILITY_DIR/server/connector-release-metadata.json.sigstore.json" \
+            "$CONTROL_VULNERABILITY_DIR/server/connector-public-verification-aggregate.json" \
+            "$CONTROL_VULNERABILITY_DIR/server/connector-public-verification-aggregate.json.sigstore.json"
+
+      - name: Sign the canonical receipt and require the exact reconstructed inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.sigstore.json"
+          cosign sign-blob --yes --bundle "$bundle" \
+            "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
+          cosign verify-blob "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json" \
+            --bundle "$bundle" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" >/dev/null
+          diff -u \
+            <(jq -r '
+                .evidence_inventory[].path,
+                "vulnerability-receipt.json",
+                "vulnerability-receipt.sigstore.json"
+              ' "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json" | sort) \
+            <(cd "$CONTROL_VULNERABILITY_DIR" && find . -type f | sed 's#^\./##' | sort)
+          public="$RUNNER_TEMP/control-vulnerability-public"
+          test ! -e "$public"
+          install -d -m 0700 "$public"
+          printf '%s\n' \
+            vulnerability-receipt.json \
+            vulnerability-receipt.sigstore.json \
+            > "$RUNNER_TEMP/control-vulnerability-public-names.txt"
+          jq -r '
+              .evidence_inventory[]
+              | select(.path | (startswith("control/") or startswith("server/")) | not)
+              | [.path, .sha256, (.size | tostring)]
+              | @tsv
+            ' "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json" \
+            > "$RUNNER_TEMP/control-vulnerability-public.tsv"
+          test "$(wc -l < "$RUNNER_TEMP/control-vulnerability-public.tsv" | tr -d ' ')" = 41
+          while IFS=$'\t' read -r path expected_sha expected_size; do
+            [[ "$path" =~ ^[A-Za-z0-9][A-Za-z0-9._+@-]*(/[A-Za-z0-9][A-Za-z0-9._+@-]*)*$ ]]
+            [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$expected_size" =~ ^(0|[1-9][0-9]*)$ ]]
+            basename=${path##*/}
+            [[ "$basename" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            path_sha=$(printf '%s' "$path" | sha256sum | cut -c 1-16)
+            name="vulnerability-evidence-${path_sha}-${basename}"
+            [[ "$name" =~ ^vulnerability-evidence-[0-9a-f]{16}-[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            source="$CONTROL_VULNERABILITY_DIR/$path"
+            destination="$public/$name"
+            test -f "$source"
+            test ! -L "$source"
+            test "$(sha256sum "$source" | awk '{print $1}')" = "$expected_sha"
+            test "$(stat -c %s "$source")" = "$expected_size"
+            test ! -e "$destination"
+            install -m 0600 "$source" "$destination"
+            printf '%s\n' "$name" >> "$RUNNER_TEMP/control-vulnerability-public-names.txt"
+          done < "$RUNNER_TEMP/control-vulnerability-public.tsv"
+          install -m 0600 "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json" \
+            "$public/vulnerability-receipt.json"
+          install -m 0600 "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.sigstore.json" \
+            "$public/vulnerability-receipt.sigstore.json"
+          test "$(find "$public" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 43
+          test "$(sort "$RUNNER_TEMP/control-vulnerability-public-names.txt" | uniq -d | wc -l | tr -d ' ')" = 0
+          diff -u \
+            <(sort "$RUNNER_TEMP/control-vulnerability-public-names.txt") \
+            <(find "$public" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
+
+      - name: Transfer only the unique signed vulnerability evidence
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: control-vulnerability-signed-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/control-vulnerability-public
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    name: Publish the exact immutable Control release union
+    needs:
+      - attest
+      - package-sign
+      - vulnerability-attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     environment: control-images-release-publish
     permissions:
       contents: write
@@ -561,6 +1781,96 @@ jobs:
         with:
           name: control-images-signed-${{ github.run_attempt }}
           path: dist/control-images
+
+      - name: Receive only the signed and verified server package closure
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-server-packages-signed-${{ github.run_attempt }}
+          path: dist/server-packages
+
+      - name: Receive only the signed online and offline package receipts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-server-package-receipts-signed-${{ github.run_attempt }}
+          path: dist/control-server-package-receipts
+
+      - name: Receive only the signed vulnerability evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: control-vulnerability-signed-${{ github.run_attempt }}
+          path: dist/control-vulnerability
+
+      - name: Require the four exact disjoint publication inventories
+        shell: bash
+        run: |
+          set -euo pipefail
+          require_flat_regular_files() {
+            directory=$1
+            test -d "$directory"
+            test "$(find "$directory" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = \
+              "$(find "$directory" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          }
+          require_flat_regular_files "$RELEASE_DIR"
+          require_flat_regular_files "$SERVER_PACKAGE_DIR"
+          require_flat_regular_files "$SERVER_PACKAGE_RECEIPT_DIR"
+          require_flat_regular_files "$CONTROL_VULNERABILITY_DIR"
+          diff -u \
+            <(printf '%s\n' \
+              control-api.provenance.json \
+              control-api.spdx.json \
+              control-images.lock.json \
+              control-images.lock.sigstore.json \
+              postgres-tools.provenance.json \
+              postgres-tools.spdx.json \
+              pwa.provenance.json \
+              pwa.spdx.json \
+              source-attestation.json \
+              source-files.manifest \
+              source.tar | sort) \
+            <(find "$RELEASE_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
+          diff -u \
+            <(printf '%s\n' \
+              control-server-package-offline-verification.json \
+              control-server-package-offline-verification.json.sigstore.json \
+              control-server-package-online-verification.json \
+              control-server-package-online-verification.json.sigstore.json | sort) \
+            <(find "$SERVER_PACKAGE_RECEIPT_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
+          receipt="$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json"
+          jq -e '
+              (.evidence_inventory | length) == 53
+              and ([.evidence_inventory[].path
+                | select((startswith("control/") or startswith("server/")) | not)]
+                | length) == 41
+            ' "$receipt" >/dev/null
+          expected_vulnerability="$RUNNER_TEMP/control-public-vulnerability-names.txt"
+          printf '%s\n' \
+            vulnerability-receipt.json \
+            vulnerability-receipt.sigstore.json \
+            > "$expected_vulnerability"
+          while IFS= read -r path; do
+            [[ "$path" =~ ^[A-Za-z0-9][A-Za-z0-9._+@-]*(/[A-Za-z0-9][A-Za-z0-9._+@-]*)*$ ]]
+            basename=${path##*/}
+            [[ "$basename" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            path_sha=$(printf '%s' "$path" | sha256sum | cut -c 1-16)
+            printf 'vulnerability-evidence-%s-%s\n' "$path_sha" "$basename" \
+              >> "$expected_vulnerability"
+          done < <(jq -r '
+              .evidence_inventory[].path
+              | select((startswith("control/") or startswith("server/")) | not)
+            ' "$receipt")
+          test "$(wc -l < "$expected_vulnerability" | tr -d ' ')" = 43
+          test "$(sort "$expected_vulnerability" | uniq -d | wc -l | tr -d ' ')" = 0
+          diff -u \
+            <(sort "$expected_vulnerability") \
+            <(find "$CONTROL_VULNERABILITY_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
+          find \
+            "$RELEASE_DIR" \
+            "$SERVER_PACKAGE_DIR" \
+            "$SERVER_PACKAGE_RECEIPT_DIR" \
+            "$CONTROL_VULNERABILITY_DIR" \
+            -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort \
+            > "$RUNNER_TEMP/control-release-asset-names.txt"
+          test -z "$(uniq -d "$RUNNER_TEMP/control-release-asset-names.txt")"
 
       - name: Require the remote tag and immutable-release controls to remain fixed
         env:
@@ -617,13 +1927,25 @@ jobs:
             test "$object_sha" = "$GITHUB_SHA"
           }
           assert_remote_tag
-          gh release create "$GITHUB_REF_NAME" "$RELEASE_DIR"/* \
+          assets=()
+          for directory in \
+            "$RELEASE_DIR" \
+            "$SERVER_PACKAGE_DIR" \
+            "$SERVER_PACKAGE_RECEIPT_DIR" \
+            "$CONTROL_VULNERABILITY_DIR"
+          do
+            while IFS= read -r -d '' asset; do
+              assets+=("$asset")
+            done < <(find "$directory" -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
+          done
+          test "${#assets[@]}" -gt 26
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --draft \
             --verify-tag \
             --target "$GITHUB_SHA" \
             --latest=false \
-            --title "Control images ${GITHUB_REF_NAME#control-v}" \
-            --notes "Atomic Control API/PWA/PostgreSQL-tools digest lock with exact-workflow Sigstore signatures, SPDX SBOMs, and SLSA v1 provenance. Use independently fixed trust inputs and deploy/release/verify-control-images.sh before deployment."
+            --title "Sub2API Codex Control ${GITHUB_REF_NAME#control-v}" \
+            --notes "Protected Control release containing the atomic image root, deterministic online/offline server packages, standalone authenticated verifier, signed package-verification receipts, Connector compatibility evidence, and signed vulnerability admission. Anonymous public re-download and full independent replay remain mandatory before deployment."
           assert_remote_tag
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false
           assert_remote_tag
@@ -634,12 +1956,13 @@ jobs:
           fi
 
   verify-public-release:
-    name: Re-download and verify the public immutable release
+    name: Re-download and replay the complete public immutable release
     needs:
       - build
+      - package-build
       - publish
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -654,8 +1977,10 @@ jobs:
         with:
           cosign-release: "v3.0.6"
 
-      - name: Set up the pinned read-only Buildx client for public tag checks
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Install the pinned Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
 
       - name: Download every asset without authentication and recheck the public tag
         id: public
@@ -733,9 +2058,47 @@ jobs:
             gh release verify-asset "$RELEASE_TAG" "$asset" --repo "$RELEASE_REPOSITORY"
           done
 
-      - name: Re-run the fail-closed consumer verifier on the public bytes
+      - name: Split the exact image, server, receipt, and vulnerability union
+        id: split
         env:
           DOWNLOAD_DIR: ${{ steps.public.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          image=$(mktemp -d "$RUNNER_TEMP/control-public-images.XXXXXX")
+          server=$(mktemp -d "$RUNNER_TEMP/control-public-server.XXXXXX")
+          receipts=$(mktemp -d "$RUNNER_TEMP/control-public-package-receipts.XXXXXX")
+          vulnerability=$(mktemp -d "$RUNNER_TEMP/control-public-vulnerability.XXXXXX")
+          for asset in "$DOWNLOAD_DIR"/*; do
+            name=$(basename "$asset")
+            case "$name" in
+              control-api.provenance.json|control-api.spdx.json|control-images.lock.json|control-images.lock.sigstore.json|postgres-tools.provenance.json|postgres-tools.spdx.json|pwa.provenance.json|pwa.spdx.json|source-attestation.json|source-files.manifest|source.tar)
+                install -m 0600 "$asset" "$image/$name"
+                ;;
+              control-server-package-offline-verification.json|control-server-package-offline-verification.json.sigstore.json|control-server-package-online-verification.json|control-server-package-online-verification.json.sigstore.json)
+                install -m 0600 "$asset" "$receipts/$name"
+                ;;
+              vulnerability-receipt.json|vulnerability-receipt.sigstore.json|vulnerability-evidence-*)
+                install -m 0600 "$asset" "$vulnerability/$name"
+                ;;
+              *)
+                install -m 0600 "$asset" "$server/$name"
+                ;;
+            esac
+          done
+          test "$(find "$image" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 11
+          test "$(find "$receipts" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 4
+          test "$(find "$vulnerability" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 43
+          test "$(find "$server" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" -gt 0
+          printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
+          printf 'server=%s\n' "$server" >> "$GITHUB_OUTPUT"
+          printf 'receipts=%s\n' "$receipts" >> "$GITHUB_OUTPUT"
+          printf 'vulnerability=%s\n' "$vulnerability" >> "$GITHUB_OUTPUT"
+
+      - name: Re-run the image-root verifier against immutable digests
+        env:
+          IMAGE_DIR: ${{ steps.split.outputs.image }}
         shell: bash
         run: |
           set -euo pipefail
@@ -748,7 +2111,7 @@ jobs:
           identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
           verified="$RUNNER_TEMP/control-public-verified.json"
           deploy/release/verify-control-images.sh \
-            --release-dir "$DOWNLOAD_DIR" \
+            --release-dir "$IMAGE_DIR" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-identity "$identity" \
             --certificate-github-workflow-sha "$GITHUB_SHA" \
@@ -767,14 +2130,17 @@ jobs:
               control-api)
                 repository=$API_REPOSITORY
                 key=CONTROL_API_IMAGE
+                expected_ref="${{ needs.build.outputs.api_repository }}@${{ needs.build.outputs.api_digest }}"
                 ;;
               pwa)
                 repository=$PWA_REPOSITORY
                 key=CONTROL_PWA_IMAGE
+                expected_ref="${{ needs.build.outputs.pwa_repository }}@${{ needs.build.outputs.pwa_digest }}"
                 ;;
               postgres-tools)
                 repository=$POSTGRES_TOOLS_REPOSITORY
                 key=CONTROL_POSTGRES_TOOLS_IMAGE
+                expected_ref="${{ needs.build.outputs.postgres_tools_repository }}@${{ needs.build.outputs.postgres_tools_digest }}"
                 ;;
               *) exit 1 ;;
             esac
@@ -785,9 +2151,371 @@ jobs:
             esac
             authenticated_digest=${authenticated_ref#*@}
             [[ "$authenticated_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            public_digest=$(
+            test "$authenticated_ref" = "$expected_ref"
+          done
+
+      - name: Authenticate the standalone verifier and replay both server packages
+        env:
+          CONNECTOR_RELEASE_ID: ${{ needs.package-build.outputs.connector_release_id }}
+          CONNECTOR_RELEASE_SOURCE_COMMIT: ${{ needs.package-build.outputs.connector_source_commit }}
+          CONNECTOR_RELEASE_TAG: ${{ needs.package-build.outputs.connector_tag }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ needs.package-build.outputs.connector_workflow_run_attempt }}
+          CONNECTOR_RELEASE_WORKFLOW_RUN_ID: ${{ needs.package-build.outputs.connector_workflow_run_id }}
+          PACKAGE_RECEIPT_DIR: ${{ steps.split.outputs.receipts }}
+          SERVER_DIR: ${{ steps.split.outputs.server }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_repository="https://github.com/${GITHUB_REPOSITORY}"
+          identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
+          connector_identity="${source_repository}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
+          blob_policy=(
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --certificate-identity "$identity"
+            --certificate-github-workflow-sha "$GITHUB_SHA"
+            --certificate-github-workflow-trigger push
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY"
+            --certificate-github-workflow-ref "$GITHUB_REF"
+          )
+          manifest="$SERVER_DIR/server-packages.manifest.json"
+          cosign verify-blob "$manifest" \
+            --bundle "$SERVER_DIR/server-packages.manifest.json.sigstore.json" \
+            "${blob_policy[@]}" >/dev/null
+          jq -e '
+            .consumer_verifier
+            | type == "object"
+              and (keys == ["filename", "sha256", "size"])
+              and .filename == "server-package-verify.py"
+              and (.sha256 | test("^[0-9a-f]{64}$"))
+              and (.size | type == "number")
+              and (.size > 0)
+          ' "$manifest" >/dev/null
+          verifier="$SERVER_DIR/$(jq -er '.consumer_verifier.filename' "$manifest")"
+          test "$(sha256sum "$verifier" | cut -d ' ' -f 1)" = \
+            "$(jq -er '.consumer_verifier.sha256' "$manifest")"
+          test "$(stat -c %s "$verifier")" = \
+            "$(jq -er '.consumer_verifier.size' "$manifest")"
+          cosign verify-blob "$verifier" \
+            --bundle "$SERVER_DIR/server-package-verify.py.sigstore.json" \
+            "${blob_policy[@]}" >/dev/null
+          package_policy=(
+            --cosign "$(command -v cosign)"
+            --expected-cosign-version v3.0.6
+            "${blob_policy[@]}"
+            --expected-source-repository "$source_repository"
+            --expected-source-commit "$GITHUB_SHA"
+            --expected-release-tag "$GITHUB_REF_NAME"
+            --expected-api-repository "${{ needs.build.outputs.api_repository }}"
+            --expected-pwa-repository "${{ needs.build.outputs.pwa_repository }}"
+            --expected-postgres-tools-repository "${{ needs.build.outputs.postgres_tools_repository }}"
+            --connector-certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --connector-certificate-identity "$connector_identity"
+            --connector-certificate-github-workflow-sha "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+            --connector-certificate-github-workflow-trigger push
+            --expected-connector-repository "$source_repository"
+            --expected-connector-source-commit "$CONNECTOR_RELEASE_SOURCE_COMMIT"
+            --expected-connector-tag "$CONNECTOR_RELEASE_TAG"
+            --expected-connector-release-id "$CONNECTOR_RELEASE_ID"
+            --expected-connector-workflow-run-id "$CONNECTOR_RELEASE_WORKFLOW_RUN_ID"
+            --expected-connector-workflow-run-attempt "$CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT"
+          )
+          fresh_receipts="$RUNNER_TEMP/control-public-fresh-package-receipts"
+          test ! -e "$fresh_receipts"
+          install -d -m 0700 "$fresh_receipts"
+          for mode in online offline; do
+            extract_to="$RUNNER_TEMP/control-public-${mode}-extract-parent"
+            fresh="$fresh_receipts/control-server-package-${mode}-verification.json"
+            historical="$PACKAGE_RECEIPT_DIR/control-server-package-${mode}-verification.json"
+            test ! -e "$extract_to"
+            install -d -m 0700 "$extract_to"
+            python3 -I "$verifier" verify-release \
+              --release-dir "$SERVER_DIR" \
+              --extract-to "$extract_to" \
+              --mode "$mode" \
+              --verification-receipt "$fresh" \
+              "${package_policy[@]}"
+            cosign verify-blob "$historical" \
+              --bundle "${historical}.sigstore.json" \
+              "${blob_policy[@]}" >/dev/null
+            python3 - "$historical" "$fresh" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          def duplicate_free(pairs):
+              value = {}
+              for key, item in pairs:
+                  if key in value:
+                      raise SystemExit(f"duplicate JSON key: {key}")
+                  value[key] = item
+              return value
+
+          def load(path):
+              raw = pathlib.Path(path).read_bytes()
+              value = json.loads(raw.decode("ascii"), object_pairs_hook=duplicate_free)
+              canonical = (json.dumps(value, ensure_ascii=True, allow_nan=False,
+                                      sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+              if raw != canonical:
+                  raise SystemExit(f"non-canonical verification receipt: {path}")
+              return value
+
+          historical, fresh = map(load, sys.argv[1:])
+          for value in (historical, fresh):
+              value.pop("verified_at")
+              value["package"].pop("extracted_root")
+          if historical != fresh:
+              raise SystemExit("published package verification receipt differs from public replay")
+          PY
+          done
+
+      - name: Authenticate both roots and replay the public vulnerability receipt
+        env:
+          IMAGE_DIR: ${{ steps.split.outputs.image }}
+          SERVER_DIR: ${{ steps.split.outputs.server }}
+          VULNERABILITY_DIR: ${{ steps.split.outputs.vulnerability }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
+          blob_policy=(
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --certificate-identity "$identity"
+            --certificate-github-workflow-sha "$GITHUB_SHA"
+            --certificate-github-workflow-trigger push
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY"
+            --certificate-github-workflow-ref "$GITHUB_REF"
+          )
+          cosign verify-blob "$IMAGE_DIR/control-images.lock.json" \
+            --bundle "$IMAGE_DIR/control-images.lock.sigstore.json" \
+            "${blob_policy[@]}" >/dev/null
+          cosign verify-blob "$SERVER_DIR/server-packages.manifest.json" \
+            --bundle "$SERVER_DIR/server-packages.manifest.json.sigstore.json" \
+            "${blob_policy[@]}" >/dev/null
+          cosign verify-blob "$VULNERABILITY_DIR/vulnerability-receipt.json" \
+            --bundle "$VULNERABILITY_DIR/vulnerability-receipt.sigstore.json" \
+            "${blob_policy[@]}" >/dev/null
+
+          public_vulnerability="$VULNERABILITY_DIR"
+          receipt="$public_vulnerability/vulnerability-receipt.json"
+          jq -e '
+              (.evidence_inventory | length) == 53
+              and ([.evidence_inventory[].path
+                | select((startswith("control/") or startswith("server/")) | not)]
+                | length) == 41
+            ' "$receipt" >/dev/null
+          replay=$(mktemp -d "$RUNNER_TEMP/control-public-vulnerability-replay.XXXXXX")
+          expected_public="$RUNNER_TEMP/control-public-vulnerability-replay-names.txt"
+          printf '%s\n' \
+            vulnerability-receipt.json \
+            vulnerability-receipt.sigstore.json \
+            > "$expected_public"
+          install -m 0600 "$receipt" "$replay/vulnerability-receipt.json"
+          install -m 0600 "$public_vulnerability/vulnerability-receipt.sigstore.json" \
+            "$replay/vulnerability-receipt.sigstore.json"
+          while IFS=$'\t' read -r path expected_sha expected_size; do
+            [[ "$path" =~ ^[A-Za-z0-9][A-Za-z0-9._+@-]*(/[A-Za-z0-9][A-Za-z0-9._+@-]*)*$ ]]
+            [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$expected_size" =~ ^(0|[1-9][0-9]*)$ ]]
+            basename=${path##*/}
+            [[ "$basename" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            path_sha=$(printf '%s' "$path" | sha256sum | cut -c 1-16)
+            name="vulnerability-evidence-${path_sha}-${basename}"
+            [[ "$name" =~ ^vulnerability-evidence-[0-9a-f]{16}-[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            source="$public_vulnerability/$name"
+            destination="$replay/$path"
+            test -f "$source"
+            test ! -L "$source"
+            test "$(sha256sum "$source" | awk '{print $1}')" = "$expected_sha"
+            test "$(stat -c %s "$source")" = "$expected_size"
+            test ! -e "$destination"
+            install -d -m 0700 "$(dirname "$destination")"
+            install -m 0600 "$source" "$destination"
+            printf '%s\n' "$name" >> "$expected_public"
+          done < <(jq -r '
+              .evidence_inventory[]
+              | select(.path | (startswith("control/") or startswith("server/")) | not)
+              | [.path, .sha256, (.size | tostring)]
+              | @tsv
+            ' "$receipt")
+          test "$(wc -l < "$expected_public" | tr -d ' ')" = 43
+          test "$(sort "$expected_public" | uniq -d | wc -l | tr -d ' ')" = 0
+          diff -u \
+            <(sort "$expected_public") \
+            <(find "$public_vulnerability" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
+          VULNERABILITY_DIR="$replay"
+          install -d -m 0700 "$VULNERABILITY_DIR/control"
+          install -d -m 0700 "$VULNERABILITY_DIR/server"
+          for name in \
+            control-images.lock.json \
+            control-images.lock.sigstore.json \
+            control-api.spdx.json \
+            pwa.spdx.json \
+            postgres-tools.spdx.json
+          do
+            install -m 0600 "$IMAGE_DIR/$name" "$VULNERABILITY_DIR/control/$name"
+          done
+          for name in \
+            server-packages.manifest.json \
+            server-packages.manifest.json.sigstore.json \
+            connector-release-metadata.json \
+            connector-release-metadata.json.sigstore.json \
+            connector-public-verification-aggregate.json \
+            connector-public-verification-aggregate.json.sigstore.json
+          do
+            install -m 0600 "$SERVER_DIR/$name" "$VULNERABILITY_DIR/server/$name"
+          done
+          jq -r '
+            .packages
+            | to_entries[]
+            | .value.delivery.parts[].filename, .value.sbom.filename
+          ' "$SERVER_DIR/server-packages.manifest.json" | sort -u \
+            > "$RUNNER_TEMP/control-public-vulnerability-server-files.txt"
+          while IFS= read -r name; do
+            [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]
+            test ! -e "$VULNERABILITY_DIR/server/$name"
+            install -m 0600 "$SERVER_DIR/$name" "$VULNERABILITY_DIR/server/$name"
+          done < "$RUNNER_TEMP/control-public-vulnerability-server-files.txt"
+          python3 -I scripts/check-vulnerabilities.py verify-receipt \
+            --manifest "$VULNERABILITY_DIR/vulnerability-manifest.json" \
+            --policy security/vulnerability-policy.json \
+            --dispositions "$VULNERABILITY_DIR/vulnerability-dispositions.json" \
+            --profile control-release \
+            --source-commit "$GITHUB_SHA" \
+            --receipt "$VULNERABILITY_DIR/vulnerability-receipt.json" \
+            --max-receipt-age-hours 24
+          rm \
+            "$VULNERABILITY_DIR/server/connector-release-metadata.json" \
+            "$VULNERABILITY_DIR/server/connector-release-metadata.json.sigstore.json" \
+            "$VULNERABILITY_DIR/server/connector-public-verification-aggregate.json" \
+            "$VULNERABILITY_DIR/server/connector-public-verification-aggregate.json.sigstore.json"
+          diff -u \
+            <(jq -r '
+                .evidence_inventory[].path,
+                "vulnerability-receipt.json",
+                "vulnerability-receipt.sigstore.json"
+              ' "$VULNERABILITY_DIR/vulnerability-receipt.json" | sort) \
+            <(cd "$VULNERABILITY_DIR" && find . -type f | sed 's#^\./##' | sort)
+
+  promote-images:
+    name: Promote publicly replayed digests to final image tags
+    needs:
+      - build
+      - verify-public-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: control-images-release-promote
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out the exact annotated release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up the pinned Buildx client for final tag promotion
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in only for final tag promotion
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Revalidate the exact checkout and remote annotated tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" = "refs/tags/${GITHUB_REF_NAME}" ]]
+          [[ "$GITHUB_REF_NAME" =~ ^control-v[0-9A-Za-z.-]+$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git cat-file -e "${GITHUB_REF_NAME}^{tag}"
+          test "$(git rev-parse "${GITHUB_REF_NAME}^{}")" = "$GITHUB_SHA"
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${GITHUB_REF_NAME}" "refs/tags/${GITHUB_REF_NAME}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$GITHUB_SHA"
+
+      - name: Idempotently create and recheck all three final image tags
+        env:
+          API_DIGEST: ${{ needs.build.outputs.api_digest }}
+          API_REPOSITORY: ${{ needs.build.outputs.api_repository }}
+          POSTGRES_TOOLS_DIGEST: ${{ needs.build.outputs.postgres_tools_digest }}
+          POSTGRES_TOOLS_REPOSITORY: ${{ needs.build.outputs.postgres_tools_repository }}
+          PWA_DIGEST: ${{ needs.build.outputs.pwa_digest }}
+          PWA_REPOSITORY: ${{ needs.build.outputs.pwa_repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          assert_remote_tag() {
+            remote_tags=$(git ls-remote --tags \
+              "https://github.com/${GITHUB_REPOSITORY}.git" \
+              "refs/tags/${GITHUB_REF_NAME}" "refs/tags/${GITHUB_REF_NAME}^{}")
+            direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}" '$2 == ref {print $1}')
+            peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}^{}" '$2 == ref {print $1}')
+            test -n "$direct"
+            test -n "$peeled"
+            test "$direct" != "$peeled"
+            test "$peeled" = "$GITHUB_SHA"
+          }
+          [[ "$GITHUB_REF_NAME" =~ ^control-v[0-9A-Za-z.-]+$ ]]
+          for repository in "$API_REPOSITORY" "$PWA_REPOSITORY" "$POSTGRES_TOOLS_REPOSITORY"; do
+            [[ "$repository" =~ ^ghcr\.io/[a-z0-9]+([._-][a-z0-9]+)*/[a-z0-9]+([._-][a-z0-9]+)*$ ]]
+          done
+          for digest in "$API_DIGEST" "$PWA_DIGEST" "$POSTGRES_TOOLS_DIGEST"; do
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          done
+          assert_remote_tag
+
+          for component in control-api pwa postgres-tools; do
+            case "$component" in
+              control-api) repository=$API_REPOSITORY; digest=$API_DIGEST ;;
+              pwa) repository=$PWA_REPOSITORY; digest=$PWA_DIGEST ;;
+              postgres-tools) repository=$POSTGRES_TOOLS_REPOSITORY; digest=$POSTGRES_TOOLS_DIGEST ;;
+              *) exit 1 ;;
+            esac
+            source_digest=$(
+              docker buildx imagetools inspect "${repository}@${digest}" |
+                awk '$1 == "Digest:" {print $2; exit}'
+            )
+            test "$source_digest" = "$digest"
+            if existing=$(
+              docker buildx imagetools inspect "${repository}:${GITHUB_REF_NAME}" 2>/dev/null
+            ); then
+              existing_digest=$(printf '%s\n' "$existing" | awk '$1 == "Digest:" {print $2; exit}')
+              test "$existing_digest" = "$digest"
+            fi
+          done
+
+          assert_remote_tag
+          for component in control-api pwa postgres-tools; do
+            case "$component" in
+              control-api) repository=$API_REPOSITORY; digest=$API_DIGEST ;;
+              pwa) repository=$PWA_REPOSITORY; digest=$PWA_DIGEST ;;
+              postgres-tools) repository=$POSTGRES_TOOLS_REPOSITORY; digest=$POSTGRES_TOOLS_DIGEST ;;
+              *) exit 1 ;;
+            esac
+            if ! docker buildx imagetools inspect \
+              "${repository}:${GITHUB_REF_NAME}" >/dev/null 2>&1
+            then
+              assert_remote_tag
+              docker buildx imagetools create \
+                --tag "${repository}:${GITHUB_REF_NAME}" \
+                "${repository}@${digest}"
+            fi
+            promoted_digest=$(
               docker buildx imagetools inspect "${repository}:${GITHUB_REF_NAME}" |
                 awk '$1 == "Digest:" {print $2; exit}'
             )
-            test "$public_digest" = "$authenticated_digest"
+            test "$promoted_digest" = "$digest"
           done
+          assert_remote_tag

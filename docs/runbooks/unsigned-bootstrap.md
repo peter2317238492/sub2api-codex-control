@@ -617,7 +617,11 @@ This bootstrap cannot be repeated as an upgrade. Before the next release:
 5. Unset `CONTROL_BOOTSTRAP_CONFIRM`,
    `CONTROL_BOOTSTRAP_ALLOW_SUB2API_PUBLIC_CONNECT`, and
    `CONTROL_BOOTSTRAP_ALLOW_UNAUTHENTICATED_SMOKE`.
-6. Run the verified-stage `deploy/scripts/deploy-production.sh` resolved from
-   the protected `/opt/sub2api-control/ACTIVE_SOURCE` pointer,
-   which remains the only supported upgrade path and applies its independent
-   production backup and authenticated acceptance policy.
+6. Download the complete signed server-package asset set from one GitHub
+   Release, authenticate the standalone verifier, run `verify-release`, and
+   invoke the verified package's `sub2api-control-upgrade` lifecycle wrapper with
+   its root-only verification receipt and operator environment. The lifecycle
+   wrapper is the only supported formal upgrade path. It invokes the signed
+   `deploy-production.sh` internally after binding package, image, Connector,
+   backup, and authenticated acceptance evidence; never execute that script
+   through the historical `ACTIVE_SOURCE` pointer.

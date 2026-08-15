@@ -30,7 +30,11 @@ def write_json(path: Path, value: object, mode: int = 0o600) -> None:
 class RuntimeVerifierHardeningTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
+        self.bind_source = self.root / "sub2api-data"
+        self.bind_source.mkdir(mode=0o755)
+        self.bind_uid = self.bind_source.stat().st_uid
+        self.bind_gid = self.bind_source.stat().st_gid
         self.contract = self.root / "auth-contract.json"
         self.contract.write_text('{"format_version":1}\n', encoding="utf-8")
         self.contract.chmod(0o444)
@@ -204,6 +208,10 @@ class RuntimeVerifierHardeningTests(unittest.TestCase):
         pid1_sha256: str | None = None,
         expected_network: str | None = None,
         expected_alias: str = "sub2api",
+        expected_bind_source: Path | None = None,
+        expected_bind_uid: int | None = None,
+        expected_bind_gid: int | None = None,
+        expected_bind_mode: str | None = None,
         evidence_path: Path | None = None,
         contract_path: Path | None = None,
         success: bool = True,
@@ -236,50 +244,64 @@ class RuntimeVerifierHardeningTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        command = [
+            sys.executable,
+            str(RUNTIME),
+            "--lock",
+            str(self.root / "versions.lock.json"),
+            "--contract-file",
+            str(contract_path),
+            "--container-inspect",
+            str(self.root / "container.json"),
+            "--container-inspect-after",
+            str(self.root / "after.json"),
+            "--container-name-inspect-after",
+            str(self.root / "name-after.json"),
+            "--image-inspect",
+            str(self.root / "image.json"),
+            "--binary-sha256",
+            self.binary_sha,
+            "--pid1-host-pid",
+            str(pid1_host_pid),
+            "--pid1-path",
+            pid1_path,
+            "--pid1-sha256",
+            pid1_sha256 or self.binary_sha,
+            "--version-output",
+            str(self.root / "version.txt"),
+            "--diff",
+            str(self.root / "diff.txt"),
+            "--writable-file-sha256",
+            str(self.root / "writable-sha256.txt"),
+            "--expected-network",
+            expected_network or self.network,
+            "--expected-alias",
+            expected_alias,
+            "--auth-evidence",
+            str(evidence_path),
+            "--require-auth-evidence",
+            "--auth-probe-nonce",
+            self.probe_nonce,
+            "--auth-probe-user-id",
+            self.probe_user_id,
+            "--auth-probe-base-url",
+            self.probe_base_url,
+        ]
+        if expected_bind_source is not None:
+            command.extend(
+                [
+                    "--expected-bind-source",
+                    str(expected_bind_source),
+                    "--expected-bind-uid",
+                    str(expected_bind_uid if expected_bind_uid is not None else self.bind_uid),
+                    "--expected-bind-gid",
+                    str(expected_bind_gid if expected_bind_gid is not None else self.bind_gid),
+                    "--expected-bind-mode",
+                    expected_bind_mode or "0755",
+                ]
+            )
         result = subprocess.run(
-            [
-                sys.executable,
-                str(RUNTIME),
-                "--lock",
-                str(self.root / "versions.lock.json"),
-                "--contract-file",
-                str(contract_path),
-                "--container-inspect",
-                str(self.root / "container.json"),
-                "--container-inspect-after",
-                str(self.root / "after.json"),
-                "--container-name-inspect-after",
-                str(self.root / "name-after.json"),
-                "--image-inspect",
-                str(self.root / "image.json"),
-                "--binary-sha256",
-                self.binary_sha,
-                "--pid1-host-pid",
-                str(pid1_host_pid),
-                "--pid1-path",
-                pid1_path,
-                "--pid1-sha256",
-                pid1_sha256 or self.binary_sha,
-                "--version-output",
-                str(self.root / "version.txt"),
-                "--diff",
-                str(self.root / "diff.txt"),
-                "--writable-file-sha256",
-                str(self.root / "writable-sha256.txt"),
-                "--expected-network",
-                expected_network or self.network,
-                "--expected-alias",
-                expected_alias,
-                "--auth-evidence",
-                str(evidence_path),
-                "--require-auth-evidence",
-                "--auth-probe-nonce",
-                self.probe_nonce,
-                "--auth-probe-user-id",
-                self.probe_user_id,
-                "--auth-probe-base-url",
-                self.probe_base_url,
-            ],
+            command,
             check=False,
             capture_output=True,
             text=True,
@@ -501,6 +523,23 @@ else:
             )
         self.assertNotIn("\ninspect ", f"\n{commands}")
 
+    def test_shell_forwards_only_complete_explicit_bind_policy(self) -> None:
+        shell = RUNTIME_SHELL.read_text(encoding="utf-8")
+        for variable in (
+            "SUB2API_EXPECTED_DATA_BIND_SOURCE",
+            "SUB2API_EXPECTED_DATA_BIND_UID",
+            "SUB2API_EXPECTED_DATA_BIND_GID",
+            "SUB2API_EXPECTED_DATA_BIND_MODE",
+        ):
+            self.assertIn(variable, shell)
+        for argument in (
+            "--expected-bind-source",
+            "--expected-bind-uid",
+            "--expected-bind-gid",
+            "--expected-bind-mode",
+        ):
+            self.assertIn(argument, shell)
+
     def test_rejects_prefixed_container_id_and_bare_image_id(self) -> None:
         prefixed = copy.deepcopy(self.container)
         prefixed["Id"] = f"sha256:{self.container_id}"
@@ -553,7 +592,138 @@ else:
                 candidate["HostConfig"][field] = value
                 self.invoke(container=candidate, success=False)
 
-    def test_rejects_any_mount_other_than_named_app_data_volume(self) -> None:
+    def test_accepts_explicit_canonical_private_app_data_bind(self) -> None:
+        mounts = [
+            {
+                "Destination": "/app/data",
+                "Type": "bind",
+                "Source": str(self.bind_source),
+                "Mode": "rw",
+                "RW": True,
+                "Propagation": "rprivate",
+            }
+        ]
+        source_policy = {
+            "source": str(self.bind_source),
+            "source_uid": self.bind_uid,
+            "source_gid": self.bind_gid,
+            "source_mode": "0755",
+        }
+        with mock.patch.object(
+            RUNTIME_MODULE,
+            "validate_bind_source",
+            return_value=source_policy,
+        ) as validate_source:
+            sanitized = RUNTIME_MODULE.validate_mounts(
+                mounts,
+                expected_bind_source=str(self.bind_source),
+                expected_bind_uid=self.bind_uid,
+                expected_bind_gid=self.bind_gid,
+                expected_bind_mode=0o755,
+            )
+        validate_source.assert_called_once_with(
+            str(self.bind_source),
+            expected_uid=self.bind_uid,
+            expected_gid=self.bind_gid,
+            expected_mode=0o755,
+        )
+        self.assertEqual(
+            sanitized,
+            [
+                {
+                    "destination": "/app/data",
+                    "propagation": "rprivate",
+                    "read_write": True,
+                    "source": str(self.bind_source),
+                    "source_gid": self.bind_gid,
+                    "source_mode": "0755",
+                    "source_uid": self.bind_uid,
+                    "type": "bind",
+                }
+            ],
+        )
+
+    def test_rejects_non_root_owned_bind_ancestor(self) -> None:
+        with self.assertRaisesRegex(ValueError, "ancestor is not root-owned"):
+            RUNTIME_MODULE.validate_bind_source(
+                str(self.bind_source),
+                expected_uid=self.bind_uid,
+                expected_gid=self.bind_gid,
+                expected_mode=0o755,
+            )
+
+    def test_rejects_unadmitted_or_unsafe_app_data_bind(self) -> None:
+        candidate = copy.deepcopy(self.container)
+        candidate["Mounts"] = [
+            {
+                "Destination": "/app/data",
+                "Type": "bind",
+                "Source": str(self.bind_source),
+                "Mode": "rw",
+                "RW": True,
+                "Propagation": "rprivate",
+            }
+        ]
+        candidate["HostConfig"]["Binds"] = [f"{self.bind_source}:/app/data:rw"]
+        candidate["Config"]["User"] = f"{self.bind_uid}:{self.bind_gid}"
+        self.invoke(container=candidate, success=False)
+
+        shared = copy.deepcopy(candidate)
+        shared["Mounts"][0]["Propagation"] = "rshared"
+        self.invoke(
+            container=shared,
+            expected_bind_source=self.bind_source,
+            success=False,
+        )
+
+        self.bind_source.chmod(0o775)
+        try:
+            self.invoke(
+                container=candidate,
+                expected_bind_source=self.bind_source,
+                success=False,
+            )
+        finally:
+            self.bind_source.chmod(0o755)
+
+        self.invoke(
+            container=candidate,
+            expected_bind_source=self.bind_source,
+            expected_bind_uid=self.bind_uid + 1,
+            success=False,
+        )
+
+        wrong_user = copy.deepcopy(candidate)
+        wrong_user["Config"]["User"] = "0:0"
+        self.invoke(
+            container=wrong_user,
+            expected_bind_source=self.bind_source,
+            success=False,
+        )
+
+    def test_rejects_symlinked_app_data_bind_source(self) -> None:
+        alias = self.root / "sub2api-data-alias"
+        alias.symlink_to(self.bind_source, target_is_directory=True)
+        candidate = copy.deepcopy(self.container)
+        candidate["Mounts"] = [
+            {
+                "Destination": "/app/data",
+                "Type": "bind",
+                "Source": str(alias),
+                "Mode": "rw",
+                "RW": True,
+                "Propagation": "rprivate",
+            }
+        ]
+        candidate["HostConfig"]["Binds"] = [f"{alias}:/app/data:rw"]
+        candidate["Config"]["User"] = f"{self.bind_uid}:{self.bind_gid}"
+        self.invoke(
+            container=candidate,
+            expected_bind_source=alias,
+            success=False,
+        )
+
+    def test_rejects_any_mount_other_than_admitted_app_data_storage(self) -> None:
         cases = []
         bind_data = copy.deepcopy(self.container)
         bind_data["Mounts"][0]["Type"] = "bind"

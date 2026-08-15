@@ -70,9 +70,13 @@ description, and maintainer labels match the lock.
 
 Admission requires digest-only `Config.Image`, the exact RepoDigest/image ID,
 read-only rootfs, all Linux capabilities dropped, no-new-privileges, PID 1 at
-`/app/sub2api`, no writable-layer diff, and exactly one named writable Docker
-volume at `/app/data`. Bind mounts, updater artifacts, mutable tags, compatibility
-exceptions, or a missing/unknown profile fail closed. Container identity,
+`/app/sub2api`, no writable-layer diff, and exactly one writable data mount at
+`/app/data`. That mount may be a named Docker volume or an explicitly admitted
+canonical bind. A bind must match its exact expected source, numeric owner/group,
+mode, and `rprivate` propagation; every path component must be a real directory
+with no group/other write bit, and every ancestor before the final data source
+must be root-owned. Unadmitted binds, updater artifacts, mutable tags,
+compatibility exceptions, or a missing/unknown profile fail closed. Container identity,
 process metadata, network identity, PID, restart count, and PID 1 hash must stay
 stable throughout verification.
 

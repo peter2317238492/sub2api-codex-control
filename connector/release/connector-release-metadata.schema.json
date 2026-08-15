@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api-codex.invalid/schemas/connector-release-metadata-v1.json",
+  "title": "Sub2API Codex Connector self-service release metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "release_mode",
+    "releasable",
+    "source_repository",
+    "source_commit",
+    "version",
+    "tag",
+    "codex_version",
+    "schema_digest",
+    "manifest",
+    "config_path_hint",
+    "pair_command",
+    "start_command",
+    "assets"
+  ],
+  "properties": {
+    "format_version": { "const": 1 },
+    "release_mode": { "const": "release" },
+    "releasable": { "const": true },
+    "source_repository": {
+      "const": "https://github.com/peter2317238492/sub2api-codex-control"
+    },
+    "source_commit": { "$ref": "#/$defs/gitCommit" },
+    "version": { "$ref": "#/$defs/version" },
+    "tag": { "type": "string", "pattern": "^connector-v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "codex_version": { "$ref": "#/$defs/version" },
+    "schema_digest": { "$ref": "#/$defs/sha256" },
+    "manifest": { "$ref": "#/$defs/fileEvidence" },
+    "config_path_hint": {
+      "const": "~/.config/sub2api-codex-connector/connector.json"
+    },
+    "pair_command": { "const": "sub2api-codex-connector-ctl pair" },
+    "start_command": { "const": "sub2api-codex-connector-ctl start" },
+    "assets": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": { "$ref": "#/$defs/asset" }
+    }
+  },
+  "$defs": {
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "filename": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "fileEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size", "signature_bundle"],
+      "properties": {
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "signature_bundle": { "$ref": "#/$defs/filename" }
+      }
+    },
+    "sbomEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "filename", "sha256", "size", "signature_bundle"],
+      "properties": {
+        "format": { "const": "SPDX-2.3-json" },
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "signature_bundle": { "$ref": "#/$defs/filename" }
+      }
+    },
+    "provenanceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "predicate_type",
+        "filename",
+        "sha256",
+        "size",
+        "signature_bundle",
+        "attestation_bundle"
+      ],
+      "properties": {
+        "predicate_type": { "const": "https://slsa.dev/provenance/v1" },
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "signature_bundle": { "$ref": "#/$defs/filename" },
+        "attestation_bundle": { "$ref": "#/$defs/filename" }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "arch",
+        "package_format",
+        "filename",
+        "download_url",
+        "sha256",
+        "size",
+        "signature_bundle",
+        "sbom",
+        "provenance"
+      ],
+      "properties": {
+        "os": { "enum": ["linux", "darwin"] },
+        "arch": { "enum": ["amd64", "arm64"] },
+        "package_format": { "enum": ["deb", "rpm", "pkg"] },
+        "filename": { "$ref": "#/$defs/filename" },
+        "download_url": { "type": "string", "pattern": "^https://github\\.com/.+/releases/download/connector-v.+/.+$" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "signature_bundle": { "$ref": "#/$defs/filename" },
+        "sbom": { "$ref": "#/$defs/sbomEvidence" },
+        "provenance": { "$ref": "#/$defs/provenanceEvidence" }
+      }
+    }
+  }
+}

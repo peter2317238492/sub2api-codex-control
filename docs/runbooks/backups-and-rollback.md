@@ -76,14 +76,22 @@ checks all pass. Existing Control data is included when the database exists;
 absence on a first deployment is recorded rather than mistaken for a backup.
 
 `deploy/scripts/deploy-production.sh` creates a fresh full snapshot again before
-its authentication probe and then creates the narrower Control PostgreSQL
-checkpoint immediately before migration. It will not run a migration unless it
-can identify exactly one new Control dump from the current admission window,
-validate private file/directory modes, recompute its SHA-256, and reproduce its
-stored table-of-contents with `pg_restore --list`. When the host has no
-PostgreSQL client, the dump descriptor is streamed to `pg_restore` in the
+its authentication probe. For the narrower Control PostgreSQL checkpoint, it
+first records a bounded unfreeze plan containing the exact current writer
+container IDs and states, stops both API writers, and captures their image,
+start-time, and restart-count evidence. It then creates exactly one new Control
+dump and captures the stopped identities again. A changed ID, image, start time,
+restart count, or running state rejects the no-write window. The migration gate
+also validates private file/directory modes, recomputes the dump SHA-256, and
+reproduces its stored table-of-contents with `pg_restore --list`. When the host
+has no PostgreSQL client, the dump descriptor is streamed to `pg_restore` in the
 immutable PostgreSQL-tools image with no network. The production Compose overlay
 requires that image by immutable digest and removes its local build definition.
+The earlier live-isolation receipt also proves the dedicated Redis ACL, rejects
+every enabled `nopass` user, and requires a credentialless `PING` to return
+`NOAUTH`. An anonymous Redis baseline cannot enter the writer-freeze or migration
+window. Provision and persist the ACL boundary under a separate authorized
+maintenance change, then create a fresh snapshot before invoking the wrapper.
 
 The resulting mode-`0600` admission record includes:
 
@@ -92,6 +100,10 @@ The resulting mode-`0600` admission record includes:
 - resolved production Compose hash;
 - `alembic current` revision and target revision;
 - PostgreSQL backup path, size, checksum, and manifest hash;
+- exact pre-freeze writer identities, pre/post-backup stopped-state hashes, the
+  no-database-restore unfreeze plan, and the bounded reverse-plan hash;
+- full production backup, isolated restore, PostgreSQL/Redis live-isolation,
+  and writer-freeze receipt hashes;
 - Sub2API runtime, mount, OCI, binary, and authentication evidence;
 - production smoke-input identity/hash and, after deployment, running container
   identity plus the smoke-output hash.
@@ -101,6 +113,50 @@ head packaged inside the admitted API image, and records the Sub2API container
 ID, image ID/digest, binary hash, OCI tuple, mount policy, and authentication
 fixture digest. Keep the record next to the backup in encrypted,
 access-controlled storage outside the source checkout.
+
+If a failure occurs after writers stop but before migration starts, the wrapper
+starts only the exact previously running container IDs and proves the old IDs,
+images, start timestamps, restart counts, and states before releasing the lock.
+It does not restore PostgreSQL in this branch. After migration starts, database
+restore is allowed only if the reverse path proves both API writers and every
+one-off migration container stopped and proves that no new API was exposed after
+the schema mutation. The current candidate deliberately rejects a migrated
+cutover before starting an API and reverses under that frozen boundary until a
+controlled-traffic maintenance gate exists. For a same-schema application
+replacement, rollback recreates the prior images without restoring PostgreSQL,
+so candidate-era user writes are retained. Failure to freeze all mutators skips
+the restore. A failed or skipped restore never restarts the prior API images.
+Either case records a failed no-replace recovery receipt and retains the
+deployment lock for review.
+
+If the internal deployment returns success but lifecycle cannot commit the
+activation pointer or terminal lifecycle receipt, lifecycle reacquires the same
+production deployment lock and invokes the signed post-success bounded-reverse
+interface against that exact deployment directory. Only a same-schema deployed
+record is eligible: the prior application images are recreated without a
+database restore, so writes accepted after deployment are preserved. The
+terminal mode-`0400` reverse receipt binds the original reverse plan and the
+no-replace post-success admission. Success releases the production lock before
+lifecycle restores the prior activation; any admission, reverse, verification,
+or receipt failure retains the lock for operator review.
+
+The formal uninstall path is a separate authenticated bounded operation, not a
+Compose project teardown. Lifecycle must bind the current activation-installed
+package to one exact successful `deployment.json`, then invoke that signed
+package's internal uninstall interface. The operation removes only the three
+terminal-record container IDs and the exact isolated PWA network after proving
+that no migration, backup, or other one-off project container remains. Its
+mode-`0400`, no-replace plan and execution receipts bind the active package,
+deployment record, container IDs, image IDs, Compose labels, network ID, and
+post-removal absence checks. Drift or partial removal retains both locks and
+prevents lifecycle from deleting activation or package trees.
+
+Uninstall does not restore or remove PostgreSQL or Redis, and it preserves
+Sub2API, application data, secrets, backups, deployment records, lifecycle
+records, container images, and Connector user state. It also preserves Nginx
+configuration and logrotate policy: those are shared host integration in this
+release and are not owned by the server package. Removing them requires a
+separately authenticated ownership and restoration plan.
 
 The comprehensive snapshot contains raw database and Redis data, environment
 files, Docker inspect output, and TLS private keys. It must remain root-only and
@@ -114,17 +170,37 @@ changes require an expand-migrate-contract sequence across separate releases.
 ## Application rollback
 
 1. Stop rollout and preserve logs, request IDs, and the failed image digest.
-2. If the schema remains backward compatible, set the prior immutable API and
-   PWA image digests in `.env` and run:
+2. Use only the current activation-installed package's lifecycle rollback
+   wrapper. It selects the one recorded previous release and authenticates the
+   installed package, prior activation, deployment evidence, and bounded reverse
+   result. Do not select old image digests manually or invoke Compose directly:
 
 ```sh
-docker compose --env-file .env -f compose.yaml up -d --no-build --no-deps control-api codex-pwa
+ACTIVE_PACKAGE_ROOT=/opt/sub2api-codex-control/releases/REPLACE_WITH_ACTIVE_RELEASE_ID
+OPERATOR_ENV=/secure/codex-control/operator.env
+
+sudo "$ACTIVE_PACKAGE_ROOT/bin/sub2api-control-rollback" \
+  --operator-env-file "$OPERATOR_ENV" \
+  --deployment-timeout-seconds 1800
 ```
 
-`--no-deps` is mandatory here: `control-api` depends on `control-migrate`, and
-rolling an application image back must never execute an older migration image
-against the newer database. Re-enable normal dependency startup only after the
-schema compatibility check and rollback rehearsal have passed.
+The rollback wrapper is package-internally constrained to `--pull never` and a
+bounded reverse plan. A same-schema application rollback preserves PostgreSQL
+and therefore preserves writes accepted after activation. A migration-bearing
+deployment cannot reach successful activation under the current formal gate; it
+fails and reverses while writers remain frozen. No rollback path runs an
+implicit Alembic downgrade.
+
+The current session generation stores lookup digests under the fixed
+`control-session-v2` purpose; the pre-AEAD image uses `control-session`. Neither
+generation falls back to the other's purpose. Consequently, a prior image
+cannot resolve sessions issued by the current image, and the current image
+cannot resolve legacy sessions. Do not add a compatibility fallback or rewrite
+session hashes during rollback. Browsers that crossed the image boundary must
+perform a fresh Sub2API exchange. A client that never reached the newer image
+can still hold a same-generation legacy cookie; when an incident requires a
+global logout rather than generation isolation, explicitly revoke all session
+rows or rotate the session secret.
 
 3. Restore the previous Nginx files only if routing changed, then run
    `nginx -t` before reload.
@@ -206,6 +282,11 @@ changes the derived internal metrics bearer token. Treat this as a user-visible
 logout plus mandatory Connector re-pairing, and update trusted scrapers at the
 same time. Device Ed25519 key files and Codex configuration or credentials
 remain untouched.
+
+Production configuration admission and the container entrypoint reject the
+published development, test, and `.env.example` placeholder values. Generate a
+fresh random file-backed value; never make a blocked placeholder pass by padding
+or changing its letter case.
 
 ## Connector rollback
 

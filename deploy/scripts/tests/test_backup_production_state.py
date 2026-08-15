@@ -43,7 +43,49 @@ if arguments[:1] == ["inspect"]:
         pid = 9999 if os.environ.get("DRIFT_IDENTITIES") == "1" and formatted_count >= 4 else 4321
         print(f"{container_id}|{image_id}|/{name}|true|{pid}")
     else:
-        print(json.dumps([{"Id": identities[name][0], "Image": identities[name][1], "Name": f"/{name}", "State": {"Running": True}, "Config": {"Env": ["SECRET=private"]}} for name in arguments[1:]]))
+        print(json.dumps([{
+            "Id": identities[name][0],
+            "Image": identities[name][1],
+            "Name": f"/{name}",
+            "State": {"Running": True},
+            "Config": {"Env": ["SECRET=private"]},
+            "NetworkSettings": {
+                "Networks": {
+                    "sub2api-network": {
+                        "NetworkID": "4" * 64,
+                        "EndpointID": identities[name][0],
+                    }
+                }
+            },
+        } for name in arguments[1:]]))
+    raise SystemExit(0)
+
+if arguments[:2] == ["network", "inspect"]:
+    requested = arguments[2:]
+    members = {
+        value[0]: {"Name": name, "EndpointID": value[0]}
+        for name, value in {
+            "sub2api": ("1" * 64, "sha256:" + "1" * 64),
+            "sub2api-postgres": ("2" * 64, "sha256:" + "2" * 64),
+            "sub2api-redis": ("3" * 64, "sha256:" + "3" * 64),
+        }.items()
+    }
+    values = []
+    for name in requested:
+        values.append({
+            "Name": name,
+            "Id": ("4" if name == "sub2api-network" else "5") * 64,
+            "Driver": "bridge",
+            "Scope": "local",
+            "Internal": False,
+            "Attachable": False,
+            "Ingress": False,
+            "EnableIPv6": False,
+            "IPAM": {"Driver": "default"},
+            "Options": {},
+            "Containers": members if name == "sub2api-network" else {},
+        })
+    print(json.dumps(values))
     raise SystemExit(0)
 
 if arguments[:2] == ["image", "inspect"]:
@@ -188,6 +230,21 @@ class ProductionStateBackupTests(unittest.TestCase):
         self.nginx_config = self.production / "nginx"
         self.nginx_config.mkdir()
         (self.nginx_config / "nginx.conf").write_text("events {}\n", encoding="ascii")
+        self.release_records = self.production / "release-records"
+        self.release_records.mkdir()
+        release_record = self.release_records / "deployment-fixture"
+        release_record.mkdir()
+        (release_record / "deployment.json").write_text(
+            '{"status":"deployed"}\n', encoding="ascii"
+        )
+        self.release_verification = self.production / "release-verification.json"
+        self.release_verification.write_text(
+            '{"status":"verified"}\n', encoding="ascii"
+        )
+        self.source_verification = self.production / "source-verification.json"
+        self.source_verification.write_text(
+            '{"status":"verified"}\n', encoding="ascii"
+        )
 
         self.certificate = self.production / "fullchain.pem"
         self.certificate.write_text("PUBLIC CERTIFICATE FIXTURE\n", encoding="ascii")
@@ -282,6 +339,18 @@ class ProductionStateBackupTests(unittest.TestCase):
             str(self.environment_file),
             "--nginx-config",
             str(self.nginx_config),
+            "--release-records",
+            str(self.release_records),
+            "--release-evidence",
+            str(self.release_verification),
+            "--release-evidence",
+            str(self.source_verification),
+            "--docker-network",
+            "sub2api-network",
+            "--docker-network",
+            "pwa-network",
+            "--expected-owner-uid",
+            str(os.geteuid()),
             "--proc-root",
             str(self.proc_root),
             "--docker",
@@ -327,6 +396,8 @@ class ProductionStateBackupTests(unittest.TestCase):
             "postgres-additional-databases.json",
             "docker-container-inspect.json",
             "docker-image-inspect.json",
+            "docker-network-inspect.json",
+            "docker-networks.json",
             "redis-logical.rdb",
             "redis-rdb-validation.txt",
             "redis-config-acl.txt",
@@ -346,6 +417,12 @@ class ProductionStateBackupTests(unittest.TestCase):
             "nginx-tls-files.json",
             "nginx-tls-private.tar.gz",
             "nginx-tls-private.contents.txt",
+            "release-evidence-inventory.json",
+            "release-evidence-release-verification.json",
+            "release-evidence-source-verification.json",
+            "release-records-inventory.json",
+            "release-records.tar.gz",
+            "release-records.contents.txt",
             "backup-record.json",
             "manifest.sha256",
             "READY.json",
@@ -404,6 +481,8 @@ class ProductionStateBackupTests(unittest.TestCase):
                 str(self.result_file),
                 "--max-age-seconds",
                 "300",
+                "--expected-owner-uid",
+                str(os.geteuid()),
                 "--current-identities",
                 str(snapshot / "docker-container-inspect.json"),
             ],
@@ -475,16 +554,39 @@ class ProductionStateBackupTests(unittest.TestCase):
     ) -> None:
         script = DEPLOY.read_text(encoding="utf-8")
         backup = script.index("stage=create-production-state-backup")
-        pull = script.index("stage=pull-release-images")
+        pull = script.index("stage=acquire-release-images")
         auth_probe = script.index("stage=verify-sub2api")
-        control_backup = script.index("stage=create-premigration-backup")
+        freeze = script.index("stage=freeze-control-writers")
+        stopped_before = script.index("stage=capture-writers-stopped-before-backup")
+        control_backup = script.index("stage=create-final-premigration-backup")
+        stopped_after = script.index("stage=capture-writers-stopped-after-backup")
+        freeze_receipt = script.index("stage=admit-writer-freeze-window")
+        reverse_plan = script.index("stage=admit-bounded-reverse-plan")
+        terminal_admission = script.index("stage=record-final-pre-migration-admission")
         migrate = script.index("stage=migrate")
-        start = script.index("stage=start-sidecars")
+        migration_exposure_gate = script.index(
+            "stage=reject-uncontrolled-migration-writer-exposure"
+        )
+        restore = script.index("stage=prove-isolated-restore")
+        isolation = script.index("stage=prove-live-datastore-isolation")
+        start = script.index('stage="start-$service"')
         self.assertLess(backup, pull)
+        self.assertLess(backup, restore)
+        self.assertLess(restore, isolation)
+        self.assertLess(isolation, pull)
         self.assertLess(backup, auth_probe)
-        self.assertLess(auth_probe, control_backup)
+        self.assertLess(auth_probe, freeze)
+        self.assertLess(freeze, stopped_before)
+        self.assertLess(stopped_before, control_backup)
+        self.assertLess(control_backup, stopped_after)
+        self.assertLess(stopped_after, freeze_receipt)
+        self.assertLess(freeze_receipt, reverse_plan)
+        self.assertLess(reverse_plan, terminal_admission)
+        self.assertLess(terminal_admission, migrate)
         self.assertLess(control_backup, migrate)
         self.assertLess(migrate, start)
+        self.assertLess(migrate, migration_exposure_gate)
+        self.assertLess(migration_exposure_gate, start)
         self.assertIn("run_production_state_backup", script[backup:pull])
         self.assertIn('python3 "$production_state_backup"', script)
         self.assertIn("--additional-postgres-database", script)

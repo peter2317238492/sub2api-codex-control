@@ -49,6 +49,13 @@ class SourceBundleTests(unittest.TestCase):
             path = self.repo / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="ascii")
+        for relative in sorted(source_bundle.REQUIRED_SOURCE_PATHS):
+            path = self.repo / relative
+            if path.exists():
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            content = "{}\n" if relative.endswith(".json") else "fixture\n"
+            path.write_text(content, encoding="ascii")
         for relative in (
             "scripts/check.py",
             "scripts/check-licenses.py",
@@ -72,6 +79,9 @@ class SourceBundleTests(unittest.TestCase):
         self._git("add", ".")
         self._git("commit", "-qm", "fixture")
         self.commit = self._git("rev-parse", "HEAD").stdout.strip()
+        self.expected_file_count = len(
+            self._git("ls-files").stdout.splitlines()
+        )
         self.first = self.root / "first"
         self.second = self.root / "second"
         self.first.mkdir(mode=0o700)
@@ -169,8 +179,43 @@ class SourceBundleTests(unittest.TestCase):
         self.assertTrue(source_bundle.REQUIRED_SOURCE_PATHS <= manifest_paths)
         self.assertIn("third_party/licenses/Example-LICENSE.txt", manifest_paths)
         verified = self._verify()
-        self.assertEqual(verified["file_count"], 9)
+        self.assertEqual(verified["file_count"], self.expected_file_count)
         self.assertEqual(first, second)
+
+    def test_formal_server_runtime_closure_is_explicit(self) -> None:
+        expected = {
+            "LICENSE",
+            "NOTICE",
+            "THIRD_PARTY_NOTICES.md",
+            "connector/internal/config/config.go",
+            "connector/internal/protocol/protocol.go",
+            "connector/packaging/verify-package-contents.sh",
+            "connector/release/connector-aggregate-verification-receipt.schema.json",
+            "connector/release/release-config.json",
+            "deploy/schemas/production-recovery-receipt.schema.json",
+            "deploy/scripts/deploy-production.sh",
+            "deploy/scripts/probe-sub2api-auth-contract.py",
+            "deploy/scripts/production-recovery.py",
+            "deploy/scripts/verify-sub2api-runtime.py",
+            "deploy/scripts/verify-sub2api-runtime.sh",
+            "docs/contracts/sub2api-auth.v0.1.176.json",
+            "packages/appserver-schema/generated/json-schema/codex_app_server_protocol.v2.schemas.json",
+            "packages/control-protocol/fixtures/json-budget-vectors.json",
+            "packages/control-protocol/fixtures/rpc-policy.json",
+            "packages/control-protocol/fixtures/wire-envelopes.json",
+            "packages/control-protocol/schema/control-envelope.schema.json",
+            "scripts/build-vulnerability-manifest.py",
+            "scripts/run-vulnerability-scan.py",
+            "scripts/verify-formal-vulnerability-release.sh",
+            "scripts/vulnerability_release_roots.py",
+            "scripts/vulnerability_scan_evidence.py",
+            "security/vulnerability-policy.json",
+            "tests/e2e/smoke.py",
+            "third_party/licenses/Trivy-LICENSE.txt",
+            "versions.lock.json",
+        }
+
+        self.assertTrue(expected <= source_bundle.REQUIRED_SERVER_SOURCE_PATHS)
 
     def test_ustar_bytes_match_the_cross_runtime_fixture(self) -> None:
         content = b"portable source fixture\n"

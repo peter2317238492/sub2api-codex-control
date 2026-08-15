@@ -14,6 +14,10 @@ auth_probe_user_id=${SUB2API_AUTH_EVIDENCE_EXPECTED_USER_ID:-}
 auth_probe_base_url=${SUB2API_AUTH_EVIDENCE_BASE_URL:-}
 expected_network=${SUB2API_EXPECTED_NETWORK:-${SUB2API_NETWORK_NAME:-sub2api-deploy_sub2api-network}}
 expected_alias=${SUB2API_EXPECTED_NETWORK_ALIAS:-sub2api}
+expected_bind_source=${SUB2API_EXPECTED_DATA_BIND_SOURCE:-}
+expected_bind_uid=${SUB2API_EXPECTED_DATA_BIND_UID:-}
+expected_bind_gid=${SUB2API_EXPECTED_DATA_BIND_GID:-}
+expected_bind_mode=${SUB2API_EXPECTED_DATA_BIND_MODE:-}
 
 fail() {
   echo "verify-sub2api-runtime: $*" >&2
@@ -43,6 +47,20 @@ if [ -n "$auth_evidence_file" ]; then
 fi
 [ -n "$expected_network" ] || fail "SUB2API_EXPECTED_NETWORK is required"
 [ -n "$expected_alias" ] || fail "SUB2API_EXPECTED_NETWORK_ALIAS is required"
+if [ -n "$expected_bind_source$expected_bind_uid$expected_bind_gid$expected_bind_mode" ]; then
+  [ -n "$expected_bind_source" ] \
+    || fail "SUB2API_EXPECTED_DATA_BIND_SOURCE is required with bind policy"
+  case "$expected_bind_uid" in
+    ''|*[!0-9]*|0) fail "SUB2API_EXPECTED_DATA_BIND_UID must be positive" ;;
+  esac
+  case "$expected_bind_gid" in
+    ''|*[!0-9]*|0) fail "SUB2API_EXPECTED_DATA_BIND_GID must be positive" ;;
+  esac
+  case "$expected_bind_mode" in
+    0700|0750|0755) ;;
+    *) fail "SUB2API_EXPECTED_DATA_BIND_MODE must be 0700, 0750, or 0755" ;;
+  esac
+fi
 
 umask 077
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/verify-sub2api-runtime.XXXXXX")
@@ -145,6 +163,13 @@ set -- \
   --expected-alias "$expected_alias"
 if [ -n "$contract_file" ]; then
   set -- "$@" --contract-file "$contract_file"
+fi
+if [ -n "$expected_bind_source" ]; then
+  set -- "$@" \
+    --expected-bind-source "$expected_bind_source" \
+    --expected-bind-uid "$expected_bind_uid" \
+    --expected-bind-gid "$expected_bind_gid" \
+    --expected-bind-mode "$expected_bind_mode"
 fi
 if [ -n "$auth_evidence_file" ]; then
   set -- "$@" \
