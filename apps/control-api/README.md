@@ -10,7 +10,16 @@ stores a raw Sub2API access token.
 - `POST /v1/session/exchange` calls the internal Sub2API
   `/api/v1/auth/me` endpoint with `Authorization: Bearer <access_token>`.
 - Only a keyed SHA-256 digest of the opaque control token is stored. The control
-  cookie is `HttpOnly`, `SameSite=Strict`, `Path=/`, and secure in production.
+  cookie is an AEAD-sealed, size-bounded envelope carrying the session UUID and
+  upstream access token; it is `HttpOnly`, `SameSite=Strict`, `Path=/`, and
+  secure in production. PostgreSQL and Redis never store the upstream token.
+- Every authorization-bearing browser mutation except logout rechecks
+  `/auth/me` immediately with the original Sub2API session-binding
+  IP/User-Agent. Read-only HTTP and browser WebSocket checks may reuse a
+  timestamped, keyed success marker for at most 15 seconds. Disabled
+  users, revoked tokens, identity drift, and token-version drift durably revoke
+  the Control session; upstream uncertainty returns `503`/`502` or closes the
+  socket with retryable `1013` without granting access.
 - Browser mutations require an exact configured `Origin` plus a session-bound
   `codex_csrf` cookie and `X-CSRF-Token` header. Validation responses omit input
   values so bearer tokens are not reflected.
@@ -75,7 +84,7 @@ attribute. Keep TLS termination and API routing on the same origin as the PWA.
 | Method | Path | Authentication |
 | --- | --- | --- |
 | `GET` | `/v1/health/live` | none |
-| `GET` | `/v1/health/ready` | none; checks PostgreSQL, Redis, and frozen Sub2API marker |
+| `GET` | `/v1/health/ready` | none; checks PostgreSQL, Redis, frozen Sub2API marker, and startup-admitted Connector release metadata |
 | `GET` | `/internal/metrics` | direct loopback/internal access + metrics Bearer token; public Nginx path denied |
 | `POST` | `/v1/session/exchange` | allowed Origin + Sub2API access token body; rate-limited |
 | `GET` | `/v1/session` | control cookie |
@@ -143,7 +152,7 @@ The connection-token proof signs the exact UTF-8 string
 the nonce is an unpadded base64url 24-byte random value, and the signature is an
 unpadded base64url Ed25519 signature. A proof nonce is accepted once.
 
-Production requires `CONTROL_SUB2API_CONTRACT_MARKER=0.1.175/93c32fa`. This
+Production requires `CONTROL_SUB2API_CONTRACT_MARKER=0.1.176/e803e38`. This
 marker is supplied only after an external deployment check verifies the pinned
 Sub2API binary contract; the Control API does not trust an unauthenticated
 remote version guess.

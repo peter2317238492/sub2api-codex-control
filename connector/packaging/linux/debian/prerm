@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+if [ "${1:-}" = remove ] || [ "${1:-}" = deconfigure ]; then
+  /usr/libexec/sub2api-codex-connector/package-lifecycle uninstall
+fi

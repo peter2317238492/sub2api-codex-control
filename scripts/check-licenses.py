@@ -15,20 +15,22 @@ EXPECTED_COMPONENT_IDS = {
     "alembic",
     "codex",
     "coder-websocket",
+    "crane",
     "go",
     "jsonschema",
     "lucide",
     "pinia",
     "regexp2",
     "sub2api",
+    "trivy",
     "vue",
     "x-text",
 }
 EXPECTED_MANIFEST_SHA256 = (
-    "19907c3925b3cfeccbf83e341aa7366ec3958531c0d505de31a578e3c4dd48d3"
+    "765add7d92d44c383505d0040cd324707aa4bcfce4b04102df87cde1dbf70c4d"
 )
 EXPECTED_THIRD_PARTY_NOTICES_SHA256 = (
-    "cb41479837c0d05efafceb24840e46bea727a3be359d1857ebce9ef6ee1f3a23"
+    "3637e1f81d8b0b4528f70ee02a4f6704ed36dfc574723a73074ba1cd894a960e"
 )
 EXPECTED_GO_MODULE = "github.com/peter2317238492/sub2api-codex-control/connector"
 EXPECTED_REPOSITORY = "https://github.com/peter2317238492/sub2api-codex-control"
@@ -41,13 +43,13 @@ PACKAGE_JSON_PATHS = (
 )
 EXPECTED_WORKFLOW_SHA256 = {
     Path(".github/workflows/ci.yml"): (
-        "140bc0b38f27f664404ed190706e77b3b3a5e001d4342560c598d826e7f37e0d"
+        "22bf387f0fddbf9710e76fd8fae31a9b6797e6c1ae2d7dfd3bc109572ad4d4ce"
     ),
     Path(".github/workflows/connector-release.yml"): (
-        "bee948d3bf531e40f934e517090d83f96bbf6a3810765cc69d2aac787039acae"
+        "94ee42aaee8081d88d8bcb8231d199b56b8f3f993a6ee185ad62c69d9cc7e804"
     ),
     Path(".github/workflows/control-images-release.yml"): (
-        "666ed7aec520acd55e926268a8644a71cf162cdfce7a7d0e5b5b836430046508"
+        "de3177552af7460a200c050a598ad04a8df5c0c5be73f974315441b86291118c"
     ),
 }
 SOURCE_ONLY_RELEASE_WORKFLOWS = {
@@ -62,6 +64,8 @@ NOTICE_RELATIONSHIPS = {
     "pinia": ("runtime-dependency", "PWA runtime dependency"),
     "lucide": ("runtime-dependency", "PWA icon dependency"),
     "go": ("build-runtime", "Connector build/runtime dependency"),
+    "crane": ("release-build-tool", "Pinned OCI acquisition tool"),
+    "trivy": ("security-build-tool", "Pinned vulnerability scanner"),
     "coder-websocket": ("runtime-dependency", "Connector dependency"),
     "jsonschema": ("runtime-dependency", "Connector dependency"),
     "regexp2": ("test-only-transitive", "Test-only transitive Connector dependency"),
@@ -139,6 +143,11 @@ def check_digest_file(
             errors.append(f"{relative} must contain exactly one appended final newline")
             return
         normalized_source = content[:-1]
+    elif normalization == "prepend-leading-newline-remove-final-newline":
+        if not content.endswith(b"\n") or content.endswith(b"\n\n"):
+            errors.append(f"{relative} must contain exactly one final newline")
+            return
+        normalized_source = b"\n" + content[:-1]
     else:
         errors.append(f"unsupported normalization for {relative}: {normalization!r}")
         return
@@ -191,6 +200,19 @@ def check_version_evidence(
             lock,
         )
         observed = match.group(1) if match else None
+    elif kind == "go-toolchain-version":
+        observed = load_json(path, errors)
+        if observed is None:
+            return
+        for key in evidence.get("keys", []):
+            if not isinstance(observed, dict) or key not in observed:
+                errors.append(
+                    f"component {component_id} evidence key is missing: {key!r}"
+                )
+                return
+            observed = observed[key]
+        match = re.fullmatch(r"go([0-9]+\.[0-9]+\.[0-9]+)", str(observed))
+        observed = match.group(1) if match else None
     elif kind == "go-version":
         match = re.search(r"(?m)^go ([0-9.]+)$", path.read_text(encoding="utf-8"))
         observed = match.group(1) if match else None
@@ -210,6 +232,31 @@ def check_version_evidence(
         errors.append(
             f"component {component_id} version evidence mismatch: expected {version}, got {observed!r}"
         )
+
+    if component_id != "go":
+        return
+    baseline = component.get("language_baseline")
+    expected_baseline = {
+        "version": "1.24.0",
+        "version_evidence": {
+            "kind": "go-version",
+            "path": "connector/go.mod",
+        },
+    }
+    if baseline != expected_baseline:
+        errors.append(
+            "Go language baseline must remain explicitly bound to connector/go.mod"
+        )
+        return
+    check_version_evidence(
+        root,
+        {
+            "id": "go-language-baseline",
+            "version": baseline["version"],
+            "version_evidence": baseline["version_evidence"],
+        },
+        errors,
+    )
 
 
 def check_package_metadata(root: Path, errors: list[str]) -> None:
@@ -552,8 +599,8 @@ def validate(root: Path) -> list[str]:
     ):
         errors.append("Sub2API must be identified as LGPL-3.0-or-later")
     elif sub2api.get("license_declaration") != {
-        "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/93c32fa1a2450351561abc46156d2e28cb5f74ca/README.md",
-        "source_sha256": "9763f66acba04a47692219bc8fa5a9da1d6e487cdab647cd6a2c58c09b574b00",
+        "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/e803e3851c0a7e222cfadeafad7b8636ab959d11/README.md",
+        "source_sha256": "1c29e6c1e85681a8945ac1ade191e119b3c937e973f0ee367c0bed51be69ecf5",
         "text": "GNU Lesser General Public License v3.0 (or later)",
     }:
         errors.append("Sub2API or-later declaration evidence is missing or changed")

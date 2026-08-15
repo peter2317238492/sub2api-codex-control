@@ -47,11 +47,11 @@
     {
       "id": "sub2api",
       "name": "Sub2API",
-      "version": "0.1.175",
+      "version": "0.1.176",
       "relationship": "compatibility-reference",
-      "package": "pkg:github/Wei-Shaw/sub2api@v0.1.175",
+      "package": "pkg:github/Wei-Shaw/sub2api@v0.1.176",
       "repository": "https://github.com/Wei-Shaw/sub2api",
-      "source_ref": "v0.1.175",
+      "source_ref": "v0.1.176",
       "version_evidence": {
         "kind": "json-pointer",
         "path": "versions.lock.json",
@@ -62,15 +62,15 @@
       },
       "license_expression": "LGPL-3.0-or-later",
       "license_declaration": {
-        "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/93c32fa1a2450351561abc46156d2e28cb5f74ca/README.md",
-        "source_sha256": "9763f66acba04a47692219bc8fa5a9da1d6e487cdab647cd6a2c58c09b574b00",
+        "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/e803e3851c0a7e222cfadeafad7b8636ab959d11/README.md",
+        "source_sha256": "1c29e6c1e85681a8945ac1ade191e119b3c937e973f0ee367c0bed51be69ecf5",
         "text": "GNU Lesser General Public License v3.0 (or later)"
       },
       "license_files": [
         {
           "kind": "license",
           "path": "third_party/licenses/Sub2API-LICENSE.txt",
-          "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/v0.1.175/LICENSE",
+          "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/v0.1.176/LICENSE",
           "source_sha256": "a5681bf9b05db14d86776930017c647ad9e6e56ff6bbcfdf21e5848288dfaf1b",
           "file_sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
           "normalization": "append-final-newline"
@@ -183,21 +183,31 @@
     {
       "id": "go",
       "name": "Go standard library",
-      "version": "1.24.0",
+      "version": "1.26.5",
       "relationship": "build-runtime",
-      "package": "pkg:generic/go@1.24.0",
+      "package": "pkg:generic/go@1.26.5",
       "repository": "https://github.com/golang/go",
-      "source_ref": "go1.24.0",
+      "source_ref": "go1.26.5",
       "version_evidence": {
-        "kind": "go-version",
-        "path": "connector/go.mod"
+        "kind": "go-toolchain-version",
+        "path": "connector/release/release-config.json",
+        "keys": [
+          "go_version"
+        ]
+      },
+      "language_baseline": {
+        "version": "1.24.0",
+        "version_evidence": {
+          "kind": "go-version",
+          "path": "connector/go.mod"
+        }
       },
       "license_expression": "BSD-3-Clause",
       "license_files": [
         {
           "kind": "license",
           "path": "third_party/licenses/Go-LICENSE.txt",
-          "source_url": "https://raw.githubusercontent.com/golang/go/go1.24.0/LICENSE",
+          "source_url": "https://raw.githubusercontent.com/golang/go/go1.26.5/LICENSE",
           "source_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
           "file_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
           "normalization": "none"
@@ -205,9 +215,64 @@
         {
           "kind": "patent-grant",
           "path": "third_party/licenses/Go-PATENTS.txt",
-          "source_url": "https://raw.githubusercontent.com/golang/go/go1.24.0/PATENTS",
+          "source_url": "https://raw.githubusercontent.com/golang/go/go1.26.5/PATENTS",
           "source_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc",
           "file_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc",
+          "normalization": "none"
+        }
+      ]
+    },
+    {
+      "id": "crane",
+      "name": "Crane",
+      "version": "0.21.7",
+      "relationship": "release-build-tool",
+      "package": "pkg:github/google/go-containerregistry@v0.21.7",
+      "repository": "https://github.com/google/go-containerregistry",
+      "source_ref": "v0.21.7",
+      "version_evidence": {
+        "kind": "json-pointer",
+        "path": "deploy/server-package/toolchain.json",
+        "keys": [
+          "version"
+        ]
+      },
+      "license_expression": "Apache-2.0",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/Trivy-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/google/go-containerregistry/v0.21.7/LICENSE",
+          "source_sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+          "file_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "normalization": "prepend-leading-newline-remove-final-newline"
+        }
+      ]
+    },
+    {
+      "id": "trivy",
+      "name": "Trivy",
+      "version": "0.74.0",
+      "relationship": "security-build-tool",
+      "package": "pkg:github/aquasecurity/trivy@v0.74.0",
+      "repository": "https://github.com/aquasecurity/trivy",
+      "source_ref": "v0.74.0",
+      "version_evidence": {
+        "kind": "json-pointer",
+        "path": "security/vulnerability-policy.json",
+        "keys": [
+          "scanner",
+          "version"
+        ]
+      },
+      "license_expression": "Apache-2.0",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/Trivy-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/aquasecurity/trivy/v0.74.0/LICENSE",
+          "source_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "file_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
           "normalization": "none"
         }
       ]

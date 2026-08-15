@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api-codex.invalid/schemas/external-operator-delivery-receipt-v1.json",
+  "title": "External operator alert delivery receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "kind",
+    "release",
+    "vcs_ref",
+    "deployment_id",
+    "receiver_id",
+    "controlled_nonce",
+    "fingerprint",
+    "firing_started_at",
+    "firing_received_at",
+    "resolved_at",
+    "resolved_received_at",
+    "operator_acknowledged_at",
+    "operator_receipt_id",
+    "verified_at",
+    "evidence"
+  ],
+  "properties": {
+    "format_version": { "const": 1 },
+    "kind": { "const": "codex-control-external-operator-delivery" },
+    "release": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$" },
+    "vcs_ref": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "deployment_id": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z._:-]{2,127}$" },
+    "receiver_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{2,63}$" },
+    "controlled_nonce": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "fingerprint": { "type": "string", "pattern": "^[0-9a-f]{1,128}$" },
+    "firing_started_at": { "$ref": "#/$defs/timestamp" },
+    "firing_received_at": { "$ref": "#/$defs/timestamp" },
+    "resolved_at": { "$ref": "#/$defs/timestamp" },
+    "resolved_received_at": { "$ref": "#/$defs/timestamp" },
+    "operator_acknowledged_at": { "$ref": "#/$defs/timestamp" },
+    "operator_receipt_id": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z._:-]{2,127}$" },
+    "verified_at": { "$ref": "#/$defs/timestamp" },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["firing", "resolved", "operator_ack"],
+      "properties": {
+        "firing": { "$ref": "#/$defs/descriptor" },
+        "resolved": { "$ref": "#/$defs/descriptor" },
+        "operator_ack": { "$ref": "#/$defs/descriptor" }
+      }
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["basename", "sha256"],
+      "properties": {
+        "basename": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

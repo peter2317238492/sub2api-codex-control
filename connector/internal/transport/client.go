@@ -84,6 +84,8 @@ func (c *Client) EmitForEpoch(ctx context.Context, epoch, envelopeType string, p
 	if len(epoch) < 16 {
 		return errors.New("outbound envelope epoch is invalid")
 	}
+	canaryLocked := productionCanaryLockEmit(envelopeType)
+	defer productionCanaryUnlockEmit(canaryLocked)
 	c.emitMu.Lock()
 	defer c.emitMu.Unlock()
 	payloadRaw, err := protocol.MarshalPayload(payload)
@@ -118,6 +120,7 @@ func (c *Client) EmitForEpoch(ctx context.Context, epoch, envelopeType string, p
 	if err != nil {
 		return err
 	}
+	productionCanaryAfterSpool(envelopeType)
 	if c.options.OnSpoolChanged != nil {
 		c.options.OnSpoolChanged()
 	}
@@ -258,6 +261,8 @@ func classifyEstablishedConnectionFailure(err error, connectedFor time.Duration,
 func (c *Client) writeLoop(ctx context.Context, connection *websocket.Conn, backlogCutoff uint64, heartbeatInterval time.Duration) error {
 	var lastSent uint64
 	flush := func() error {
+		productionCanaryLockFlush()
+		defer productionCanaryUnlockFlush()
 		records, err := c.options.Spool.Pending()
 		if err != nil {
 			return err

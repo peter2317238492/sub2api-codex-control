@@ -17,6 +17,7 @@ async def test_liveness_and_readiness(harness: Harness) -> None:
             "database_migrations": "ok",
             "redis": "ok",
             "sub2api_contract": "ok",
+            "connector_release": "ok",
         },
     }
 

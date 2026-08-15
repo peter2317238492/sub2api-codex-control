@@ -1,23 +1,15 @@
 # Operations runbooks
 
-The first public repository version is source-only. Production installation is
-blocked until one exact source revision has a complete signed Control image and
-Connector evidence set. These runbooks define the gates that a future release
-must satisfy; they do not turn a local build into an admitted release.
+- [Deployment](deployment.md): datastore isolation, secrets, Compose, Nginx, and acceptance checks.
+- [Unsigned first-production bootstrap](unsigned-bootstrap.md): one-time, backup-first startup from exact local image IDs before the first signed release.
+- [Backups and rollback](backups-and-rollback.md): backup cadence, restore rehearsal, release rollback, and secret rotation.
+- [Sub2API immutable migration](sub2api-immutable-migration.md): backup-first, same-project Compose replacement, exact bind admission, receipts, and snapshot rollback.
+- [Observability](observability.md): health signals, metrics, structured logs, retention, and alerts.
+- [Connector release policy](connector-release-policy.md): reproducible artifacts, signing, staged updates, and rollback.
+- [Version matrix](version-matrix.md): pinned contracts and production admission gates.
 
-- [Deployment](deployment.md): topology, immutable release admission,
-  datastore isolation, Nginx, firewall, and acceptance.
-- [Backups and rollback](backups-and-rollback.md): non-duplicative recovery
-  checkpoints, restore rehearsal, rollback, and secret rotation.
-- [Observability](observability.md): health signals, metrics, redacted logs,
-  retention, and alerts.
-- [Connector release policy](connector-release-policy.md): reproducible source
-  builds, platform signing, provenance, staged updates, and rollback.
-- [Version matrix](version-matrix.md): pinned contracts and release blockers.
-- [OCI archive portability](oci-archive-portability.md): offline image transport
-  identity and daemon mapping rules.
-
-A healthy container or a ready endpoint is never sufficient acceptance. A
-release also needs authenticated same-origin HTTP, browser WSS, device WSS, a
-real Connector against the pinned Codex version, approval, reconnect,
-revocation, logout, and recovery evidence.
+Treat the version matrix and a successful authenticated smoke test as release
+artifacts. A green container healthcheck alone is not production acceptance.
+For an unsigned bootstrap that started with unauthenticated smoke, use the
+append-only closure procedure in [unsigned-bootstrap.md](unsigned-bootstrap.md)
+instead of editing the original bootstrap record.

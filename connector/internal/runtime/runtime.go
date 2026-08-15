@@ -55,6 +55,11 @@ type sessionExit struct {
 }
 
 func Run(ctx context.Context, options Options) (resultErr error) {
+	disableProductionCanaryHook, err := transport.EnableProductionCanaryCrashHook(options.Config.StateDir)
+	if err != nil {
+		return err
+	}
+	defer disableProductionCanaryHook()
 	guard, err := policy.NewGuard(options.Config.WorkspaceRoots, options.Config.SandboxCap)
 	if err != nil {
 		return err

@@ -16,6 +16,7 @@ from .approvals import ApprovalService
 from .command_budget import CommandPayloadTooLarge
 from .commands import CommandService
 from .config import Settings, get_settings
+from .connector_release import admitted_connector_release, connector_release_metadata_sha256
 from .control_routes import router as control_router
 from .db import Database
 from .device_auth import DeviceTokenService
@@ -26,7 +27,7 @@ from .operational_metrics import OperationalMetrics, elapsed_seconds
 from .realtime import RealtimeService
 from .retention import RetentionService
 from .routes import router
-from .security import TokenDigester
+from .security import SessionCredentialProtector, TokenDigester
 from .services import PairingService, RateLimiter, SessionService
 from .storage import KeyValueStore, create_key_value_store
 from .sub2api import HTTPSub2APIClient, Sub2APIIdentityVerifier
@@ -45,9 +46,23 @@ def create_app(
     sub2api_client: Sub2APIIdentityVerifier | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
+    connector_release_required = settings.environment == "production"
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        connector_release_raw = settings.connector_release_metadata_json
+        connector_release_admission = admitted_connector_release(settings)
+        connector_release_raw_sha256 = connector_release_metadata_sha256(connector_release_raw)
+        if connector_release_raw_sha256 is None or (
+            connector_release_admission is None
+            and (connector_release_required or connector_release_raw.strip())
+        ):
+            raise RuntimeError(
+                "startup requires empty development metadata or an admitted Connector release"
+            )
+        app.state.connector_release_required = connector_release_required
+        app.state.connector_release_raw_sha256_admission = connector_release_raw_sha256
+        app.state.connector_release_admission = connector_release_admission
         owns_database = database is None
         owns_store = store is None
         owns_sub2api = sub2api_client is None
@@ -58,8 +73,19 @@ def create_app(
             route.path for route in app.routes if isinstance(getattr(route, "path", None), str)
         }
         app.state.operational_metrics = OperationalMetrics(route_templates)
-        digester = TokenDigester(settings.session_hmac_secret.get_secret_value())
-        app.state.session_service = SessionService(settings, app.state.store, digester)
+        session_secret = settings.session_hmac_secret.get_secret_value()
+        digester = TokenDigester(session_secret)
+        credential_protector = SessionCredentialProtector(
+            session_secret,
+            random_handle_bytes=settings.session_token_bytes,
+        )
+        app.state.session_service = SessionService(
+            settings,
+            app.state.store,
+            digester,
+            app.state.sub2api,
+            credential_protector,
+        )
         app.state.events = EventService(settings, app.state.store)
         app.state.pairing_service = PairingService(settings, digester, app.state.events)
         app.state.metrics = MetricsService(
@@ -102,6 +128,7 @@ def create_app(
         finally:
             sweeper.cancel()
             await asyncio.gather(sweeper, return_exceptions=True)
+            await app.state.session_service.close()
             if owns_sub2api:
                 await app.state.sub2api.close()
             if owns_store:

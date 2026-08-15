@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api-codex.invalid/schemas/connector-platform-verification-receipt-v1.json",
+  "title": "Sub2API Codex Connector public platform verification receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format_version",
+    "kind",
+    "platform",
+    "release",
+    "evidence",
+    "trust",
+    "verification_run",
+    "verified_targets",
+    "verified_packages",
+    "core_inventory"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://sub2api-codex.invalid/schemas/connector-platform-verification-receipt-v1.json"
+    },
+    "format_version": { "const": 1 },
+    "kind": { "const": "sub2api-codex-connector-platform-verification" },
+    "platform": { "enum": ["linux", "darwin"] },
+    "release": { "$ref": "#/$defs/release" },
+    "evidence": { "$ref": "#/$defs/evidence" },
+    "trust": { "$ref": "#/$defs/trust" },
+    "verification_run": { "$ref": "#/$defs/verificationRun" },
+    "verified_targets": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": { "enum": ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"] }
+    },
+    "verified_packages": { "type": "array", "items": { "$ref": "#/$defs/package" } },
+    "core_inventory": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/inventory" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "platform": { "const": "linux" } } },
+      "then": {
+        "properties": {
+          "verified_targets": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [
+              { "const": "linux-amd64" },
+              { "const": "linux-arm64" }
+            ],
+            "items": false
+          },
+          "verified_packages": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "prefixItems": [
+              { "$ref": "#/$defs/linuxAmd64Deb" },
+              { "$ref": "#/$defs/linuxAmd64Rpm" },
+              { "$ref": "#/$defs/linuxArm64Deb" },
+              { "$ref": "#/$defs/linuxArm64Rpm" }
+            ],
+            "items": false
+          },
+          "trust": { "$ref": "#/$defs/linuxTrust" }
+        }
+      },
+      "else": {
+        "properties": {
+          "verified_targets": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [
+              { "const": "darwin-amd64" },
+              { "const": "darwin-arm64" }
+            ],
+            "items": false
+          },
+          "verified_packages": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [
+              { "$ref": "#/$defs/darwinAmd64Pkg" },
+              { "$ref": "#/$defs/darwinArm64Pkg" }
+            ],
+            "items": false
+          },
+          "trust": { "$ref": "#/$defs/darwinTrust" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "filename": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "semver": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "fileEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size", "signature_bundle"],
+      "properties": {
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "signature_bundle": { "$ref": "#/$defs/filename" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_repository",
+        "source_commit",
+        "version",
+        "tag",
+        "codex_version",
+        "schema_digest",
+        "control_protocol_version"
+      ],
+      "properties": {
+        "source_repository": { "const": "https://github.com/peter2317238492/sub2api-codex-control" },
+        "source_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "version": { "$ref": "#/$defs/semver" },
+        "tag": { "type": "string", "pattern": "^connector-v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "codex_version": { "$ref": "#/$defs/semver" },
+        "schema_digest": { "$ref": "#/$defs/sha256" },
+        "control_protocol_version": { "const": 1 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest", "release_metadata", "checksums"],
+      "properties": {
+        "manifest": { "$ref": "#/$defs/fileEvidence" },
+        "release_metadata": { "$ref": "#/$defs/fileEvidence" },
+        "checksums": { "$ref": "#/$defs/fileEvidence" }
+      }
+    },
+    "sigstore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "certificate_oidc_issuer",
+        "certificate_identity",
+        "certificate_github_workflow_sha",
+        "certificate_github_workflow_trigger"
+      ],
+      "properties": {
+        "certificate_oidc_issuer": { "const": "https://token.actions.githubusercontent.com" },
+        "certificate_identity": { "type": "string", "pattern": "^https://github\\.com/peter2317238492/sub2api-codex-control/\\.github/workflows/connector-release\\.yml@refs/tags/connector-v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "certificate_github_workflow_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "certificate_github_workflow_trigger": { "const": "push" }
+      }
+    },
+    "apple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["team_identifier", "application_identity", "installer_identity"],
+      "properties": {
+        "team_identifier": { "type": "string", "pattern": "^[A-Z0-9]{10}$" },
+        "application_identity": { "type": "string", "pattern": "^Developer ID Application: .+ \\([A-Z0-9]{10}\\)$" },
+        "installer_identity": { "type": "string", "pattern": "^Developer ID Installer: .+ \\([A-Z0-9]{10}\\)$" }
+      }
+    },
+    "rpm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signing_fingerprint"],
+      "properties": {
+        "signing_fingerprint": { "type": "string", "pattern": "^[A-F0-9]{40,64}$" }
+      }
+    },
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sigstore", "apple", "rpm"],
+      "properties": {
+        "sigstore": { "$ref": "#/$defs/sigstore" },
+        "apple": { "oneOf": [{ "$ref": "#/$defs/apple" }, { "type": "null" }] },
+        "rpm": { "oneOf": [{ "$ref": "#/$defs/rpm" }, { "type": "null" }] }
+      }
+    },
+    "linuxTrust": {
+      "allOf": [
+        { "$ref": "#/$defs/trust" },
+        { "type": "object", "properties": { "apple": { "type": "null" }, "rpm": { "$ref": "#/$defs/rpm" } } }
+      ]
+    },
+    "darwinTrust": {
+      "allOf": [
+        { "$ref": "#/$defs/trust" },
+        { "type": "object", "properties": { "apple": { "$ref": "#/$defs/apple" }, "rpm": { "type": "null" } } }
+      ]
+    },
+    "verificationRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "run_id", "run_attempt"],
+      "properties": {
+        "repository": { "const": "peter2317238492/sub2api-codex-control" },
+        "run_id": { "type": "integer", "minimum": 1 },
+        "run_attempt": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_id", "package_format", "filename", "sha256", "size"],
+      "properties": {
+        "target_id": { "enum": ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"] },
+        "package_format": { "enum": ["deb", "rpm", "pkg"] },
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "linuxAmd64Deb": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-amd64" }, "package_format": { "const": "deb" } } }] },
+    "linuxAmd64Rpm": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-amd64" }, "package_format": { "const": "rpm" } } }] },
+    "linuxArm64Deb": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-arm64" }, "package_format": { "const": "deb" } } }] },
+    "linuxArm64Rpm": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-arm64" }, "package_format": { "const": "rpm" } } }] },
+    "darwinAmd64Pkg": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "darwin-amd64" }, "package_format": { "const": "pkg" } } }] },
+    "darwinArm64Pkg": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "darwin-arm64" }, "package_format": { "const": "pkg" } } }] },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size"],
+      "properties": {
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

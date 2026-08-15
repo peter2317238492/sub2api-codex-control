@@ -1,5 +1,5 @@
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import PairDeviceDialog from "@/components/PairDeviceDialog.vue";
 
@@ -30,5 +30,50 @@ describe("PairDeviceDialog", () => {
     expect(wrapper.get('button[type="submit"]').attributes("disabled")).toBeDefined();
     await wrapper.get("form").trigger("submit");
     expect(wrapper.emitted("claim")).toBeUndefined();
+  });
+
+  it("keeps a claimed pairing visible and supplies the separate service start command", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const wrapper = mount(PairDeviceDialog, {
+      props: {
+        open: true,
+        loading: false,
+        error: null,
+        waiting: true,
+        deviceDetected: false,
+      },
+    });
+
+    expect(wrapper.get("[role='status']").text()).toContain("配对码已认领");
+    expect(wrapper.find("input").exists()).toBe(false);
+    await wrapper.get(".pair-refresh-button").trigger("click");
+    expect(wrapper.emitted("refresh")).toHaveLength(1);
+
+    await wrapper.setProps({ deviceDetected: true });
+    expect(wrapper.get("[role='status']").text()).toContain("设备已完成配对");
+    expect(wrapper.get("[role='status']").text()).toContain("启动后台服务");
+    expect(wrapper.get(".pair-start-command code").text()).toBe("sub2api-codex-connector-ctl start");
+    expect(wrapper.find(".pair-restart-button").exists()).toBe(false);
+
+    await wrapper.get(".pair-start-command button").trigger("click");
+    expect(writeText).toHaveBeenCalledWith("sub2api-codex-connector-ctl start");
+    await wrapper.get("footer .secondary-button").trigger("click");
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it("offers the recovery action selected for a friendly pairing error", async () => {
+    const wrapper = mount(PairDeviceDialog, {
+      props: {
+        open: true,
+        loading: false,
+        error: "设备数量已达上限。请先撤销不再使用的设备，然后重试。",
+        recovery: "manage_devices",
+      },
+    });
+
+    expect(wrapper.text()).toContain("设备数量已达上限");
+    await wrapper.get(".pair-manage-button").trigger("click");
+    expect(wrapper.emitted("manage")).toHaveLength(1);
   });
 });

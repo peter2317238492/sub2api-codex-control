@@ -19,8 +19,14 @@ an empty Go build ID, reproducible timestamps, and a fresh module/build cache in
 protected CI. Every target is
 built twice and compared before native signing. Generate an SPDX 2.3 JSON SBOM
 and in-toto Statement v1 / SLSA provenance v1 attestation for every final
-artifact. A missing `go.sum`, unreviewed dependency change, dirty tree, schema
-digest change, or differing candidate digest blocks release.
+artifact. Both executable and native-package SBOMs derive the Go standard
+library version from the signed `build.go_version` value (and therefore the
+release configuration), declare that component as `BSD-3-Clause`, and bind it
+to the Connector with `DEPENDS_ON`. Native-package roots use `NOASSERTION` for
+their aggregate license because they contain separately licensed Connector,
+standard-library, and module components; `CONTAINS` relationships preserve that
+component boundary. A missing `go.sum`, unreviewed dependency change, dirty
+tree, schema digest change, or differing candidate digest blocks release.
 
 ## Artifact signing
 

@@ -44,6 +44,64 @@ function response(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
 
+function releaseAsset(os: "linux" | "darwin", arch: "amd64" | "arm64", packageFormat: "deb" | "rpm" | "pkg") {
+  const filename = `sub2api-codex-connector_0.1.0_${os}_${arch}.${packageFormat}`;
+  return {
+    os,
+    arch,
+    package_format: packageFormat,
+    filename,
+    download_url: `https://github.com/peter2317238492/sub2api-codex-control/releases/download/connector-v0.1.0/${filename}`,
+    sha256: "a".repeat(64),
+    size: 1000,
+    signature_bundle: `${filename}.sigstore.json`,
+    sbom: {
+      format: "SPDX-2.3-json",
+      filename: `${filename}.spdx.json`,
+      sha256: "b".repeat(64),
+      size: 2000,
+      signature_bundle: `${filename}.spdx.json.sigstore.json`,
+    },
+    provenance: {
+      predicate_type: "https://slsa.dev/provenance/v1",
+      filename: `${filename}.intoto.json`,
+      sha256: "c".repeat(64),
+      size: 3000,
+      signature_bundle: `${filename}.intoto.json.sigstore.json`,
+      attestation_bundle: `${filename}.intoto.sigstore.json`,
+    },
+  };
+}
+
+const connectorReleaseMetadata = {
+  format_version: 1 as const,
+  release_mode: "release" as const,
+  releasable: true as const,
+  source_repository: "https://github.com/peter2317238492/sub2api-codex-control" as const,
+  source_commit: "d".repeat(40),
+  version: "0.1.0",
+  tag: "connector-v0.1.0",
+  codex_version: "0.147.0",
+  schema_digest: "5".repeat(64),
+  manifest: {
+    filename: "manifest.json",
+    sha256: "e".repeat(64),
+    size: 4000,
+    signature_bundle: "manifest.json.sigstore.json",
+  },
+  config_path_hint: "~/.config/sub2api-codex-connector/connector.json",
+  pair_command: "sub2api-codex-connector-ctl pair",
+  start_command: "sub2api-codex-connector-ctl start",
+  assets: [
+    releaseAsset("linux", "amd64", "deb"),
+    releaseAsset("linux", "amd64", "rpm"),
+    releaseAsset("linux", "arm64", "deb"),
+    releaseAsset("linux", "arm64", "rpm"),
+    releaseAsset("darwin", "amd64", "pkg"),
+    releaseAsset("darwin", "arm64", "pkg"),
+  ],
+};
+
 describe("Control store session isolation and event coalescing", () => {
   let threadFetches: number;
   let bootstrapCursor: string;
@@ -86,6 +144,7 @@ describe("Control store session isolation and event coalescing", () => {
               ],
               approvals: [],
               models_by_device: { "device-1": [] },
+              connector_release: connectorReleaseMetadata,
             }),
           );
         }
@@ -124,6 +183,7 @@ describe("Control store session isolation and event coalescing", () => {
     const oldSocket = MockWebSocket.instances[0];
     expect(oldSocket).toBeDefined();
     expect(store.devices).toHaveLength(1);
+    expect(store.connectorRelease).toEqual(connectorReleaseMetadata);
 
     store.reset();
     expect(store.devices).toEqual([]);
@@ -131,6 +191,7 @@ describe("Control store session isolation and event coalescing", () => {
     expect(store.approvals).toEqual([]);
     expect(store.selectedDeviceId).toBeNull();
     expect(store.selectedThreadId).toBeNull();
+    expect(store.connectorRelease).toBeNull();
     expect(oldSocket?.onclose).toBeNull();
 
     await vi.advanceTimersByTimeAsync(60_000);
@@ -248,6 +309,59 @@ describe("Control store session isolation and event coalescing", () => {
     resolveTurn(response({ command_id: "command-1" }));
     await expect(first).resolves.toBe(true);
     expect(store.turnSubmitting).toBe(false);
+  });
+
+  it("locks duplicate thread creation until the first request completes", async () => {
+    const store = useControlStore();
+    await store.bootstrap();
+    const baselineFetch = globalThis.fetch;
+    let resolveCreate!: (response: Response) => void;
+    const pendingCreate = new Promise<Response>((resolve) => {
+      resolveCreate = resolve;
+    });
+    const actionFetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/devices/device-1/threads") && init?.method === "POST") return pendingCreate;
+      if (url.endsWith("/threads/thread-new")) {
+        return Promise.resolve(
+          response({
+            event_cursor: "0",
+            thread: {
+              id: "thread-new",
+              device_id: "device-1",
+              title: "New",
+              cwd: "/work",
+              model: "model",
+              updated_at: "2026-07-13T00:00:01Z",
+              status: "idle",
+              messages: [],
+            },
+          }),
+        );
+      }
+      return baselineFetch(input, init);
+    });
+    vi.stubGlobal("fetch", actionFetch);
+
+    const first = store.createThread("/work", "model");
+    await expect(store.createThread("/work", "model")).resolves.toBe(false);
+    expect(store.creatingThread).toBe(true);
+    expect(actionFetch).toHaveBeenCalledOnce();
+
+    resolveCreate(
+      response({
+        id: "thread-new",
+        device_id: "device-1",
+        title: "New",
+        cwd: "/work",
+        model: "model",
+        updated_at: "2026-07-13T00:00:01Z",
+        status: "idle",
+      }),
+    );
+    await expect(first).resolves.toBe(true);
+    expect(store.creatingThread).toBe(false);
+    expect(actionFetch).toHaveBeenCalledTimes(2);
   });
 
   it("locks a failed thread until its resume command reaches a terminal state", async () => {
@@ -460,7 +574,7 @@ describe("Control store session isolation and event coalescing", () => {
         kind: "command",
         summary: "Run command",
         details: {},
-        expires_at: "2026-07-13T00:02:00Z",
+        expires_at: "2099-07-13T00:02:00Z",
         device_id: "device-1",
         device_name: "Device",
         created_at: "2026-07-13T00:00:00Z",
@@ -481,6 +595,96 @@ describe("Control store session isolation and event coalescing", () => {
     resolveDecision(response({ state: "approved" }));
     await expect(first).resolves.toBe(true);
     expect(store.approvals).toEqual([]);
+    expect(store.decidingApprovalIds).toEqual([]);
+  });
+
+  it("automatically removes an approval when its local deadline passes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-13T00:00:00Z"));
+    const store = useControlStore();
+    await store.bootstrap();
+
+    MockWebSocket.instances[0]?.message({
+      cursor: "1",
+      type: "approval.created",
+      occurred_at: "2026-07-13T00:00:00Z",
+      data: {
+        approval_id: "approval-expiring",
+        command_id: "command-1",
+        kind: "permission",
+        summary: "Grant permission",
+        details: {},
+        expires_at: "2026-07-13T00:00:01Z",
+        device_id: "device-1",
+        device_name: "Device",
+        created_at: "2026-07-13T00:00:00Z",
+      },
+    });
+    expect(store.approvals).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(store.approvals).toEqual([]);
+    expect(store.error).toBe("审批已过期，已从待处理列表移除");
+  });
+
+  it.each([
+    [404, "approval_not_found", "该审批已不存在，已从待处理列表移除"],
+    [409, "approval_stale_epoch", "该审批已失效或已处理，已从待处理列表移除"],
+    [410, "approval_expired", "该审批已过期，已从待处理列表移除"],
+  ])("removes a server-invalid approval after HTTP %i", async (status, detail, message) => {
+    const store = useControlStore();
+    store.approvals = [
+      {
+        approval_id: "approval-stale",
+        command_id: "command-1",
+        kind: "command",
+        summary: "Run command",
+        details: {},
+        expires_at: "2099-07-13T00:02:00Z",
+        device_id: "device-1",
+        device_name: "Device",
+        created_at: "2026-07-13T00:00:00Z",
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify({ detail }), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      }))),
+    );
+
+    await expect(store.resolveApproval("approval-stale", "approve")).resolves.toBe(false);
+    expect(store.approvals).toEqual([]);
+    expect(store.error).toBe(message);
+    expect(store.decidingApprovalIds).toEqual([]);
+  });
+
+  it("retains an approval after a retryable server failure", async () => {
+    const store = useControlStore();
+    store.approvals = [
+      {
+        approval_id: "approval-retry",
+        command_id: "command-1",
+        kind: "command",
+        summary: "Run command",
+        details: {},
+        expires_at: "2099-07-13T00:02:00Z",
+        device_id: "device-1",
+        device_name: "Device",
+        created_at: "2026-07-13T00:00:00Z",
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify({ detail: "temporary outage" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      }))),
+    );
+
+    await expect(store.resolveApproval("approval-retry", "deny")).rejects.toMatchObject({ status: 503 });
+    expect(store.approvals.map((approval) => approval.approval_id)).toEqual(["approval-retry"]);
     expect(store.decidingApprovalIds).toEqual([]);
   });
 
@@ -1580,6 +1784,7 @@ describe("Control store session isolation and event coalescing", () => {
     expect(store.selectedDeviceId).toBeNull();
     expect(store.selectedThreadId).toBeNull();
     expect(store.activeThread).toBeNull();
+    expect(store.connectorRelease).toEqual(connectorReleaseMetadata);
     store.reset();
   });
 

@@ -1,0 +1,157 @@
+groups:
+  - name: codex-control-production-integrity
+    rules:
+      - alert: CodexControlExternalOperatorDeliveryUnconfigured
+        expr: |
+          absent(codex_control_external_operator_delivery_verified)
+          or codex_control_external_operator_delivery_verified != 1
+        labels:
+          severity: critical
+          service: codex-control
+          component: alert-delivery
+          release_gate: external-operator-delivery
+        annotations:
+          summary: External operator alert delivery is not configured
+          description: No admitted nonce-bound external firing/resolved pair with an independent operator acknowledgement is present for this release.
+          runbook: docs/runbooks/observability.md#external-operator-delivery-admission
+
+      - alert: CodexControlReleaseObservabilityReceiptMissing
+        expr: |
+          absent(codex_control_release_observability_receipt_current)
+          or codex_control_release_observability_receipt_current != 1
+          or absent(codex_control_release_observability_identity)
+          or (
+            codex_control_release_observability_identity
+            unless on (version, vcs_ref)
+            codex_control_monitoring_expected_build_info
+          )
+        labels:
+          severity: critical
+          service: codex-control
+          component: release-operations
+          release_gate: observability
+        annotations:
+          summary: Current release observability receipt is absent or has the wrong identity
+          description: The admitted release/VCS receipt does not bind all required current signals and operational evidence.
+          runbook: docs/runbooks/observability.md#release-observability-receipt
+
+      - alert: CodexControlReleaseGateSnapshotNotCurrent
+        expr: |
+          absent(codex_control_release_gate_snapshot_ok)
+          or codex_control_release_gate_snapshot_ok != 1
+        labels:
+          severity: critical
+          service: codex-control
+          component: release-operations
+          release_gate: observability
+        annotations:
+          summary: Release-gate snapshot is missing or did not pass strict admission
+          description: Required signals were absent, stale, unhealthy, pending/firing, or resource and restart checks were not clean.
+          runbook: docs/runbooks/observability.md#release-observability-receipt
+
+      - alert: CodexControlProductionStabilityWindowIncomplete
+        expr: |
+          absent(codex_control_production_stability_window_ok)
+          or codex_control_production_stability_window_ok != 1
+        labels:
+          severity: critical
+          service: codex-control
+          component: release-operations
+          release_gate: stability-window
+        annotations:
+          summary: Production stability window is incomplete
+          description: The release lacks an admitted stability window covering session renewal, Connector reconnect, scheduled monitoring and backup cycles, and zero unresolved P0/P1 incidents.
+          runbook: docs/runbooks/observability.md#release-observability-receipt
+
+      - alert: CodexControlPostReleaseBackupEvidenceMissing
+        expr: |
+          absent(codex_control_post_release_backup_verified)
+          or codex_control_post_release_backup_verified != 1
+        labels:
+          severity: critical
+          service: codex-control
+          component: backup
+          release_gate: backup
+        annotations:
+          summary: Post-release backup evidence is missing
+          description: No checksum-verified backup completed after this deployment with bound backup and isolated-restore receipts.
+          runbook: docs/runbooks/observability.md#release-observability-receipt
+
+      - alert: CodexControlExpectedBuildIdentityMissing
+        expr: absent(codex_control_monitoring_expected_build_info)
+        for: 1m
+        labels:
+          severity: critical
+          service: codex-control
+          component: provenance
+          release_gate: provenance
+        annotations:
+          summary: The expected release and VCS identity is unavailable
+          description: The fail-closed monitoring collector is not publishing its admitted release identity.
+          runbook: docs/runbooks/observability.md#release-and-vcs-identity
+
+      - alert: CodexControlAPIReplicaSetIncomplete
+        expr: |
+          count(up{job="codex-control-api"}) != 2
+          or absent(up{job="codex-control-api", instance="127.0.0.1:18090"})
+          or absent(up{job="codex-control-api", instance="127.0.0.1:18093"})
+        for: 1m
+        labels:
+          severity: critical
+          service: codex-control
+          component: control-api
+          release_gate: provenance
+        annotations:
+          summary: The exact two-target Control API scrape set is incomplete
+          description: Prometheus does not have exactly two configured Control API target series.
+          runbook: docs/runbooks/observability.md#release-and-vcs-identity
+
+      - alert: CodexControlAPIBuildIdentityMissing
+        expr: up{job="codex-control-api"} == 1 unless on (job, instance) codex_control_build_info{job="codex-control-api"}
+        for: 1m
+        labels:
+          severity: critical
+          service: codex-control
+          component: provenance
+          release_gate: provenance
+        annotations:
+          summary: A reachable Control API target lacks build identity
+          description: Control API target {{ $labels.instance }} does not export codex_control_build_info.
+          runbook: docs/runbooks/observability.md#release-and-vcs-identity
+
+      - alert: CodexControlAPIBuildIdentityNotExact
+        expr: codex_control_build_info{job="codex-control-api"} unless on (version, vcs_ref) codex_control_monitoring_expected_build_info
+        for: 1m
+        labels:
+          severity: critical
+          service: codex-control
+          component: provenance
+          release_gate: provenance
+        annotations:
+          summary: A Control API target does not match the admitted build identity
+          description: Control API target {{ $labels.instance }} reports a release or VCS revision other than the exact expected pair.
+          runbook: docs/runbooks/observability.md#release-and-vcs-identity
+
+      - alert: CodexControlLocalDeliveryTest
+        expr: codex_control_local_delivery_test{controlled_nonce=~"[0-9a-f]{32}"} == 1
+        labels:
+          severity: info
+          service: codex-control
+          component: monitoring-test
+          delivery_scope: local-evidence-only
+        annotations:
+          summary: Controlled local Alertmanager delivery test
+          description: This alert only proves firing and resolved delivery to the local append-only evidence receiver.
+          runbook: docs/runbooks/observability.md#local-firing-and-resolved-evidence
+
+      - alert: CodexControlExternalDeliveryTest
+        expr: codex_control_external_delivery_test{controlled_nonce=~"[0-9a-f]{32}"} == 1
+        labels:
+          severity: info
+          service: codex-control
+          component: monitoring-test
+          delivery_scope: external-operator-controlled
+        annotations:
+          summary: Controlled external Alertmanager delivery test
+          description: This alert is admissible only with external firing/resolved receipts and an independent operator acknowledgement.
+          runbook: docs/runbooks/observability.md#external-operator-delivery-admission

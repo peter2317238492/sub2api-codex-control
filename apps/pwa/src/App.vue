@@ -5,6 +5,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ApiError, onControlAuthenticationRequired } from "@/api/client";
 import AppHeader from "@/components/AppHeader.vue";
 import ApprovalDrawer from "@/components/ApprovalDrawer.vue";
+import ConnectorSetupDialog from "@/components/ConnectorSetupDialog.vue";
 import ConversationPane from "@/components/ConversationPane.vue";
 import DeviceRail from "@/components/DeviceRail.vue";
 import NewThreadDialog from "@/components/NewThreadDialog.vue";
@@ -17,9 +18,14 @@ const sessionStore = useSessionStore();
 const controlStore = useControlStore();
 
 const approvalOpen = ref(false);
+const connectorSetupOpen = ref(false);
 const pairOpen = ref(false);
 const pairLoading = ref(false);
+const pairCompleting = ref(false);
 const pairError = ref<string | null>(null);
+const pairRecovery = ref<"new_code" | "retry" | "manage_devices" | null>(null);
+const pendingPairingDeviceId = ref<string | null>(null);
+const pendingPairingDeviceSeen = ref(false);
 const newThreadOpen = ref(false);
 const mobilePanel = ref<"devices" | "threads" | null>(null);
 const threadList = ref<{ focusAfterArchive: () => void } | null>(null);
@@ -28,12 +34,25 @@ let bootstrapGeneration = 0;
 let bootstrapPromise: Promise<boolean> | null = null;
 let bootstrapSessionId: string | null = null;
 let authenticationRecoveryPromise: Promise<boolean> | null = null;
+let pairingCompletionPromise: Promise<boolean> | null = null;
+
+function resetPairingState(close = false): void {
+  pendingPairingDeviceId.value = null;
+  pendingPairingDeviceSeen.value = false;
+  pairLoading.value = false;
+  pairCompleting.value = false;
+  pairError.value = null;
+  pairRecovery.value = null;
+  pairingCompletionPromise = null;
+  if (close) pairOpen.value = false;
+}
 
 function invalidateControlState(): void {
   bootstrapGeneration += 1;
   bootstrapPromise = null;
   bootstrapSessionId = null;
   authenticationRecoveryPromise = null;
+  resetPairingState(true);
   controlStore.reset();
 }
 
@@ -115,6 +134,20 @@ const stopExternalAuthWatch = watch(
   { flush: "sync" },
 );
 
+const stopPairingDeviceWatch = watch(
+  () => {
+    const deviceId = pendingPairingDeviceId.value;
+    if (!deviceId) return null;
+    const device = controlStore.devices.find((item) => item.id === deviceId);
+    return device ? `${device.id}:${device.status}` : null;
+  },
+  (deviceState) => {
+    if (deviceState) pendingPairingDeviceSeen.value = true;
+    void completePendingPairing();
+  },
+  { flush: "post" },
+);
+
 onMounted(async () => {
   await sessionStore.load();
   initialLoadComplete = true;
@@ -128,6 +161,7 @@ onBeforeUnmount(() => {
   stopPrincipalWatch();
   stopRenewalWatch();
   stopExternalAuthWatch();
+  stopPairingDeviceWatch();
   invalidateControlState();
   sessionStore.dispose();
 });
@@ -165,19 +199,147 @@ async function selectThread(threadId: string): Promise<void> {
   }
 }
 
+function openPairing(): void {
+  if (!pendingPairingDeviceId.value) {
+    pairError.value = null;
+    pairRecovery.value = null;
+  }
+  pairOpen.value = true;
+}
+
+function restartPairing(): void {
+  resetPairingState();
+  pairOpen.value = true;
+}
+
+function pairFromSetup(): void {
+  connectorSetupOpen.value = false;
+  restartPairing();
+}
+
+function managePairingDevices(): void {
+  pairOpen.value = false;
+  mobilePanel.value = "devices";
+}
+
+function pairingErrorPresentation(error: unknown): {
+  message: string;
+  recovery: "new_code" | "retry" | "manage_devices";
+} {
+  if (error instanceof ApiError) {
+    const code = error.code ?? error.message;
+    if (code === "pairing_not_found") {
+      return {
+        message: "未找到这个配对码。请确认输入无误，或在设备上重新开始配对后输入新配对码。",
+        recovery: "new_code",
+      };
+    }
+    if (code === "pairing_expired" || error.status === 410) {
+      return {
+        message: "配对码已过期。请在设备上重新开始 Connector 配对，然后输入新配对码。",
+        recovery: "new_code",
+      };
+    }
+    if (code === "pairing_not_claimable") {
+      return {
+        message: "这个配对码已被认领或不再可用。请在设备上重新开始配对并输入新配对码。",
+        recovery: "new_code",
+      };
+    }
+    if (code === "device_capacity_exceeded") {
+      return {
+        message: "设备数量已达上限。请先撤销不再使用的设备，然后重试。",
+        recovery: "manage_devices",
+      };
+    }
+    if (code === "pairing_claim_rate_limited" || error.status === 429) {
+      return { message: "配对尝试次数过多，请稍后再试。", recovery: "retry" };
+    }
+    if (error.status === 404) {
+      return { message: "未找到这个配对码，请检查后重试。", recovery: "new_code" };
+    }
+    if (error.status === 409) {
+      return { message: "这个配对码当前不可用，请获取新配对码后重试。", recovery: "new_code" };
+    }
+  }
+  return { message: "暂时无法认领设备，请检查网络后重试。", recovery: "retry" };
+}
+
+function completePendingPairing(): Promise<boolean> {
+  if (pairingCompletionPromise) return pairingCompletionPromise;
+  const pendingDeviceId = pendingPairingDeviceId.value;
+  if (!pendingDeviceId) return Promise.resolve(false);
+  const device = controlStore.devices.find((item) => item.id === pendingDeviceId);
+  if (!device || device.status !== "online") return Promise.resolve(false);
+
+  pendingPairingDeviceSeen.value = true;
+  pairCompleting.value = true;
+  const currentPromise = (async () => {
+    try {
+      await controlStore.selectDevice(pendingDeviceId);
+      if (pendingPairingDeviceId.value !== pendingDeviceId) return false;
+      if (controlStore.selectedDeviceId !== pendingDeviceId) {
+        pairError.value = "设备已上线，但设备信息仍在同步。请刷新状态后重试。";
+        pairRecovery.value = "retry";
+        return false;
+      }
+      pendingPairingDeviceId.value = null;
+      pendingPairingDeviceSeen.value = false;
+      pairError.value = null;
+      pairRecovery.value = null;
+      pairOpen.value = false;
+      mobilePanel.value = "threads";
+      return true;
+    } catch {
+      if (pendingPairingDeviceId.value === pendingDeviceId) {
+        pairError.value = "设备已上线，但暂时无法加载设备信息。请刷新状态后重试。";
+        pairRecovery.value = "retry";
+      }
+      return false;
+    } finally {
+      pairCompleting.value = false;
+    }
+  })().finally(() => {
+    if (pairingCompletionPromise === currentPromise) pairingCompletionPromise = null;
+  });
+  pairingCompletionPromise = currentPromise;
+  return currentPromise;
+}
+
 async function claimPairing(code: string): Promise<void> {
   pairLoading.value = true;
   pairError.value = null;
+  pairRecovery.value = null;
   try {
     const deviceId = await controlStore.claimPairing(code);
     if (!deviceId) return;
-    pairOpen.value = false;
-    await bootstrapControl(true);
-    if (sessionStore.authenticated && controlStore.devices.some((device) => device.id === deviceId)) {
-      await controlStore.selectDevice(deviceId);
+    pendingPairingDeviceId.value = deviceId;
+    pendingPairingDeviceSeen.value = controlStore.devices.some((device) => device.id === deviceId);
+    const refreshed = await bootstrapControl(true);
+    if (!refreshed && pendingPairingDeviceId.value === deviceId) {
+      pairError.value = "配对码已认领，但暂时无法刷新设备状态。Connector 可继续完成配对，请稍后刷新。";
+      pairRecovery.value = "retry";
     }
   } catch (error) {
-    pairError.value = error instanceof Error ? error.message : "认领失败";
+    const presentation = pairingErrorPresentation(error);
+    pairError.value = presentation.message;
+    pairRecovery.value = presentation.recovery;
+  } finally {
+    pairLoading.value = false;
+  }
+}
+
+async function refreshPairingStatus(): Promise<void> {
+  if (!pendingPairingDeviceId.value || pairLoading.value || pairCompleting.value) return;
+  pairLoading.value = true;
+  pairError.value = null;
+  pairRecovery.value = null;
+  try {
+    const refreshed = await bootstrapControl(true);
+    if (!refreshed && pendingPairingDeviceId.value) {
+      pairError.value = "暂时无法刷新设备状态，请检查网络后重试。";
+      pairRecovery.value = "retry";
+    }
   } finally {
     pairLoading.value = false;
   }
@@ -310,7 +472,8 @@ async function resolveApproval(approvalId: string, decision: "approve" | "deny")
       :selected-id="controlStore.selectedDeviceId"
       :loading="controlStore.loading"
       @select="selectDevice"
-      @pair="pairOpen = true"
+      @pair="openPairing"
+      @setup="connectorSetupOpen = true"
       @revoke="revokeDevice"
     />
 
@@ -350,17 +513,30 @@ async function resolveApproval(approvalId: string, decision: "approve" | "deny")
       @close="approvalOpen = false"
       @decide="resolveApproval"
     />
+    <ConnectorSetupDialog
+      :open="connectorSetupOpen"
+      :metadata="controlStore.connectorRelease"
+      @close="connectorSetupOpen = false"
+      @pair="pairFromSetup"
+    />
     <PairDeviceDialog
       :open="pairOpen"
-      :loading="pairLoading"
+      :loading="pairLoading || pairCompleting"
       :error="pairError"
+      :waiting="pendingPairingDeviceId !== null"
+      :device-detected="pendingPairingDeviceSeen"
+      :recovery="pairRecovery"
       @close="pairOpen = false"
       @claim="claimPairing"
+      @refresh="refreshPairingStatus"
+      @restart="restartPairing"
+      @manage="managePairingDevices"
     />
     <NewThreadDialog
       :open="newThreadOpen"
       :roots="controlStore.selectedDevice?.workspace_roots ?? []"
       :models="controlStore.models"
+      :submitting="controlStore.creatingThread"
       @close="newThreadOpen = false"
       @create="createThread"
     />

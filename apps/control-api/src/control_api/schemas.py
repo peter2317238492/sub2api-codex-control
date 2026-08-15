@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .security import canonicalize_workspace_roots
 
@@ -217,12 +217,124 @@ class ModelListResponse(StrictModel):
     items: list[ModelSummary]
 
 
+class ConnectorReleaseFileEvidence(StrictModel):
+    filename: str = Field(
+        min_length=1, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    )
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size: int = Field(gt=0, strict=True)
+    signature_bundle: str = Field(
+        min_length=1, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    )
+
+
+class ConnectorReleaseSbomEvidence(ConnectorReleaseFileEvidence):
+    format: Literal["SPDX-2.3-json"]
+
+
+class ConnectorReleaseProvenanceEvidence(ConnectorReleaseFileEvidence):
+    predicate_type: Literal["https://slsa.dev/provenance/v1"]
+    attestation_bundle: str = Field(
+        min_length=1, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    )
+
+
+class ConnectorReleaseAsset(ConnectorReleaseFileEvidence):
+    os: Literal["linux", "darwin"]
+    arch: Literal["amd64", "arm64"]
+    package_format: Literal["deb", "rpm", "pkg"]
+    download_url: str = Field(min_length=1, max_length=2048)
+    sbom: ConnectorReleaseSbomEvidence
+    provenance: ConnectorReleaseProvenanceEvidence
+
+
+class ConnectorReleaseMetadata(StrictModel):
+    format_version: int = Field(ge=1, le=1, strict=True)
+    release_mode: Literal["release"]
+    releasable: bool = Field(strict=True)
+    source_repository: Literal[
+        "https://github.com/peter2317238492/sub2api-codex-control"
+    ]
+    source_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    version: str = Field(pattern=r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+    tag: str = Field(min_length=1, max_length=128)
+    codex_version: str = Field(
+        pattern=r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
+    )
+    schema_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    manifest: ConnectorReleaseFileEvidence
+    config_path_hint: Literal["~/.config/sub2api-codex-connector/connector.json"]
+    pair_command: Literal["sub2api-codex-connector-ctl pair"]
+    start_command: Literal["sub2api-codex-connector-ctl start"]
+    assets: list[ConnectorReleaseAsset] = Field(min_length=6, max_length=6)
+
+    @model_validator(mode="after")
+    def validate_immutable_release_inventory(self) -> ConnectorReleaseMetadata:
+        if self.releasable is not True:
+            raise ValueError("Connector release is not releasable")
+        expected_tag = f"connector-v{self.version}"
+        if self.tag != expected_tag:
+            raise ValueError("Connector release tag does not match its exact version")
+
+        if (
+            self.manifest.filename != "manifest.json"
+            or self.manifest.signature_bundle != "manifest.json.sigstore.json"
+        ):
+            raise ValueError("Connector release manifest evidence is not canonical")
+
+        expected_tuples = {
+            ("linux", "amd64", "deb"),
+            ("linux", "amd64", "rpm"),
+            ("linux", "arm64", "deb"),
+            ("linux", "arm64", "rpm"),
+            ("darwin", "amd64", "pkg"),
+            ("darwin", "arm64", "pkg"),
+        }
+        actual_tuples = {
+            (asset.os, asset.arch, asset.package_format) for asset in self.assets
+        }
+        if actual_tuples != expected_tuples:
+            raise ValueError(
+                "Connector release does not contain the complete native package matrix"
+            )
+
+        release_base = f"{self.source_repository}/releases/download/{expected_tag}"
+        for asset in self.assets:
+            filename = (
+                f"sub2api-codex-connector_{self.version}_{asset.os}_{asset.arch}."
+                f"{asset.package_format}"
+            )
+            sbom_filename = f"{filename}.spdx.json"
+            provenance_filename = f"{filename}.intoto.json"
+            if (
+                asset.filename != filename
+                or asset.download_url != f"{release_base}/{filename}"
+                or asset.signature_bundle != f"{filename}.sigstore.json"
+            ):
+                raise ValueError("Connector asset URL is not an exact immutable release URL")
+            if (
+                asset.sbom.filename != sbom_filename
+                or asset.sbom.signature_bundle != f"{sbom_filename}.sigstore.json"
+            ):
+                raise ValueError("Connector asset SBOM evidence is not canonical")
+            if (
+                asset.provenance.filename != provenance_filename
+                or asset.provenance.signature_bundle
+                != f"{provenance_filename}.sigstore.json"
+                or asset.provenance.attestation_bundle
+                != f"{filename}.intoto.sigstore.json"
+            ):
+                raise ValueError("Connector asset provenance evidence is not canonical")
+        return self
+
+
 class ControlBootstrapResponse(StrictModel):
     event_cursor: str
     devices: list[DeviceSummary]
     threads: list[ManagedThreadSummary]
     approvals: list[ApprovalItem]
     models_by_device: dict[str, list[ModelSummary]]
+    connector_release: ConnectorReleaseMetadata | None = None
 
 
 class BrowserEvent(StrictModel):

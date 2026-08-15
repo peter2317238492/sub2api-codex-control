@@ -11,22 +11,24 @@ concurrency:
 
 env:
   RELEASE_DIR: dist/connector
+  VULNERABILITY_DIR: dist/connector-vulnerability
   PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
   source-only-guard:
-    name: Binary release disabled in the source-only publication
+    name: Binary release disabled until the formal package gates close
     runs-on: ubuntu-24.04
     steps:
-      - name: Fail closed until binary license evidence is complete
+      - name: Fail closed before any signing or release write
         run: |
-          echo "Connector binary publication is disabled for the source-only release." >&2
+          echo "Connector binary publication remains disabled until protected signing environments and package gates are complete." >&2
           exit 1
 
   build:
     name: Test and build reproducible candidates
     needs: source-only-guard
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -42,6 +44,15 @@ jobs:
         with:
           go-version: "1.26.5"
           cache: false
+
+      - name: Install the native Linux package builders
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends rpm
+          command -v dpkg-deb
+          command -v rpmbuild
 
       - name: Verify public source and licensing before any build
         run: |
@@ -77,10 +88,83 @@ jobs:
           compression-level: 0
           retention-days: 1
 
+  linux-native-sign:
+    name: Apply and verify native RPM signatures
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: connector-release-linux
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install the pinned Go toolchain
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+
+      - name: Install the native RPM verification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends rpm gnupg
+          command -v rpmkeys
+          command -v rpmsign
+
+      - name: Receive unsigned candidates
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-candidates-${{ github.run_attempt }}
+          path: dist/connector
+
+      - name: Validate the complete transfer before exposing the RPM key
+        run: python3 connector/release/release.py validate-work-state --output "$RELEASE_DIR"
+
+      - name: Recheck the remote annotated tag before exposing the RPM key
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${GITHUB_REF_NAME}" "refs/tags/${GITHUB_REF_NAME}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$GITHUB_SHA"
+
+      - name: Sign both RPM packages and record independent verification
+        env:
+          RPM_EXPECTED_SIGNING_FINGERPRINT: ${{ vars.RPM_EXPECTED_SIGNING_FINGERPRINT }}
+          RPM_SIGNING_KEY_PASSWORD: ${{ secrets.RPM_SIGNING_KEY_PASSWORD }}
+          RPM_SIGNING_PRIVATE_KEY_BASE64: ${{ secrets.RPM_SIGNING_PRIVATE_KEY_BASE64 }}
+          RPM_SIGNING_PUBLIC_KEY_BASE64: ${{ vars.RPM_SIGNING_PUBLIC_KEY_BASE64 }}
+        run: connector/release/linux-sign-rpm.sh "$RELEASE_DIR"
+
+      - name: Transfer the RPM-signed release state
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: connector-linux-signed-${{ github.run_attempt }}
+          path: dist/connector
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   native-sign:
     name: Apply Apple signatures and finalize evidence
-    needs: build
+    needs: linux-native-sign
     runs-on: macos-15
+    timeout-minutes: 45
     environment: connector-release-apple
     permissions:
       contents: read
@@ -101,19 +185,37 @@ jobs:
       - name: Receive unsigned candidates
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: connector-candidates-${{ github.run_attempt }}
+          name: connector-linux-signed-${{ github.run_attempt }}
           path: dist/connector
 
       - name: Validate unsigned transfer before exposing Apple credentials
         run: python3 connector/release/release.py validate-work-state --output "$RELEASE_DIR"
 
+      - name: Recheck the remote annotated tag before exposing Apple credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${GITHUB_REF_NAME}" "refs/tags/${GITHUB_REF_NAME}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$GITHUB_SHA"
+
       - name: Apply Developer ID signatures and notarize
         env:
-          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          MACOS_DEVELOPER_ID_APPLICATION: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION }}
+          MACOS_APPLICATION_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_APPLICATION_CERTIFICATE_P12_BASE64 }}
+          MACOS_APPLICATION_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_APPLICATION_CERTIFICATE_PASSWORD }}
+          MACOS_DEVELOPER_ID_APPLICATION: ${{ vars.MACOS_EXPECTED_APPLICATION_IDENTITY }}
+          MACOS_DEVELOPER_ID_INSTALLER: ${{ vars.MACOS_EXPECTED_INSTALLER_IDENTITY }}
           MACOS_EXPECTED_TEAM_ID: ${{ vars.MACOS_EXPECTED_TEAM_ID }}
-          MACOS_EXPECTED_SIGNING_IDENTITY: ${{ vars.MACOS_EXPECTED_SIGNING_IDENTITY }}
+          MACOS_EXPECTED_APPLICATION_IDENTITY: ${{ vars.MACOS_EXPECTED_APPLICATION_IDENTITY }}
+          MACOS_EXPECTED_INSTALLER_IDENTITY: ${{ vars.MACOS_EXPECTED_INSTALLER_IDENTITY }}
+          MACOS_INSTALLER_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_P12_BASE64 }}
+          MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
           MACOS_NOTARY_KEY_BASE64: ${{ secrets.MACOS_NOTARY_KEY_BASE64 }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
@@ -135,6 +237,7 @@ jobs:
     name: Keylessly sign and verify
     needs: native-sign
     runs-on: macos-15
+    timeout-minutes: 20
     environment: connector-release-sigstore
     permissions:
       contents: read
@@ -160,14 +263,40 @@ jobs:
           name: connector-finalized-${{ github.run_attempt }}
           path: dist/connector
 
+      - name: Recheck the remote annotated tag before requesting an OIDC identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${GITHUB_REF_NAME}" "refs/tags/${GITHUB_REF_NAME}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$GITHUB_SHA"
+
       - name: Validate all evidence and create keyless bundles
+        env:
+          APPLE_APPLICATION_IDENTITY: ${{ vars.MACOS_EXPECTED_APPLICATION_IDENTITY }}
+          APPLE_INSTALLER_IDENTITY: ${{ vars.MACOS_EXPECTED_INSTALLER_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.MACOS_EXPECTED_TEAM_ID }}
+          RPM_SIGNING_FINGERPRINT: ${{ vars.RPM_EXPECTED_SIGNING_FINGERPRINT }}
         run: |
           python3 connector/release/release.py sign \
             --output "$RELEASE_DIR" \
-            --apple-team-id "${{ vars.MACOS_EXPECTED_TEAM_ID }}" \
-            --apple-signing-identity "${{ vars.MACOS_EXPECTED_SIGNING_IDENTITY }}"
+            --apple-team-id "$APPLE_TEAM_ID" \
+            --apple-signing-identity "$APPLE_APPLICATION_IDENTITY" \
+            --apple-installer-identity "$APPLE_INSTALLER_IDENTITY" \
+            --rpm-signing-fingerprint "$RPM_SIGNING_FINGERPRINT"
 
       - name: Verify with externally fixed certificate claims
+        env:
+          APPLE_APPLICATION_IDENTITY: ${{ vars.MACOS_EXPECTED_APPLICATION_IDENTITY }}
+          APPLE_INSTALLER_IDENTITY: ${{ vars.MACOS_EXPECTED_INSTALLER_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.MACOS_EXPECTED_TEAM_ID }}
+          RPM_SIGNING_FINGERPRINT: ${{ vars.RPM_EXPECTED_SIGNING_FINGERPRINT }}
         shell: bash
         run: |
           set -euo pipefail
@@ -178,8 +307,12 @@ jobs:
             --certificate-identity "$identity" \
             --certificate-github-workflow-sha "$GITHUB_SHA" \
             --certificate-github-workflow-trigger "push" \
-            --apple-team-id "${{ vars.MACOS_EXPECTED_TEAM_ID }}" \
-            --apple-signing-identity "${{ vars.MACOS_EXPECTED_SIGNING_IDENTITY }}"
+            --apple-team-id "$APPLE_TEAM_ID" \
+            --apple-signing-identity "$APPLE_APPLICATION_IDENTITY" \
+            --apple-installer-identity "$APPLE_INSTALLER_IDENTITY" \
+            --rpm-signing-fingerprint "$RPM_SIGNING_FINGERPRINT" \
+            --target darwin-amd64 \
+            --target darwin-arm64
 
       - name: Transfer signed and verified assets
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -190,10 +323,475 @@ jobs:
           compression-level: 0
           retention-days: 1
 
-  publish:
-    name: Publish immutable release
+  verify-linux-signed:
+    name: Verify signed Linux packages on Linux
     needs: attest
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: connector-release-sigstore
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the independently trusted verifier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Install native Linux verification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends rpm gnupg
+          command -v dpkg-deb
+          command -v rpmkeys
+
+      - name: Receive the signed assets
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-signed-${{ github.run_attempt }}
+          path: dist/connector
+
+      - name: Verify the complete inventory and both Linux package targets
+        env:
+          APPLE_APPLICATION_IDENTITY: ${{ vars.MACOS_EXPECTED_APPLICATION_IDENTITY }}
+          APPLE_INSTALLER_IDENTITY: ${{ vars.MACOS_EXPECTED_INSTALLER_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.MACOS_EXPECTED_TEAM_ID }}
+          RPM_SIGNING_FINGERPRINT: ${{ vars.RPM_EXPECTED_SIGNING_FINGERPRINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
+          python3 connector/release/release.py verify \
+            --output "$RELEASE_DIR" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger "push" \
+            --apple-team-id "$APPLE_TEAM_ID" \
+            --apple-signing-identity "$APPLE_APPLICATION_IDENTITY" \
+            --apple-installer-identity "$APPLE_INSTALLER_IDENTITY" \
+            --rpm-signing-fingerprint "$RPM_SIGNING_FINGERPRINT" \
+            --target linux-amd64 \
+            --target linux-arm64
+
+  vulnerability-scan:
+    name: Scan the exact six-package release and create a canonical receipt
+    needs:
+      - attest
+      - verify-linux-signed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: connector-release-sigstore
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the independently trusted scanner policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Install native Linux verification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends rpm gnupg
+          command -v dpkg-deb
+          command -v rpmkeys
+
+      - name: Receive the signed core assets
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-signed-${{ github.run_attempt }}
+          path: dist/connector
+
+      - name: Authenticate the core inventory before selecting scan inputs
+        env:
+          APPLE_APPLICATION_IDENTITY: ${{ vars.MACOS_EXPECTED_APPLICATION_IDENTITY }}
+          APPLE_INSTALLER_IDENTITY: ${{ vars.MACOS_EXPECTED_INSTALLER_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.MACOS_EXPECTED_TEAM_ID }}
+          RPM_SIGNING_FINGERPRINT: ${{ vars.RPM_EXPECTED_SIGNING_FINGERPRINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
+          python3 connector/release/release.py verify \
+            --output "$RELEASE_DIR" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --apple-team-id "$APPLE_TEAM_ID" \
+            --apple-signing-identity "$APPLE_APPLICATION_IDENTITY" \
+            --apple-installer-identity "$APPLE_INSTALLER_IDENTITY" \
+            --rpm-signing-fingerprint "$RPM_SIGNING_FINGERPRINT" \
+            --target linux-amd64 \
+            --target linux-arm64
+
+      - name: Install the policy-pinned scan toolchain
+        id: trivy
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 0700 "$VULNERABILITY_DIR"
+          install -d -m 0700 "$RUNNER_TEMP/control-tools"
+          python3 -I deploy/server-package/oci_toolchain.py install \
+            --destination "$RUNNER_TEMP/control-tools/crane"
+          python3 -I deploy/server-package/oci_toolchain.py verify \
+            --crane "$RUNNER_TEMP/control-tools/crane"
+          scanner=$(scripts/install-trivy.sh \
+            security/vulnerability-policy.json \
+            "$RUNNER_TEMP/trivy-0.74.0" \
+            "$VULNERABILITY_DIR/trivy-install-receipt.json")
+          test -x "$scanner"
+          printf 'path=%s\n' "$scanner" >> "$GITHUB_OUTPUT"
+          printf 'crane=%s\n' "$RUNNER_TEMP/control-tools/crane" >> "$GITHUB_OUTPUT"
+
+      - name: Acquire immutable databases and scan every authenticated package SBOM
+        env:
+          CRANE: ${{ steps.trivy.outputs.crane }}
+          TRIVY: ${{ steps.trivy.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 0700 "$VULNERABILITY_DIR/connector"
+          cache="$RUNNER_TEMP/trivy-cache"
+          install -d -m 0700 "$cache"
+          empty_config="$VULNERABILITY_DIR/trivy-empty.yaml"
+          empty_ignore="$VULNERABILITY_DIR/trivy-empty.ignore"
+          : > "$empty_config"
+          : > "$empty_ignore"
+          python3 -I deploy/server-package/oci_toolchain.py verify --crane "$CRANE"
+          install -d -m 0700 "$RUNNER_TEMP/crane-home"
+          timeout 900 env -i \
+            HOME="$RUNNER_TEMP/crane-home" PATH="$PATH" \
+            "$CRANE" pull --format=oci --annotate-ref \
+            ghcr.io/aquasecurity/trivy-db:2 \
+            "$VULNERABILITY_DIR/trivy-db-oci"
+          python3 -I deploy/server-package/oci_toolchain.py verify --crane "$CRANE"
+          timeout 900 env -i \
+            HOME="$RUNNER_TEMP/crane-home" PATH="$PATH" \
+            "$CRANE" pull --format=oci --annotate-ref \
+            ghcr.io/aquasecurity/trivy-java-db:1 \
+            "$VULNERABILITY_DIR/trivy-java-db-oci"
+          "$TRIVY" --cache-dir "$cache" --config "$empty_config" \
+            image --db-repository ghcr.io/aquasecurity/trivy-db:2 \
+            --download-db-only --no-progress
+          "$TRIVY" --cache-dir "$cache" --config "$empty_config" \
+            image --java-db-repository ghcr.io/aquasecurity/trivy-java-db:1 \
+            --download-java-db-only --no-progress
+          test -f "$cache/db/metadata.json"
+          test -f "$cache/db/trivy.db"
+          test -f "$cache/java-db/metadata.json"
+          test -f "$cache/java-db/trivy-java.db"
+          install -m 0600 "$cache/db/metadata.json" \
+            "$VULNERABILITY_DIR/trivy-db-metadata.json"
+          install -m 0600 "$cache/db/trivy.db" "$VULNERABILITY_DIR/trivy.db"
+          install -m 0600 "$cache/java-db/metadata.json" \
+            "$VULNERABILITY_DIR/trivy-java-db-metadata.json"
+          install -m 0600 "$cache/java-db/trivy-java.db" \
+            "$VULNERABILITY_DIR/trivy-java.db"
+          install -m 0600 security/vulnerability-dispositions.json \
+            "$VULNERABILITY_DIR/vulnerability-dispositions.json"
+          install -m 0600 "$RELEASE_DIR/manifest.json" \
+            "$VULNERABILITY_DIR/connector/manifest.json"
+          install -m 0600 "$RELEASE_DIR/manifest.json.sigstore.json" \
+            "$VULNERABILITY_DIR/connector/manifest.json.sigstore.json"
+
+          jq -r '
+            .targets[] as $target
+            | $target.packages[]
+            | [
+                $target.id,
+                .format,
+                .artifact.filename,
+                .artifact.sha256,
+                .sbom.filename,
+                .sbom.sha256
+              ]
+            | @tsv
+          ' "$RELEASE_DIR/manifest.json" > "$RUNNER_TEMP/connector-package-scan.tsv"
+          diff -u \
+            <(printf '%s\n' \
+              'darwin-amd64 pkg' \
+              'darwin-arm64 pkg' \
+              'linux-amd64 deb' \
+              'linux-amd64 rpm' \
+              'linux-arm64 deb' \
+              'linux-arm64 rpm') \
+            <(awk -F '\t' '{print $1 " " $2}' "$RUNNER_TEMP/connector-package-scan.tsv" | sort)
+          : > "$RUNNER_TEMP/connector-vulnerability-targets.tsv"
+          while IFS=$'\t' read -r target format artifact artifact_sha sbom sbom_sha; do
+            [[ "$target" =~ ^(linux|darwin)-(amd64|arm64)$ ]]
+            [[ "$format" =~ ^(deb|rpm|pkg)$ ]]
+            [[ "$artifact" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            [[ "$artifact_sha" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$sbom" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            [[ "$sbom_sha" =~ ^[0-9a-f]{64}$ ]]
+            test "$(sha256sum "$RELEASE_DIR/$artifact" | cut -d ' ' -f 1)" = "$artifact_sha"
+            test "$(sha256sum "$RELEASE_DIR/$sbom" | cut -d ' ' -f 1)" = "$sbom_sha"
+            name="connector-${target}-${format}"
+            install -m 0600 "$RELEASE_DIR/$artifact" \
+              "$VULNERABILITY_DIR/connector/$artifact"
+            install -m 0600 "$RELEASE_DIR/$sbom" \
+              "$VULNERABILITY_DIR/connector/$sbom"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "$name" "$target" "$format" "$artifact_sha" "$sbom" "$sbom_sha" \
+              >> "$RUNNER_TEMP/connector-vulnerability-targets.tsv"
+          done < "$RUNNER_TEMP/connector-package-scan.tsv"
+
+          jq -Rn '[
+            inputs
+            | split("\t")
+            | {
+                name: .[0],
+                report_path: ("vulnerability-" + .[0] + ".json"),
+                scan_execution_path: ("scan-execution-" + .[0] + ".json")
+              }
+          ] | sort_by(.name)' < "$RUNNER_TEMP/connector-vulnerability-targets.tsv" \
+            > "$VULNERABILITY_DIR/vulnerability-targets.json"
+          while IFS=$'\t' read -r name target format artifact_sha sbom sbom_sha; do
+            [[ "$name" =~ ^connector-(linux|darwin)-(amd64|arm64)-(deb|rpm|pkg)$ ]]
+            [[ "$target" =~ ^(linux|darwin)-(amd64|arm64)$ ]]
+            [[ "$format" =~ ^(deb|rpm|pkg)$ ]]
+            [[ "$artifact_sha" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$sbom" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            [[ "$sbom_sha" =~ ^[0-9a-f]{64}$ ]]
+            selector=$(jq -cnS --arg target "$target" --arg format "$format" \
+              '{package_format:$format,target_id:$target}')
+            python3 -I scripts/run-vulnerability-scan.py \
+              --policy security/vulnerability-policy.json \
+              --scanner "$TRIVY" \
+              --scanner-install-receipt "$VULNERABILITY_DIR/trivy-install-receipt.json" \
+              --cache-dir "$cache" \
+              --config "$empty_config" \
+              --ignorefile "$empty_ignore" \
+              --vulnerability-db-metadata "$VULNERABILITY_DIR/trivy-db-metadata.json" \
+              --vulnerability-db "$VULNERABILITY_DIR/trivy.db" \
+              --vulnerability-db-oci-layout "$VULNERABILITY_DIR/trivy-db-oci" \
+              --java-db-metadata "$VULNERABILITY_DIR/trivy-java-db-metadata.json" \
+              --java-db "$VULNERABILITY_DIR/trivy-java.db" \
+              --java-db-oci-layout "$VULNERABILITY_DIR/trivy-java-db-oci" \
+              --target-name "$name" \
+              --target-kind file \
+              --target-identity "sha256:$artifact_sha" \
+              --subject "$name.$sbom_sha.spdx.json" \
+              --subject-file "$VULNERABILITY_DIR/connector/$sbom" \
+              --release-root-id connector \
+              --release-root-kind connector-manifest-v1 \
+              --release-root-selector "$selector" \
+              --raw-report "$VULNERABILITY_DIR/vulnerability-$name.raw.json" \
+              --report "$VULNERABILITY_DIR/vulnerability-$name.json" \
+              --execution-receipt "$VULNERABILITY_DIR/scan-execution-$name.json"
+          done < "$RUNNER_TEMP/connector-vulnerability-targets.tsv"
+
+          jq -n \
+            --arg profile connector-release \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg source_repository "https://github.com/${GITHUB_REPOSITORY}" \
+            --slurpfile targets "$VULNERABILITY_DIR/vulnerability-targets.json" \
+            '{
+              format_version: 1,
+              profile: $profile,
+              source_commit: $source_commit,
+              source_repository: $source_repository,
+              core_roots: [{
+                id: "connector",
+                kind: "connector-manifest-v1",
+                path: "connector/manifest.json",
+                signature_bundle_path: "connector/manifest.json.sigstore.json"
+              }],
+              targets: $targets[0]
+            }' > "$VULNERABILITY_DIR/vulnerability-inputs.json"
+          python3 -I scripts/build-vulnerability-manifest.py \
+            --inputs "$VULNERABILITY_DIR/vulnerability-inputs.json" \
+            --policy security/vulnerability-policy.json \
+            --output "$VULNERABILITY_DIR/vulnerability-manifest.json"
+          rm "$VULNERABILITY_DIR/vulnerability-inputs.json" \
+            "$VULNERABILITY_DIR/vulnerability-targets.json"
+          python3 -I scripts/check-vulnerabilities.py create-receipt \
+            --manifest "$VULNERABILITY_DIR/vulnerability-manifest.json" \
+            --policy security/vulnerability-policy.json \
+            --dispositions "$VULNERABILITY_DIR/vulnerability-dispositions.json" \
+            --profile connector-release \
+            --source-commit "$GITHUB_SHA" \
+            --receipt "$VULNERABILITY_DIR/vulnerability-receipt.json"
+          jq -e '
+              (.core_roots | length) == 1
+              and (.report_sha256 | length) == 6
+              and (.scanned_package_counts | length) == 6
+              and all(.scanned_package_counts[];
+                type == "number" and floor == . and . > 0)
+              and (.evidence_inventory | length) == 55
+              and ([.evidence_inventory[].path
+                | select(startswith("connector/"))] | length) == 14
+              and ([.evidence_inventory[].path
+                | select(startswith("connector/") | not)] | length) == 41
+            ' "$VULNERABILITY_DIR/vulnerability-receipt.json" >/dev/null
+          diff -u \
+            <(jq -r '.evidence_inventory[].path, "vulnerability-receipt.json"' \
+              "$VULNERABILITY_DIR/vulnerability-receipt.json" | sort) \
+            <(cd "$VULNERABILITY_DIR" && find . -type f | sed 's#^\./##' | sort)
+
+      - name: Transfer the closed vulnerability evidence
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: connector-vulnerability-${{ github.run_attempt }}
+          path: dist/connector-vulnerability
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  vulnerability-attest:
+    name: Sign and verify the canonical vulnerability receipt
+    needs: vulnerability-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: connector-release-sigstore
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the independently trusted receipt verifier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Receive the closed vulnerability evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-vulnerability-${{ github.run_attempt }}
+          path: dist/connector-vulnerability
+
+      - name: Recheck the remote annotated tag before requesting an OIDC identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${GITHUB_REF_NAME}" "refs/tags/${GITHUB_REF_NAME}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$GITHUB_SHA"
+
+      - name: Replay admission, sign the receipt, and verify exact claims
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
+          cosign verify-blob "$VULNERABILITY_DIR/connector/manifest.json" \
+            --bundle "$VULNERABILITY_DIR/connector/manifest.json.sigstore.json" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" >/dev/null
+          python3 -I scripts/check-vulnerabilities.py verify-receipt \
+            --manifest "$VULNERABILITY_DIR/vulnerability-manifest.json" \
+            --policy security/vulnerability-policy.json \
+            --dispositions "$VULNERABILITY_DIR/vulnerability-dispositions.json" \
+            --profile connector-release \
+            --source-commit "$GITHUB_SHA" \
+            --receipt "$VULNERABILITY_DIR/vulnerability-receipt.json" \
+            --max-receipt-age-hours 24
+          jq -e '
+              (.core_roots | length) == 1
+              and (.report_sha256 | length) == 6
+              and (.scanned_package_counts | length) == 6
+              and all(.scanned_package_counts[];
+                type == "number" and floor == . and . > 0)
+              and (.evidence_inventory | length) == 55
+              and ([.evidence_inventory[].path
+                | select(startswith("connector/"))] | length) == 14
+              and ([.evidence_inventory[].path
+                | select(startswith("connector/") | not)] | length) == 41
+            ' "$VULNERABILITY_DIR/vulnerability-receipt.json" >/dev/null
+          bundle="$VULNERABILITY_DIR/vulnerability-receipt.sigstore.json"
+          cosign sign-blob --yes --bundle "$bundle" \
+            "$VULNERABILITY_DIR/vulnerability-receipt.json"
+          cosign verify-blob "$VULNERABILITY_DIR/vulnerability-receipt.json" \
+            --bundle "$bundle" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF"
+          diff -u \
+            <(jq -r '
+                .evidence_inventory[].path,
+                "vulnerability-receipt.json",
+                "vulnerability-receipt.sigstore.json"
+              ' "$VULNERABILITY_DIR/vulnerability-receipt.json" | sort) \
+            <(cd "$VULNERABILITY_DIR" && find . -type f | sed 's#^\./##' | sort)
+          public="$RUNNER_TEMP/connector-vulnerability-public"
+          install -d -m 0700 "$public"
+          version=${GITHUB_REF_NAME#connector-v}
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          python3 -I connector/release/release.py stage-public-vulnerability-assets \
+            --evidence-directory "$VULNERABILITY_DIR" \
+            --receipt "$VULNERABILITY_DIR/vulnerability-receipt.json" \
+            --receipt-bundle "$VULNERABILITY_DIR/vulnerability-receipt.sigstore.json" \
+            --manifest "$VULNERABILITY_DIR/vulnerability-manifest.json" \
+            --source-commit "$GITHUB_SHA" \
+            --version "$version" \
+            --output-directory "$public"
+          test "$(find "$public" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 43
+
+      - name: Transfer the signed vulnerability evidence
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: connector-vulnerability-signed-${{ github.run_attempt }}
+          path: dist/connector-vulnerability
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Transfer the exact flat public vulnerability projection
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: connector-vulnerability-public-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/connector-vulnerability-public
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    name: Publish immutable release
+    needs:
+      - attest
+      - verify-linux-signed
+      - vulnerability-attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     environment: connector-release-publish
     permissions:
       contents: write
@@ -204,12 +802,71 @@ jobs:
           name: connector-signed-${{ github.run_attempt }}
           path: dist/connector
 
-      - name: Require repository release immutability before publication
+      - name: Add only the signed flat vulnerability release projection
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-vulnerability-public-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/connector-vulnerability-public
+
+      - name: Require the exact core and vulnerability asset union
+        shell: bash
+        run: |
+          set -euo pipefail
+          vulnerability="$RUNNER_TEMP/connector-vulnerability-public"
+          receipt="$vulnerability/vulnerability-receipt.json"
+          test -f "$receipt"
+          jq -e '
+              (.core_roots | length) == 1
+              and (.report_sha256 | length) == 6
+              and (.scanned_package_counts | length) == 6
+              and (.evidence_inventory | length) == 55
+              and ([.evidence_inventory[].path
+                | select(startswith("connector/"))] | length) == 14
+              and ([.evidence_inventory[].path
+                | select(startswith("connector/") | not)] | length) == 41
+            ' "$receipt" >/dev/null
+          test "$(find "$vulnerability" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 43
+          test "$(find "$vulnerability" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = 0
+          evidence_count=0
+          for source in "$vulnerability"/*; do
+            name=$(basename "$source")
+            [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            test -f "$source"
+            test ! -L "$source"
+            case "$name" in
+              vulnerability-receipt.json|vulnerability-receipt.sigstore.json) ;;
+              vulnerability-evidence-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*)
+                evidence_count=$((evidence_count + 1))
+                ;;
+              *) exit 1 ;;
+            esac
+            test ! -e "$RELEASE_DIR/$name"
+            install -m 0600 "$source" "$RELEASE_DIR/$name"
+          done
+          test "$evidence_count" = 41
+
+      - name: Require the remote tag and repository immutability before publication
         env:
           GH_TOKEN: ${{ secrets.IMMUTABLE_RELEASES_READ_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+          tag_object=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}")
+          object_type=$(printf '%s' "$tag_object" | jq -r .object.type)
+          object_sha=$(printf '%s' "$tag_object" | jq -r .object.sha)
+          while [ "$object_type" = tag ]; do
+            tag_object=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")
+            object_type=$(printf '%s' "$tag_object" | jq -r .object.type)
+            object_sha=$(printf '%s' "$tag_object" | jq -r .object.sha)
+          done
+          test "$object_type" = commit
+          test "$object_sha" = "$GITHUB_SHA"
           enabled=$(gh api \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2026-03-10" \
@@ -224,15 +881,667 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          assert_remote_tag() {
+            tag_object=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}")
+            object_type=$(printf '%s' "$tag_object" | jq -r .object.type)
+            object_sha=$(printf '%s' "$tag_object" | jq -r .object.sha)
+            while [ "$object_type" = tag ]; do
+              tag_object=$(gh api \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2026-03-10" \
+                "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")
+              object_type=$(printf '%s' "$tag_object" | jq -r .object.type)
+              object_sha=$(printf '%s' "$tag_object" | jq -r .object.sha)
+            done
+            test "$object_type" = commit
+            test "$object_sha" = "$GITHUB_SHA"
+          }
+          assert_remote_tag
           gh release create "$GITHUB_REF_NAME" "$RELEASE_DIR"/* \
             --draft \
             --verify-tag \
+            --target "$GITHUB_SHA" \
             --latest=false \
             --title "Connector ${GITHUB_REF_NAME#connector-v}" \
-            --notes "Protected Connector release. Verify manifest.json with the exact issuer, workflow identity, source commit, and push trigger documented in connector/release/README.md."
+            --notes "Protected native Connector release with generated self-service metadata and signed vulnerability admission. Verify the exact core/vulnerability asset union with the issuer, workflow identity, source commit, native trust, and push trigger documented in connector/release/README.md."
+          assert_remote_tag
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false
+          assert_remote_tag
           immutable=$(gh release view "$GITHUB_REF_NAME" --json isImmutable --jq .isImmutable)
           if [ "$immutable" != "true" ]; then
             echo "::error::Published release is mutable; enable GitHub immutable releases and treat these assets as untrusted."
             exit 1
           fi
+
+  verify-public-release-macos:
+    name: Re-download and verify the public immutable release on macOS
+    needs: publish
+    runs-on: macos-15
+    timeout-minutes: 20
+    environment: connector-release-sigstore
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the independently trusted verifier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Download every asset without authentication and recheck the public tag
+        id: public
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^connector-v[0-9A-Za-z.-]+$ ]]
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${RELEASE_REPOSITORY}.git" \
+            "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${RELEASE_TAG}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$EXPECTED_COMMIT"
+
+          download_dir=$(mktemp -d "$RUNNER_TEMP/connector-public.XXXXXX")
+          response="$RUNNER_TEMP/connector-release.json"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 \
+            "https://api.github.com/repos/${RELEASE_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+            --output "$response"
+          jq -e --arg tag "$RELEASE_TAG" '
+            .tag_name == $tag and
+            .draft == false and
+            .prerelease == false and
+            .immutable == true and
+            (.assets | length > 0) and
+            all(.assets[]; .state == "uploaded")
+          ' "$response" >/dev/null
+          jq -r '.assets[] | [.name, .browser_download_url] | @tsv' "$response" > "$RUNNER_TEMP/connector-assets.tsv"
+          while IFS=$'\t' read -r name url; do
+            [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            test "$url" = "https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}/${name}"
+            test ! -e "$download_dir/$name"
+            curl --fail --silent --show-error --location --retry 3 \
+              --proto '=https' --tlsv1.2 \
+              "$url" --output "$download_dir/$name"
+          done < "$RUNNER_TEMP/connector-assets.tsv"
+          test "$(find "$download_dir" -type f | wc -l | tr -d ' ')" = "$(jq '.assets | length' "$response")"
+          printf 'path=%s\n' "$download_dir" >> "$GITHUB_OUTPUT"
+          printf 'response=%s\n' "$response" >> "$GITHUB_OUTPUT"
+
+      - name: Verify GitHub's immutable-release attestation for every downloaded asset
+        env:
+          DOWNLOAD_DIR: ${{ steps.public.outputs.path }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_attestation="$RUNNER_TEMP/connector-release-attestation.json"
+          gh release verify "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" \
+            --format json > "$release_attestation"
+          jq -e \
+            --arg commit "$GITHUB_SHA" \
+            --arg repository "$RELEASE_REPOSITORY" \
+            --arg tag "$RELEASE_TAG" '
+              .verificationResult.statement
+              | .predicate.repository == $repository
+                and .predicate.tag == $tag
+                and any(.subject[];
+                  .uri == ("pkg:github/" + $repository + "@" + $tag)
+                  and .digest.sha1 == $commit)
+            ' "$release_attestation" >/dev/null
+          for asset in "$DOWNLOAD_DIR"/*; do
+            gh release verify-asset "$RELEASE_TAG" "$asset" --repo "$RELEASE_REPOSITORY"
+          done
+
+      - name: Split the fixed core and vulnerability asset union
+        id: split
+        env:
+          DOWNLOAD_DIR: ${{ steps.public.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          core=$(mktemp -d "$RUNNER_TEMP/connector-core-macos.XXXXXX")
+          vulnerability=$(mktemp -d "$RUNNER_TEMP/connector-vulnerability-macos.XXXXXX")
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
+          cosign verify-blob "$DOWNLOAD_DIR/vulnerability-receipt.json" \
+            --bundle "$DOWNLOAD_DIR/vulnerability-receipt.sigstore.json" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" >/dev/null
+          version=${GITHUB_REF_NAME#connector-v}
+          python3 -I connector/release/release.py \
+            reconstruct-public-vulnerability-release \
+            --public-directory "$DOWNLOAD_DIR" \
+            --core-output-directory "$core" \
+            --evidence-output-directory "$vulnerability" \
+            --source-commit "$GITHUB_SHA" \
+            --version "$version"
+          printf 'core=%s\n' "$core" >> "$GITHUB_OUTPUT"
+          printf 'vulnerability=%s\n' "$vulnerability" >> "$GITHUB_OUTPUT"
+
+      - name: Canonicalize the exact immutable public Release descriptor
+        env:
+          RELEASE_RESPONSE: ${{ steps.public.outputs.response }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 connector/release/release.py create-public-release-descriptor \
+            --github-release-response "$RELEASE_RESPONSE" \
+            --vulnerability-receipt \
+              "${{ steps.split.outputs.vulnerability }}/vulnerability-receipt.json" \
+            --source-commit "$GITHUB_SHA" \
+            --github-run-id "$GITHUB_RUN_ID" \
+            --github-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/connector-public-release-descriptor.json"
+
+      - name: Re-run the fail-closed consumer verifier on the public bytes
+        env:
+          APPLE_APPLICATION_IDENTITY: ${{ vars.MACOS_EXPECTED_APPLICATION_IDENTITY }}
+          APPLE_INSTALLER_IDENTITY: ${{ vars.MACOS_EXPECTED_INSTALLER_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.MACOS_EXPECTED_TEAM_ID }}
+          CORE_DIR: ${{ steps.split.outputs.core }}
+          RPM_SIGNING_FINGERPRINT: ${{ vars.RPM_EXPECTED_SIGNING_FINGERPRINT }}
+          VULNERABILITY_DIR: ${{ steps.split.outputs.vulnerability }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
+          python3 connector/release/release.py verify \
+            --output "$CORE_DIR" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger "push" \
+            --apple-team-id "$APPLE_TEAM_ID" \
+            --apple-signing-identity "$APPLE_APPLICATION_IDENTITY" \
+            --apple-installer-identity "$APPLE_INSTALLER_IDENTITY" \
+            --rpm-signing-fingerprint "$RPM_SIGNING_FINGERPRINT" \
+            --target darwin-amd64 \
+            --target darwin-arm64 \
+            --verification-receipt \
+              "$RUNNER_TEMP/connector-public-verification-darwin.json" \
+            --github-run-id "$GITHUB_RUN_ID" \
+            --github-run-attempt "$GITHUB_RUN_ATTEMPT"
+
+          install -d -m 0700 "$VULNERABILITY_DIR/connector"
+          install -m 0600 "$CORE_DIR/manifest.json" \
+            "$VULNERABILITY_DIR/connector/manifest.json"
+          install -m 0600 "$CORE_DIR/manifest.json.sigstore.json" \
+            "$VULNERABILITY_DIR/connector/manifest.json.sigstore.json"
+          jq -r '
+            .targets[] as $target
+            | $target.packages[]
+            | [$target.id, .format, .artifact.filename, .sbom.filename, .sbom.sha256]
+            | @tsv
+          ' "$CORE_DIR/manifest.json" > "$RUNNER_TEMP/connector-vulnerability-inputs-macos.tsv"
+          diff -u \
+            <(printf '%s\n' \
+              'darwin-amd64 pkg' \
+              'darwin-arm64 pkg' \
+              'linux-amd64 deb' \
+              'linux-amd64 rpm' \
+              'linux-arm64 deb' \
+              'linux-arm64 rpm') \
+            <(awk -F '\t' '{print $1 " " $2}' "$RUNNER_TEMP/connector-vulnerability-inputs-macos.tsv" | sort)
+          while IFS=$'\t' read -r target format artifact sbom sbom_sha; do
+            [[ "$artifact" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            [[ "$sbom" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            [[ "$sbom_sha" =~ ^[0-9a-f]{64}$ ]]
+            test "$(shasum -a 256 "$CORE_DIR/$sbom" | cut -d ' ' -f 1)" = "$sbom_sha"
+            install -m 0600 "$CORE_DIR/$artifact" \
+              "$VULNERABILITY_DIR/connector/$artifact"
+            install -m 0600 "$CORE_DIR/$sbom" \
+              "$VULNERABILITY_DIR/connector/$sbom"
+          done < "$RUNNER_TEMP/connector-vulnerability-inputs-macos.tsv"
+          cosign verify-blob "$VULNERABILITY_DIR/connector/manifest.json" \
+            --bundle "$VULNERABILITY_DIR/connector/manifest.json.sigstore.json" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" >/dev/null
+          cosign verify-blob "$VULNERABILITY_DIR/vulnerability-receipt.json" \
+            --bundle "$VULNERABILITY_DIR/vulnerability-receipt.sigstore.json" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF"
+          python3 -I scripts/check-vulnerabilities.py verify-receipt \
+            --manifest "$VULNERABILITY_DIR/vulnerability-manifest.json" \
+            --policy security/vulnerability-policy.json \
+            --dispositions "$VULNERABILITY_DIR/vulnerability-dispositions.json" \
+            --profile connector-release \
+            --source-commit "$GITHUB_SHA" \
+            --receipt "$VULNERABILITY_DIR/vulnerability-receipt.json" \
+            --max-receipt-age-hours 24
+          diff -u \
+            <(jq -r '
+                .evidence_inventory[].path,
+                "vulnerability-receipt.json",
+                "vulnerability-receipt.sigstore.json"
+              ' "$VULNERABILITY_DIR/vulnerability-receipt.json" | sort) \
+            <(cd "$VULNERABILITY_DIR" && find . -type f | sed 's#^\./##' | sort)
+
+      - name: Transfer the macOS public-verification receipt
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: connector-public-verification-darwin-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/connector-public-verification-darwin.json
+            ${{ runner.temp }}/connector-public-release-descriptor.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  verify-public-release-linux:
+    name: Re-download and verify the public immutable release on Linux
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: connector-release-sigstore
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the independently trusted verifier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Install native Linux verification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends rpm gnupg
+          command -v dpkg-deb
+          command -v rpmkeys
+
+      - name: Download every asset without authentication and recheck the public tag
+        id: public
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^connector-v[0-9A-Za-z.-]+$ ]]
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${RELEASE_REPOSITORY}.git" \
+            "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${RELEASE_TAG}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$EXPECTED_COMMIT"
+
+          download_dir=$(mktemp -d "$RUNNER_TEMP/connector-public-linux.XXXXXX")
+          response="$RUNNER_TEMP/connector-release-linux.json"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 \
+            "https://api.github.com/repos/${RELEASE_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+            --output "$response"
+          jq -e --arg tag "$RELEASE_TAG" '
+            .tag_name == $tag and
+            .draft == false and
+            .prerelease == false and
+            .immutable == true and
+            (.assets | length > 0) and
+            all(.assets[]; .state == "uploaded")
+          ' "$response" >/dev/null
+          jq -r '.assets[] | [.name, .browser_download_url] | @tsv' "$response" > "$RUNNER_TEMP/connector-assets-linux.tsv"
+          while IFS=$'\t' read -r name url; do
+            [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            test "$url" = "https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}/${name}"
+            test ! -e "$download_dir/$name"
+            curl --fail --silent --show-error --location --retry 3 \
+              --proto '=https' --tlsv1.2 \
+              "$url" --output "$download_dir/$name"
+          done < "$RUNNER_TEMP/connector-assets-linux.tsv"
+          test "$(find "$download_dir" -type f | wc -l | tr -d ' ')" = "$(jq '.assets | length' "$response")"
+          printf 'path=%s\n' "$download_dir" >> "$GITHUB_OUTPUT"
+          printf 'response=%s\n' "$response" >> "$GITHUB_OUTPUT"
+
+      - name: Verify GitHub's immutable-release attestation for every downloaded asset
+        env:
+          DOWNLOAD_DIR: ${{ steps.public.outputs.path }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_attestation="$RUNNER_TEMP/connector-release-attestation-linux.json"
+          gh release verify "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" \
+            --format json > "$release_attestation"
+          jq -e \
+            --arg commit "$GITHUB_SHA" \
+            --arg repository "$RELEASE_REPOSITORY" \
+            --arg tag "$RELEASE_TAG" '
+              .verificationResult.statement
+              | .predicate.repository == $repository
+                and .predicate.tag == $tag
+                and any(.subject[];
+                  .uri == ("pkg:github/" + $repository + "@" + $tag)
+                  and .digest.sha1 == $commit)
+            ' "$release_attestation" >/dev/null
+          for asset in "$DOWNLOAD_DIR"/*; do
+            gh release verify-asset "$RELEASE_TAG" "$asset" --repo "$RELEASE_REPOSITORY"
+          done
+
+      - name: Split the fixed core and vulnerability asset union
+        id: split
+        env:
+          DOWNLOAD_DIR: ${{ steps.public.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          core=$(mktemp -d "$RUNNER_TEMP/connector-core-linux.XXXXXX")
+          vulnerability=$(mktemp -d "$RUNNER_TEMP/connector-vulnerability-linux.XXXXXX")
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
+          cosign verify-blob "$DOWNLOAD_DIR/vulnerability-receipt.json" \
+            --bundle "$DOWNLOAD_DIR/vulnerability-receipt.sigstore.json" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" >/dev/null
+          version=${GITHUB_REF_NAME#connector-v}
+          python3 -I connector/release/release.py \
+            reconstruct-public-vulnerability-release \
+            --public-directory "$DOWNLOAD_DIR" \
+            --core-output-directory "$core" \
+            --evidence-output-directory "$vulnerability" \
+            --source-commit "$GITHUB_SHA" \
+            --version "$version"
+          printf 'core=%s\n' "$core" >> "$GITHUB_OUTPUT"
+          printf 'vulnerability=%s\n' "$vulnerability" >> "$GITHUB_OUTPUT"
+
+      - name: Canonicalize the exact immutable public Release descriptor
+        env:
+          RELEASE_RESPONSE: ${{ steps.public.outputs.response }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 connector/release/release.py create-public-release-descriptor \
+            --github-release-response "$RELEASE_RESPONSE" \
+            --vulnerability-receipt \
+              "${{ steps.split.outputs.vulnerability }}/vulnerability-receipt.json" \
+            --source-commit "$GITHUB_SHA" \
+            --github-run-id "$GITHUB_RUN_ID" \
+            --github-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/connector-public-release-descriptor.json"
+
+      - name: Re-run the fail-closed consumer verifier on the public bytes
+        env:
+          APPLE_APPLICATION_IDENTITY: ${{ vars.MACOS_EXPECTED_APPLICATION_IDENTITY }}
+          APPLE_INSTALLER_IDENTITY: ${{ vars.MACOS_EXPECTED_INSTALLER_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.MACOS_EXPECTED_TEAM_ID }}
+          CORE_DIR: ${{ steps.split.outputs.core }}
+          RPM_SIGNING_FINGERPRINT: ${{ vars.RPM_EXPECTED_SIGNING_FINGERPRINT }}
+          VULNERABILITY_DIR: ${{ steps.split.outputs.vulnerability }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
+          python3 connector/release/release.py verify \
+            --output "$CORE_DIR" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger "push" \
+            --apple-team-id "$APPLE_TEAM_ID" \
+            --apple-signing-identity "$APPLE_APPLICATION_IDENTITY" \
+            --apple-installer-identity "$APPLE_INSTALLER_IDENTITY" \
+            --rpm-signing-fingerprint "$RPM_SIGNING_FINGERPRINT" \
+            --target linux-amd64 \
+            --target linux-arm64 \
+            --verification-receipt \
+              "$RUNNER_TEMP/connector-public-verification-linux.json" \
+            --github-run-id "$GITHUB_RUN_ID" \
+            --github-run-attempt "$GITHUB_RUN_ATTEMPT"
+
+          install -d -m 0700 "$VULNERABILITY_DIR/connector"
+          install -m 0600 "$CORE_DIR/manifest.json" \
+            "$VULNERABILITY_DIR/connector/manifest.json"
+          install -m 0600 "$CORE_DIR/manifest.json.sigstore.json" \
+            "$VULNERABILITY_DIR/connector/manifest.json.sigstore.json"
+          jq -r '
+            .targets[] as $target
+            | $target.packages[]
+            | [$target.id, .format, .artifact.filename, .sbom.filename, .sbom.sha256]
+            | @tsv
+          ' "$CORE_DIR/manifest.json" > "$RUNNER_TEMP/connector-vulnerability-inputs-linux.tsv"
+          diff -u \
+            <(printf '%s\n' \
+              'darwin-amd64 pkg' \
+              'darwin-arm64 pkg' \
+              'linux-amd64 deb' \
+              'linux-amd64 rpm' \
+              'linux-arm64 deb' \
+              'linux-arm64 rpm') \
+            <(awk -F '\t' '{print $1 " " $2}' "$RUNNER_TEMP/connector-vulnerability-inputs-linux.tsv" | sort)
+          while IFS=$'\t' read -r target format artifact sbom sbom_sha; do
+            [[ "$artifact" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            [[ "$sbom" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            [[ "$sbom_sha" =~ ^[0-9a-f]{64}$ ]]
+            test "$(sha256sum "$CORE_DIR/$sbom" | cut -d ' ' -f 1)" = "$sbom_sha"
+            install -m 0600 "$CORE_DIR/$artifact" \
+              "$VULNERABILITY_DIR/connector/$artifact"
+            install -m 0600 "$CORE_DIR/$sbom" \
+              "$VULNERABILITY_DIR/connector/$sbom"
+          done < "$RUNNER_TEMP/connector-vulnerability-inputs-linux.tsv"
+          cosign verify-blob "$VULNERABILITY_DIR/connector/manifest.json" \
+            --bundle "$VULNERABILITY_DIR/connector/manifest.json.sigstore.json" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" >/dev/null
+          cosign verify-blob "$VULNERABILITY_DIR/vulnerability-receipt.json" \
+            --bundle "$VULNERABILITY_DIR/vulnerability-receipt.sigstore.json" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF"
+          python3 -I scripts/check-vulnerabilities.py verify-receipt \
+            --manifest "$VULNERABILITY_DIR/vulnerability-manifest.json" \
+            --policy security/vulnerability-policy.json \
+            --dispositions "$VULNERABILITY_DIR/vulnerability-dispositions.json" \
+            --profile connector-release \
+            --source-commit "$GITHUB_SHA" \
+            --receipt "$VULNERABILITY_DIR/vulnerability-receipt.json" \
+            --max-receipt-age-hours 24
+          diff -u \
+            <(jq -r '
+                .evidence_inventory[].path,
+                "vulnerability-receipt.json",
+                "vulnerability-receipt.sigstore.json"
+              ' "$VULNERABILITY_DIR/vulnerability-receipt.json" | sort) \
+            <(cd "$VULNERABILITY_DIR" && find . -type f | sed 's#^\./##' | sort)
+
+      - name: Transfer the Linux public-verification receipt
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: connector-public-verification-linux-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/connector-public-verification-linux.json
+            ${{ runner.temp }}/connector-public-release-descriptor.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  aggregate-public-verification:
+    name: Aggregate and sign Linux, macOS, public Release, and vulnerability evidence
+    needs:
+      - verify-public-release-macos
+      - verify-public-release-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: connector-release-sigstore
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the independently trusted aggregate verifier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install the pinned Sigstore client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6"
+
+      - name: Receive the independently generated public-verification receipts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-public-verification-darwin-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/connector-public-darwin
+
+      - name: Receive the Linux public-verification receipt
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-public-verification-linux-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/connector-public-linux
+
+      - name: Receive the signed vulnerability evidence used by the public Release
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: connector-vulnerability-signed-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/connector-vulnerability
+
+      - name: Require both platforms to describe byte-identical public state
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp \
+            "$RUNNER_TEMP/connector-public-darwin/connector-public-release-descriptor.json" \
+            "$RUNNER_TEMP/connector-public-linux/connector-public-release-descriptor.json"
+          test -f "$RUNNER_TEMP/connector-public-darwin/connector-public-verification-darwin.json"
+          test -f "$RUNNER_TEMP/connector-public-linux/connector-public-verification-linux.json"
+
+      - name: Aggregate the complete public verification without requesting OIDC
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          output="$RUNNER_TEMP/connector-public-aggregate"
+          mkdir -p "$output"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
+          python3 connector/release/release.py aggregate-verification-receipts \
+            --linux-receipt \
+              "$RUNNER_TEMP/connector-public-linux/connector-public-verification-linux.json" \
+            --darwin-receipt \
+              "$RUNNER_TEMP/connector-public-darwin/connector-public-verification-darwin.json" \
+            --public-release-descriptor \
+              "$RUNNER_TEMP/connector-public-linux/connector-public-release-descriptor.json" \
+            --vulnerability-evidence-directory \
+              "$RUNNER_TEMP/connector-vulnerability" \
+            --vulnerability-receipt \
+              "$RUNNER_TEMP/connector-vulnerability/vulnerability-receipt.json" \
+            --vulnerability-receipt-bundle \
+              "$RUNNER_TEMP/connector-vulnerability/vulnerability-receipt.sigstore.json" \
+            --vulnerability-manifest \
+              "$RUNNER_TEMP/connector-vulnerability/vulnerability-manifest.json" \
+            --vulnerability-certificate-oidc-issuer \
+              https://token.actions.githubusercontent.com \
+            --vulnerability-certificate-identity "$identity" \
+            --vulnerability-certificate-github-workflow-sha "$GITHUB_SHA" \
+            --vulnerability-certificate-github-workflow-trigger push \
+            --output "$output/connector-public-verification-aggregate.json"
+          install -m 0600 \
+            "$RUNNER_TEMP/connector-public-linux/connector-public-release-descriptor.json" \
+            "$output/connector-public-release-descriptor.json"
+
+      - name: Recheck the remote annotated tag before requesting an OIDC identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${GITHUB_REF_NAME}" "refs/tags/${GITHUB_REF_NAME}^{}")
+          direct=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${GITHUB_REF_NAME}^{}" '$2 == ref {print $1}')
+          test -n "$direct"
+          test -n "$peeled"
+          test "$direct" != "$peeled"
+          test "$peeled" = "$GITHUB_SHA"
+
+      - name: Sign and independently verify the aggregate receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/connector-public-aggregate"
+          aggregate="$output/connector-public-verification-aggregate.json"
+          bundle="$output/connector-public-verification-aggregate.json.sigstore.json"
+          descriptor="$output/connector-public-release-descriptor.json"
+          cosign sign-blob --yes --bundle "$bundle" "$aggregate"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
+          release_id=$(jq -er '.release_id' "$descriptor")
+          python3 connector/release/release.py verify-aggregate \
+            --aggregate "$aggregate" \
+            --bundle "$bundle" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger push \
+            --expected-release-id "$release_id" \
+            --expected-workflow-run-id "$GITHUB_RUN_ID" \
+            --expected-workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --expected-tag "$GITHUB_REF_NAME" \
+            --expected-source-commit "$GITHUB_SHA"
+
+      - name: Transfer the signed aggregate for the subsequent Control release
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: connector-public-verification-aggregate-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/connector-public-aggregate
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90

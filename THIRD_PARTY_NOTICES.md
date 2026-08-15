@@ -7,7 +7,7 @@ its original copyright and license terms.
 This source distribution includes generated Codex app-server schemas and
 embedded contract copies derived from OpenAI Codex 0.147.0, which is licensed
 under Apache-2.0. It also includes a compatibility contract recording public
-Sub2API 0.1.175 interfaces; Sub2API is licensed under LGPL-3.0-or-later. No
+Sub2API 0.1.176 interfaces; Sub2API is licensed under LGPL-3.0-or-later. No
 upstream source code from Sub2API is vendored here.
 
 The project depends on packages obtained separately by the package managers.
@@ -18,12 +18,14 @@ package's own distribution remains authoritative for its complete notices.
 | Component | Version | Relationship | License |
 | --- | --- | --- | --- |
 | OpenAI Codex | 0.147.0 | Generated protocol material | Apache-2.0 |
-| Sub2API | 0.1.175 | Compatibility contract | LGPL-3.0-or-later |
+| Sub2API | 0.1.176 | Compatibility contract | LGPL-3.0-or-later |
 | Alembic | 1.18.5 | Python runtime dependency | MIT |
 | Vue | 3.5.39 | PWA runtime dependency | MIT |
 | Pinia | 3.0.4 | PWA runtime dependency | MIT |
 | Lucide | 1.24.0 | PWA icon dependency | ISC and MIT |
-| Go standard library | 1.24.0 | Connector build/runtime dependency | BSD-3-Clause |
+| Go standard library | 1.26.5 | Connector build/runtime dependency | BSD-3-Clause |
+| Crane | 0.21.7 | Pinned OCI acquisition tool | Apache-2.0 |
+| Trivy | 0.74.0 | Pinned vulnerability scanner | Apache-2.0 |
 | coder/websocket | 1.8.14 | Connector dependency | ISC |
 | santhosh-tekuri/jsonschema | 6.0.2 | Connector dependency | Apache-2.0 |
 | dlclark/regexp2 | 1.11.0 | Test-only transitive Connector dependency | MIT |
@@ -32,6 +34,10 @@ package's own distribution remains authoritative for its complete notices.
 Exact upstream URLs, relationships, license files, and SHA-256 digests are in
 [`third_party/components.json`](third_party/components.json). Verbatim license
 and notice texts are stored below `third_party/`.
+
+The Connector is compiled with Go `1.26.5`; its `go 1.24.0` module directive is
+the source-language compatibility baseline, not the linked standard-library
+version.
 
 ## Trademark and affiliation
 

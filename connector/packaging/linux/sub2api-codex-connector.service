@@ -1,0 +1,26 @@
+[Unit]
+Description=Sub2API Codex Connector
+Documentation=https://github.com/sub2api-codex/control
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=%h/.config/sub2api-codex-connector/connector.json
+
+[Service]
+Type=simple
+Environment=XDG_CONFIG_HOME=
+ExecStart=/usr/bin/sub2api-codex-connector-ctl run-service
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target

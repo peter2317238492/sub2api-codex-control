@@ -1,0 +1,13 @@
+**
+!helper.Dockerfile
+!common.py
+!alertmanager-proxy.py
+!observability-admission.py
+!external-delivery-relay.py
+!collector/
+!collector/collector.py
+!evidence-receiver/
+!evidence-receiver/receiver.py
+!schemas/
+!schemas/external-operator-delivery-receipt.schema.json
+!schemas/release-observability-receipt.schema.json

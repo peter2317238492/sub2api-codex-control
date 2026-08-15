@@ -10,6 +10,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ADMISSION = REPO_ROOT / "deploy/scripts/bootstrap-admission.py"
+BOOTSTRAP_WRAPPER = REPO_ROOT / "deploy/scripts/bootstrap-production-unsigned.sh"
 
 API_IMAGE = f"sha256:{'a' * 64}"
 PWA_IMAGE = f"sha256:{'b' * 64}"
@@ -92,8 +94,18 @@ def create_backup_receipt(
 
     artifacts = {
         "sub2api-postgres.dump": b"PGDUMP-CUSTOM-FIXTURE\x00\x01",
+        "postgres-additional-databases.json": b'{"codex_control":"backed_up"}\n',
         "redis-logical.rdb": b"REDIS0011fixture-rdb-payload",
         "nginx-effective-config.txt": b"events {}\nhttp {}\n",
+        "docker-container-inspect.json": b"[]\n",
+        "docker-network-inspect.json": b"[]\n",
+        "docker-networks.json": b"[]\n",
+        "release-records.tar.gz": b"release-records-fixture",
+        "release-records.contents.txt": b"deployment-fixture/deployment.json\n",
+        "release-records-inventory.json": b'{"entries":[]}\n',
+        "release-evidence-inventory.json": b"[]\n",
+        "release-evidence-release-verification.json": b'{"status":"verified"}\n',
+        "release-evidence-source-verification.json": b'{"status":"verified"}\n',
     }
     for name, content in artifacts.items():
         path = snapshot / name
@@ -101,6 +113,18 @@ def create_backup_receipt(
         path.chmod(0o600)
 
     identities = container_identities()
+    release_evidence = [
+        {
+            "source": str(root / name.removeprefix("release-evidence-")),
+            "artifact": name,
+            "sha256": sha256(snapshot / name),
+            "size": (snapshot / name).stat().st_size,
+        }
+        for name in (
+            "release-evidence-release-verification.json",
+            "release-evidence-source-verification.json",
+        )
+    ]
     record = {
         "schema_version": 1,
         "status": "ready",
@@ -108,6 +132,23 @@ def create_backup_receipt(
         "snapshot_directory": snapshot.name,
         "containers": identities,
         "sources": {},
+        "release_evidence": release_evidence,
+        "docker_networks": [
+            {
+                "name": "sub2api-network",
+                "id": "9" * 64,
+                "driver": "bridge",
+                "scope": "local",
+                "internal": False,
+                "attachable": False,
+                "ingress": False,
+                "enable_ipv6": False,
+                "ipam": {"Driver": "default"},
+                "options": {},
+                "containers": [],
+            }
+        ],
+        "owner_uid": os.geteuid(),
         "redis": {
             "logical_rdb_validator": "redis-check-rdb",
             "persistence_path": "/data",
@@ -219,11 +260,11 @@ def compose_config(backup_dir: Path) -> dict[str, Any]:
         "CONTROL_CSRF_HEADER_NAME": "x-csrf-token",
         "CONTROL_SUB2API_BASE_URL": "http://sub2api:8080",
         "CONTROL_SUB2API_AUTH_ME_PATH": "/api/v1/auth/me",
-        "CONTROL_SUB2API_EXPECTED_VERSION": "0.1.175",
-        "CONTROL_SUB2API_EXPECTED_COMMIT": "93c32fa",
-        "CONTROL_SUB2API_CONTRACT_MARKER": "0.1.175/93c32fa",
+        "CONTROL_SUB2API_EXPECTED_VERSION": "0.1.176",
+        "CONTROL_SUB2API_EXPECTED_COMMIT": "e803e38",
+        "CONTROL_SUB2API_CONTRACT_MARKER": "0.1.176/e803e38",
         "CONTROL_TRUST_FORWARDED_FOR": "true",
-        "CONTROL_ALLOWED_ORIGINS_CSV": "https://control.example.com",
+        "CONTROL_ALLOWED_ORIGINS_CSV": "https://control.example.invalid",
         "CONTROL_DATABASE_PASSWORD_FILE": "/run/secrets/control_db_password",
         "CONTROL_REDIS_PASSWORD_FILE": "/run/secrets/control_redis_password",
         "CONTROL_SESSION_HMAC_SECRET_FILE": "/run/secrets/control_session_hmac_secret",
@@ -352,7 +393,7 @@ def compose_config(backup_dir: Path) -> dict[str, Any]:
         },
         "networks": {
             "sub2api-network": {
-                "name": "sub2api-network",
+                "name": "sub2api-deploy_sub2api-network",
                 "external": True,
             },
             "pwa-network": {
@@ -513,11 +554,121 @@ class BackupReceiptTests(unittest.TestCase):
             str(self.result_file),
             "--max-age-seconds",
             "900",
+            "--expected-owner-uid",
+            str(os.geteuid()),
             "--current-identities",
             str(self.identities_file),
             success=success,
         )
         return value
+
+    def make_runtime_attestation(self) -> Path:
+        path = self.root / "sub2api-before.json"
+        write_json(
+            path,
+            {
+                "format_version": 2,
+                "admission_profile": "legacy-self-updated-production-v1",
+                "binary_sha256": "4" * 64,
+                "container_id": self.identities["sub2api"]["container_id"],
+                "contract_sha256": "5" * 64,
+                "image_digest": f"weishaw/sub2api@sha256:{'6' * 64}",
+                "image_id": self.identities["sub2api"]["image_id"],
+                "runtime_built_at": "2026-08-10T00:00:00Z",
+                "runtime_commit": "7" * 40,
+                "runtime_version": "0.1.175",
+            },
+        )
+        return path
+
+    def make_stale_exception(self, *, created_at: datetime) -> tuple[Path, Path, str]:
+        record = json.loads((self.snapshot / "backup-record.json").read_text())
+        record["created_at"] = created_at.isoformat().replace("+00:00", "Z")
+        write_json(self.snapshot / "backup-record.json", record)
+        refresh_backup_manifest(self.result_file, self.snapshot)
+        runtime = self.make_runtime_attestation()
+        deployment_id = str(uuid.uuid4())
+        issued_at = datetime.now(UTC) - timedelta(seconds=30)
+        exception = self.root / "stale-exception.json"
+        write_json(
+            exception,
+            {
+                "schema_version": 1,
+                "type": "stale-production-backup-exception-v1",
+                "status": "approved",
+                "scope": "unsigned-first-deployment-only",
+                "exception_id": str(uuid.uuid4()),
+                "deployment_id": deployment_id,
+                "issued_at": issued_at.isoformat().replace("+00:00", "Z"),
+                "reason": "user-prohibited-repeat-backup",
+                "receipt_path": str(self.result_file),
+                "receipt_sha256": sha256(self.result_file),
+                "snapshot_directory": str(self.snapshot),
+                "manifest_sha256": sha256(self.snapshot / "manifest.sha256"),
+                "backup_created_at": created_at.isoformat().replace("+00:00", "Z"),
+                "max_age_seconds": 691200,
+                "expires_at": (issued_at + timedelta(minutes=30))
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "known_mismatches": ["current_data_rpo", "current_sub2api_runtime"],
+                "rollback_strategy": "delete-only-new-control-resources",
+                "automatic_restore": False,
+                "allowed_resources": {
+                    "compose_services": [
+                        "codex-pwa",
+                        "control-api",
+                        "control-api-replica",
+                        "control-migrate",
+                    ],
+                    "docker_networks": ["sub2api-codex-control_pwa-network"],
+                    "postgresql_databases": ["codex_control"],
+                    "postgresql_roles": ["codex_control"],
+                    "redis_channels": ["codex-control:*"],
+                    "redis_keys": ["codex-control:*"],
+                },
+                "forbidden_mutations": [
+                    "existing_production_containers",
+                    "nginx_configuration",
+                    "postgresql_resources_except_codex_control",
+                    "redis_acl_or_configuration",
+                    "redis_outside_codex-control:*",
+                    "sub2api_database",
+                    "sub2api_runtime",
+                    "ufw",
+                ],
+                "current_sub2api_runtime": json.loads(runtime.read_text()),
+            },
+        )
+        return exception, runtime, deployment_id
+
+    def invoke_stale(
+        self,
+        exception: Path,
+        runtime: Path,
+        deployment_id: str,
+        *,
+        success: bool = True,
+    ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any] | None]:
+        return run_admission(
+            "backup-receipt",
+            "--result-file",
+            str(self.result_file),
+            "--max-age-seconds",
+            "1800",
+            "--expected-owner-uid",
+            str(os.geteuid()),
+            "--current-identities",
+            str(self.identities_file),
+            "--stale-exception-file",
+            str(exception),
+            "--deployment-id",
+            deployment_id,
+            "--current-runtime-attestation",
+            str(runtime),
+            "--expected-pwa-network",
+            "sub2api-codex-control_pwa-network",
+            success=success,
+        )
 
     def test_accepts_fresh_complete_snapshot_with_stable_container_identities(
         self,
@@ -579,6 +730,23 @@ class BackupReceiptTests(unittest.TestCase):
         write_json(self.identities_file, current)
         self.invoke(success=False)
 
+    @unittest.skipUnless(os.geteuid() == 0, "stale exception must be root-owned")
+    def test_stale_exception_is_explicit_bound_and_not_fresh(self) -> None:
+        exception, runtime, deployment_id = self.make_stale_exception(
+            created_at=datetime.now(UTC) - timedelta(days=6)
+        )
+        _, value = self.invoke_stale(exception, runtime, deployment_id)
+        assert value is not None
+        self.assertFalse(value["fresh"])
+        self.assertEqual(
+            value["admission_mode"], "stale-production-backup-exception-v1"
+        )
+        self.assertEqual(
+            value["stale_exception"]["current_sub2api_runtime"]["runtime_version"],
+            "0.1.175",
+        )
+        self.assertRegex(value["admission_binding_sha256"], r"^[0-9a-f]{64}$")
+
     def test_fresh_max_age_cannot_be_used_as_stale_override(self) -> None:
         run_admission(
             "backup-receipt",
@@ -600,6 +768,160 @@ class BackupReceiptTests(unittest.TestCase):
             "1800",
             success=False,
         )
+
+    def test_stale_exception_template_binds_exact_receipt_runtime_and_policy(
+        self,
+    ) -> None:
+        created_at = datetime.now(UTC) - timedelta(days=6)
+        record = json.loads((self.snapshot / "backup-record.json").read_text())
+        record["created_at"] = created_at.isoformat().replace("+00:00", "Z")
+        write_json(self.snapshot / "backup-record.json", record)
+        refresh_backup_manifest(self.result_file, self.snapshot)
+        runtime = self.make_runtime_attestation()
+        deployment_id = str(uuid.uuid4())
+
+        _, value = run_admission(
+            "stale-backup-exception-template",
+            "--result-file",
+            str(self.result_file),
+            "--deployment-id",
+            deployment_id,
+            "--current-runtime-attestation",
+            str(runtime),
+            "--valid-for-seconds",
+            "1800",
+            "--expected-pwa-network",
+            "sub2api-codex-control_pwa-network",
+        )
+        assert value is not None
+        self.assertEqual(
+            set(value),
+            {
+                "allowed_resources",
+                "automatic_restore",
+                "backup_created_at",
+                "current_sub2api_runtime",
+                "deployment_id",
+                "exception_id",
+                "expires_at",
+                "forbidden_mutations",
+                "issued_at",
+                "known_mismatches",
+                "manifest_sha256",
+                "max_age_seconds",
+                "reason",
+                "receipt_path",
+                "receipt_sha256",
+                "rollback_strategy",
+                "schema_version",
+                "scope",
+                "snapshot_directory",
+                "status",
+                "type",
+            },
+        )
+        self.assertEqual(value["deployment_id"], deployment_id)
+        self.assertEqual(value["receipt_path"], str(self.result_file))
+        self.assertEqual(value["receipt_sha256"], sha256(self.result_file))
+        self.assertEqual(value["snapshot_directory"], str(self.snapshot))
+        self.assertEqual(
+            value["manifest_sha256"], sha256(self.snapshot / "manifest.sha256")
+        )
+        self.assertEqual(value["max_age_seconds"], 691200)
+        self.assertEqual(
+            value["known_mismatches"],
+            ["current_data_rpo", "current_sub2api_runtime"],
+        )
+        self.assertEqual(
+            value["rollback_strategy"], "delete-only-new-control-resources"
+        )
+        self.assertIs(value["automatic_restore"], False)
+        runtime_value = json.loads(runtime.read_text())
+        self.assertEqual(
+            value["current_sub2api_runtime"],
+            {
+                key: runtime_value[key]
+                for key in (
+                    "admission_profile",
+                    "binary_sha256",
+                    "container_id",
+                    "contract_sha256",
+                    "image_digest",
+                    "image_id",
+                    "runtime_built_at",
+                    "runtime_commit",
+                    "runtime_version",
+                )
+            },
+        )
+        issued = datetime.fromisoformat(value["issued_at"].replace("Z", "+00:00"))
+        expires = datetime.fromisoformat(value["expires_at"].replace("Z", "+00:00"))
+        self.assertLessEqual((expires - issued).total_seconds(), 1800)
+        self.assertLessEqual(
+            expires,
+            created_at + timedelta(seconds=691200),
+        )
+
+    def test_stale_exception_template_rejects_fresh_backup_and_long_approval(
+        self,
+    ) -> None:
+        runtime = self.make_runtime_attestation()
+        arguments = (
+            "stale-backup-exception-template",
+            "--result-file",
+            str(self.result_file),
+            "--deployment-id",
+            str(uuid.uuid4()),
+            "--current-runtime-attestation",
+            str(runtime),
+            "--expected-pwa-network",
+            "sub2api-codex-control_pwa-network",
+        )
+        run_admission(*arguments, success=False)
+
+        created_at = datetime.now(UTC) - timedelta(days=6)
+        record = json.loads((self.snapshot / "backup-record.json").read_text())
+        record["created_at"] = created_at.isoformat().replace("+00:00", "Z")
+        write_json(self.snapshot / "backup-record.json", record)
+        refresh_backup_manifest(self.result_file, self.snapshot)
+        run_admission(*arguments, "--valid-for-seconds", "3601", success=False)
+
+    @unittest.skipUnless(os.geteuid() == 0, "stale exception must be root-owned")
+    def test_stale_exception_rejects_runtime_drift_and_expiry(self) -> None:
+        exception, runtime, deployment_id = self.make_stale_exception(
+            created_at=datetime.now(UTC) - timedelta(days=6)
+        )
+        changed = json.loads(runtime.read_text())
+        changed["binary_sha256"] = "8" * 64
+        write_json(runtime, changed)
+        self.invoke_stale(exception, runtime, deployment_id, success=False)
+        changed = json.loads(exception.read_text())
+        changed["expires_at"] = (
+            (datetime.now(UTC) - timedelta(seconds=1))
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        write_json(exception, changed)
+        self.invoke_stale(exception, runtime, deployment_id, success=False)
+
+    @unittest.skipUnless(os.geteuid() == 0, "stale exception must be root-owned")
+    def test_stale_exception_rejects_duplicate_json_keys_and_hardlinks(self) -> None:
+        exception, runtime, deployment_id = self.make_stale_exception(
+            created_at=datetime.now(UTC) - timedelta(days=6)
+        )
+        raw = exception.read_text()
+        exception.write_text(
+            raw.replace(
+                '{"allowed_resources"', '{"schema_version":1,"allowed_resources"', 1
+            )
+        )
+        exception.chmod(0o600)
+        self.invoke_stale(exception, runtime, deployment_id, success=False)
+        exception, runtime, deployment_id = self.make_stale_exception(
+            created_at=datetime.now(UTC) - timedelta(days=6)
+        )
+        os.link(exception, self.root / "stale-exception-hardlink.json")
+        self.invoke_stale(exception, runtime, deployment_id, success=False)
 
 
 class ControlBackupTests(unittest.TestCase):
@@ -923,6 +1245,76 @@ class RuntimeSecretTests(unittest.TestCase):
             self.assertIn("exactly one hard link", result.stderr)
 
 
+class BootstrapWrapperOrderingTests(unittest.TestCase):
+    def test_api_image_embedded_contract_is_isolated_and_admitted_before_write(
+        self,
+    ) -> None:
+        script = BOOTSTRAP_WRAPPER.read_text(encoding="utf-8")
+        image_identity = script.index('python3 "$bootstrap_checks" images')
+        contract_gate = script.index(
+            "stage=verify-api-image-embedded-contract", image_identity
+        )
+        contract_admission = script.index(
+            'python3 "$bootstrap_checks" api-image-contract', contract_gate
+        )
+        first_write = script.index(
+            "stage=provision-control-postgres", contract_admission
+        )
+        probe = script[contract_gate:contract_admission]
+
+        self.assertLess(image_identity, contract_gate)
+        self.assertLess(contract_gate, contract_admission)
+        self.assertLess(contract_admission, first_write)
+        for argument in (
+            "docker run --rm",
+            "--pull never",
+            "--network none",
+            "--read-only",
+            "--cap-drop ALL",
+            "--security-opt no-new-privileges",
+            "--user 10001:10001",
+            "--entrypoint python",
+            '"$api_image"',
+        ):
+            self.assertIn(argument, probe)
+        self.assertIn(
+            '--versions-lock "$versions_lock"', script[contract_admission:first_write]
+        )
+        self.assertIn(
+            'chmod 0600 "$deployment_dir/api-image-embedded-contract.json"', script
+        )
+
+    def test_host_loopback_routes_are_ready_before_public_smoke(self) -> None:
+        script = BOOTSTRAP_WRAPPER.read_text(encoding="utf-8")
+        startup = script.index("stage=start-sidecars")
+        loopback_gate = script.index("stage=wait-host-loopback-routes", startup)
+        running_gate = script.index('python3 "$bootstrap_checks" running', startup)
+        public_smoke = script.index("stage=production-smoke", loopback_gate)
+
+        self.assertLess(startup, running_gate)
+        self.assertLess(running_gate, loopback_gate)
+        self.assertLess(loopback_gate, public_smoke)
+        for port in (18090, 18091, 18093):
+            self.assertIn(str(port), script[loopback_gate:public_smoke])
+
+    def test_rollback_removes_only_the_admitted_empty_pwa_network(self) -> None:
+        script = BOOTSTRAP_WRAPPER.read_text(encoding="utf-8")
+        rollback = script.index("rollback_bootstrap()")
+        compose_rm = script.index("compose rm -sf", rollback)
+        inspect_network = script.index(
+            'docker network inspect "$pwa_network" --format', compose_rm
+        )
+        empty_gate = script.index(
+            'if [ "$pwa_network_container_count" = "0" ]', inspect_network
+        )
+        remove_network = script.index('docker network rm "$pwa_network"', empty_gate)
+
+        self.assertLess(compose_rm, inspect_network)
+        self.assertLess(inspect_network, empty_gate)
+        self.assertLess(empty_gate, remove_network)
+        self.assertNotIn("docker network prune", script)
+
+
 class BootstrapImageTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -1037,7 +1429,7 @@ class BootstrapImageTests(unittest.TestCase):
                 "4",
                 target_port=8090,
                 published_port="18090",
-                network="sub2api-network",
+                network="sub2api-deploy_sub2api-network",
             ),
         )
         write_json(
@@ -1047,7 +1439,7 @@ class BootstrapImageTests(unittest.TestCase):
                 "5",
                 target_port=8090,
                 published_port="18093",
-                network="sub2api-network",
+                network="sub2api-deploy_sub2api-network",
             ),
         )
         write_json(
@@ -1141,8 +1533,8 @@ class APIImageContractTests(unittest.TestCase):
         self.expected = {
             "appserver_schema_digest": "5" * 64,
             "codex_expected_version": "0.147.0",
-            "sub2api_expected_commit": "93c32fa",
-            "sub2api_expected_version": "0.1.175",
+            "sub2api_expected_commit": "e803e38",
+            "sub2api_expected_version": "0.1.176",
         }
         write_json(
             self.versions_lock,
@@ -1153,7 +1545,7 @@ class APIImageContractTests(unittest.TestCase):
                 },
                 "sub2api": {
                     "runtime_version": self.expected["sub2api_expected_version"],
-                    "runtime_commit": "93c32fa" + "b" * 33,
+                    "runtime_commit": "e803e38" + "b" * 33,
                 },
             },
         )
@@ -1234,7 +1626,7 @@ class APIImageContractTests(unittest.TestCase):
 
         write_json(self.observed, self.expected)
         lock = json.loads(self.versions_lock.read_text(encoding="utf-8"))
-        lock["sub2api"]["runtime_commit"] = "93c32fa"
+        lock["sub2api"]["runtime_commit"] = "e803e38"
         write_json(self.versions_lock, lock)
         result, _ = self.invoke(success=False)
         self.assertIn("invalid Codex or Sub2API contract tuple", result.stderr)

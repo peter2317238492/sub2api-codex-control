@@ -6,20 +6,61 @@ from pydantic import ValidationError
 from control_api.config import Settings
 
 
-def test_production_requires_the_exact_frozen_sub2api_marker() -> None:
+@pytest.mark.parametrize(
+    ("field", "insecure_value"),
+    [
+        ("session_hmac_secret", "development-only-change-this-session-secret"),
+        ("session_hmac_secret", "replace-with-at-least-32-random-bytes"),
+        ("session_hmac_secret", "  REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES  "),
+        ("session_hmac_secret", "a-test-secret-that-is-long-and-never-production"),
+        ("session_hmac_secret", "device-send-barrier-secret-with-at-least-32-bytes"),
+        ("session_hmac_secret", "production-secret-that-is-longer-than-32-bytes"),
+        ("metrics_bearer_token", "development-only-change-this-metrics-token"),
+        ("metrics_bearer_token", "replace-with-at-least-32-random-bytes"),
+        ("metrics_bearer_token", "production-metrics-token-that-is-longer-than-32-bytes"),
+    ],
+)
+def test_production_rejects_known_insecure_secret_values(
+    field: str,
+    insecure_value: str,
+) -> None:
+    values = {
+        "environment": "production",
+        "database_url": "postgresql+asyncpg://control:secret@postgres/control",
+        "redis_url": "redis://redis:6379/0",
+        "session_hmac_secret": "3f" * 32,
+        "metrics_bearer_token": "4e" * 32,
+        "cookie_secure": True,
+        "allowed_origins_csv": "https://control.example.test",
+        "sub2api_contract_marker": "0.1.176/e803e38",
+    }
+    values[field] = insecure_value
+
+    with pytest.raises(ValidationError, match="known development, test, or example"):
+        Settings(**values)
+
+
+def test_production_requires_the_exact_frozen_sub2api_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "control_api.connector_release.admitted_connector_release",
+        lambda _settings: object(),
+    )
     common = {
         "environment": "production",
         "database_url": "postgresql+asyncpg://control:secret@postgres/control",
         "redis_url": "redis://redis:6379/0",
-        "session_hmac_secret": "production-secret-that-is-longer-than-32-bytes",
-        "metrics_bearer_token": "production-metrics-token-that-is-longer-than-32-bytes",
+        "session_hmac_secret": "3f" * 32,
+        "metrics_bearer_token": "4e" * 32,
         "cookie_secure": True,
         "allowed_origins_csv": "https://control.example.test",
+        "connector_release_metadata_json": "admitted-by-test-double",
     }
     with pytest.raises(ValidationError):
-        Settings(**common, sub2api_contract_marker="0.1.175/wrong")
+        Settings(**common, sub2api_contract_marker="0.1.176/wrong")
 
-    settings = Settings(**common, sub2api_contract_marker="0.1.175/93c32fa")
+    settings = Settings(**common, sub2api_contract_marker="0.1.176/e803e38")
     assert settings.sub2api_contract_ready is True
 
 
@@ -43,11 +84,11 @@ def test_production_requires_the_frozen_internal_sub2api_origin(
             environment="production",
             database_url="postgresql+asyncpg://control:secret@postgres/control",
             redis_url="redis://redis:6379/0",
-            session_hmac_secret="production-secret-that-is-longer-than-32-bytes",
-            metrics_bearer_token="production-metrics-token-that-is-longer-than-32-bytes",
+            session_hmac_secret="3f" * 32,
+            metrics_bearer_token="4e" * 32,
             cookie_secure=True,
             allowed_origins_csv="https://control.example.test",
-            sub2api_contract_marker="0.1.175/93c32fa",
+            sub2api_contract_marker="0.1.176/e803e38",
             sub2api_base_url=sub2api_base_url,
         )
 
@@ -80,6 +121,7 @@ def test_realtime_resource_and_redis_timeout_defaults_are_bounded() -> None:
     assert settings.database_command_timeout_seconds == 10.0
     assert settings.redis_connect_timeout_seconds == 3.0
     assert settings.redis_command_timeout_seconds == 3.0
+    assert settings.session_upstream_recheck_seconds == 15
     assert settings.browser_event_catchup_max_bytes == 1024 * 1024
     assert settings.browser_max_connections_per_session == 4
     assert settings.browser_max_connections_per_user == 8
@@ -91,6 +133,7 @@ def test_realtime_resource_and_redis_timeout_defaults_are_bounded() -> None:
     [
         ("redis_connect_timeout_seconds", 31),
         ("redis_command_timeout_seconds", 31),
+        ("session_upstream_recheck_seconds", 16),
         ("database_pool_timeout_seconds", 31),
         ("database_connect_timeout_seconds", 31),
         ("database_command_timeout_seconds", 61),
@@ -119,12 +162,12 @@ def test_production_rejects_lax_control_cookies() -> None:
             environment="production",
             database_url="postgresql+asyncpg://control:secret@postgres/control",
             redis_url="redis://redis:6379/0",
-            session_hmac_secret="production-secret-that-is-longer-than-32-bytes",
-            metrics_bearer_token="production-metrics-token-that-is-longer-than-32-bytes",
+            session_hmac_secret="3f" * 32,
+            metrics_bearer_token="4e" * 32,
             cookie_secure=True,
             cookie_samesite="lax",
             allowed_origins_csv="https://control.example.test",
-            sub2api_contract_marker="0.1.175/93c32fa",
+            sub2api_contract_marker="0.1.176/e803e38",
         )
 
 

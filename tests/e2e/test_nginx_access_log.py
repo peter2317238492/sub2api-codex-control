@@ -125,6 +125,27 @@ class NginxAccessLogPolicyTests(unittest.TestCase):
             )
         )
 
+    def test_runtime_probe_correlates_current_request_and_denial_rows(self) -> None:
+        run_local = (REPO_ROOT / "tests/e2e/run-local.sh").read_text(encoding="utf-8")
+
+        self.assertIn("nonce = secrets.token_hex(16)", run_local)
+        self.assertIn('"catchall": f"/codex-redaction-probe-{nonce}"', run_local)
+        self.assertIn(
+            '{"markers": markers, "request_id": request_id, "uris": probe_uris}',
+            run_local,
+        )
+        self.assertIn(
+            'grep -Fq "\\"request_id\\":\\"$nginx_probe_request_id\\""',
+            run_local,
+        )
+        self.assertIn("if len(probe_entries) != 1:", run_local)
+        self.assertIn("if len(denial_entries) != 1:", run_local)
+        probe_start = run_local.index('nginx_log_probe="$temporary/')
+        probe_end = run_local.index("record_check nginx-json-access-log-", probe_start)
+        probe_block = run_local[probe_start:probe_end]
+        self.assertIn('while [ "$nginx_log_attempt" -lt 50 ]; do', probe_block)
+        self.assertNotIn("sleep 0.2", probe_block)
+
     def test_host_log_provisioning_and_rotation_contract(self) -> None:
         launcher = (
             REPO_ROOT / "deploy/scripts/provision-nginx-access-log.sh"

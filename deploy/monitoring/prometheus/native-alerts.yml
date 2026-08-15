@@ -95,7 +95,13 @@ groups:
           correlation: "{{ $externalLabels.log_search_url }}"
 
       - alert: CodexControlMetricsSnapshotStale
-        expr: time() - codex_control_metrics_generated_timestamp_seconds > 120
+        expr: |
+          time() - codex_control_metrics_generated_timestamp_seconds{job="codex-control-api"} > 120
+          or (
+            up{job="codex-control-api"} == 1
+            unless on (job, instance)
+            codex_control_metrics_generated_timestamp_seconds{job="codex-control-api"}
+          )
         for: 2m
         labels:
           severity: critical
@@ -128,15 +134,15 @@ groups:
 
       - alert: CodexControlNativeStateTelemetryMissing
         expr: |
-          absent(codex_control_websocket_connections_active{kind="browser"})
-          or absent(codex_control_websocket_connections_active{kind="device"})
-          or absent(codex_control_device_heartbeat_age_seconds_max)
-          or absent(codex_control_maintenance_batch_saturated{phase="command_expiry"})
-          or absent(codex_control_maintenance_last_success_timestamp_seconds{phase="command_expiry"})
-          or absent(codex_control_dependency_ready{dependency="database"})
-          or absent(codex_control_dependency_ready{dependency="database_migrations"})
-          or absent(codex_control_dependency_ready{dependency="redis"})
-          or absent(codex_control_database_pool_connections{state="capacity"})
+          (up{job="codex-control-api"} == 1 unless on (job, instance) codex_control_websocket_connections_active{job="codex-control-api", kind="browser"})
+          or (up{job="codex-control-api"} == 1 unless on (job, instance) codex_control_websocket_connections_active{job="codex-control-api", kind="device"})
+          or (up{job="codex-control-api"} == 1 unless on (job, instance) codex_control_device_heartbeat_age_seconds_max{job="codex-control-api"})
+          or (up{job="codex-control-api"} == 1 unless on (job, instance) codex_control_maintenance_batch_saturated{job="codex-control-api", phase="command_expiry"})
+          or (up{job="codex-control-api"} == 1 unless on (job, instance) codex_control_maintenance_last_success_timestamp_seconds{job="codex-control-api", phase="command_expiry"})
+          or (up{job="codex-control-api"} == 1 unless on (job, instance) codex_control_dependency_ready{job="codex-control-api", dependency="database"})
+          or (up{job="codex-control-api"} == 1 unless on (job, instance) codex_control_dependency_ready{job="codex-control-api", dependency="database_migrations"})
+          or (up{job="codex-control-api"} == 1 unless on (job, instance) codex_control_dependency_ready{job="codex-control-api", dependency="redis"})
+          or (up{job="codex-control-api"} == 1 unless on (job, instance) codex_control_database_pool_connections{job="codex-control-api", state="capacity"})
         for: 5m
         labels:
           severity: critical

@@ -97,6 +97,8 @@ PORTABLE_PATH_RE = re.compile(r"^[A-Za-z0-9._+@/-]+$")
 PLACEHOLDER_DIRECTORIES = {
     "deploy/docker-compose/backups": {".gitignore", "readme.md"},
     "deploy/docker-compose/secrets": {".gitignore", "readme.md"},
+    "deploy/monitoring/delivery-evidence": {".gitignore"},
+    "deploy/monitoring/evidence": {".gitignore"},
     "tests/e2e/reports": {".gitignore", "readme.md"},
 }
 

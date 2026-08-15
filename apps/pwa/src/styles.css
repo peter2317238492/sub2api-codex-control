@@ -328,6 +328,16 @@ button:disabled {
   gap: 8px;
 }
 
+.panel-title-row .device-title-actions {
+  gap: 2px;
+}
+
+.panel-empty .pair-existing-button {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .panel-title-row strong {
   color: var(--muted);
   font-size: 12px;

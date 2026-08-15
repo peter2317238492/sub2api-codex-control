@@ -10,6 +10,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _DEVELOPMENT_SESSION_SECRET = "development-only-change-this-session-secret"
 _DEVELOPMENT_METRICS_TOKEN = "development-only-change-this-metrics-token"
 _PRODUCTION_SUB2API_BASE_URL = "http://sub2api:8080"
+_KNOWN_INSECURE_SECRET_MARKERS = (
+    "change-me",
+    "changeme",
+    "development-only",
+    "example-secret",
+    "longer-than-32-bytes",
+    "never-production",
+    "replace-with",
+    "test-secret",
+    "with-at-least-32-bytes",
+)
+
+
+def _is_known_insecure_secret(value: str) -> bool:
+    normalized = value.strip().casefold()
+    return any(marker in normalized for marker in _KNOWN_INSECURE_SECRET_MARKERS)
+
 
 # Bootstrap projections are bounded at write time using compact ensure_ascii
 # JSON. These constants include each complete list item, not just payload text.
@@ -19,6 +36,7 @@ BOOTSTRAP_THREAD_SUMMARY_MAX_BYTES = 12 * 1024
 BOOTSTRAP_MODEL_CATALOG_MAX_BYTES = 24 * 1024
 BOOTSTRAP_APPROVAL_ITEM_MAX_BYTES = 68 * 1024
 BOOTSTRAP_MODEL_MAP_ENTRY_OVERHEAD_BYTES = 128
+BOOTSTRAP_CONNECTOR_RELEASE_MAX_BYTES = 16 * 1024
 
 
 class Settings(BaseSettings):
@@ -62,8 +80,8 @@ class Settings(BaseSettings):
     sub2api_auth_me_path: str = "/api/v1/auth/me"
     sub2api_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     sub2api_verify_tls: bool = True
-    sub2api_expected_version: Literal["0.1.175"] = "0.1.175"
-    sub2api_expected_commit: Literal["93c32fa"] = "93c32fa"
+    sub2api_expected_version: Literal["0.1.176"] = "0.1.176"
+    sub2api_expected_commit: Literal["e803e38"] = "e803e38"
     sub2api_contract_marker: str = ""
 
     connector_expected_version: Literal["0.1.0"] = "0.1.0"
@@ -71,9 +89,11 @@ class Settings(BaseSettings):
     appserver_schema_digest: Literal[
         "511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b"
     ] = "511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b"
+    connector_release_metadata_json: str = ""
 
     session_hmac_secret: SecretStr = SecretStr(_DEVELOPMENT_SESSION_SECRET)
     session_ttl_seconds: int = Field(default=600, ge=300, le=600)
+    session_upstream_recheck_seconds: int = Field(default=15, ge=1, le=15)
     recent_auth_max_age_seconds: int = Field(default=300, ge=30, le=600)
     session_token_bytes: int = Field(default=32, ge=32, le=64)
     cookie_name: str = "__Host-codex_control"
@@ -233,10 +253,16 @@ class Settings(BaseSettings):
             )
         if self.environment != "production":
             return self
-        if self.session_hmac_secret.get_secret_value() == _DEVELOPMENT_SESSION_SECRET:
-            raise ValueError("CONTROL_SESSION_HMAC_SECRET must be changed in production")
-        if self.metrics_bearer_token.get_secret_value() == _DEVELOPMENT_METRICS_TOKEN:
-            raise ValueError("CONTROL_METRICS_BEARER_TOKEN must be changed in production")
+        if _is_known_insecure_secret(self.session_hmac_secret.get_secret_value()):
+            raise ValueError(
+                "CONTROL_SESSION_HMAC_SECRET must not use a known development, test, "
+                "or example value in production"
+            )
+        if _is_known_insecure_secret(self.metrics_bearer_token.get_secret_value()):
+            raise ValueError(
+                "CONTROL_METRICS_BEARER_TOKEN must not use a known development, test, "
+                "or example value in production"
+            )
         if not self.cookie_secure:
             raise ValueError("secure cookies are required in production")
         if self.cookie_samesite != "strict":
@@ -255,6 +281,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CONTROL_SUB2API_CONTRACT_MARKER does not match the frozen Sub2API contract"
             )
+        if not self.connector_release_ready:
+            raise ValueError(
+                "CONTROL_CONNECTOR_RELEASE_METADATA_JSON must contain the admitted "
+                "Connector release in production"
+            )
         if not self.allowed_origins:
             raise ValueError("at least one explicit allowed origin is required in production")
         if any(urlsplit(origin).scheme != "https" for origin in self.allowed_origins):
@@ -272,7 +303,13 @@ class Settings(BaseSettings):
         )
         threads = self.bootstrap_max_threads * (BOOTSTRAP_THREAD_SUMMARY_MAX_BYTES + 1)
         approvals = self.bootstrap_max_pending_approvals * (BOOTSTRAP_APPROVAL_ITEM_MAX_BYTES + 1)
-        return BOOTSTRAP_BASE_OVERHEAD_BYTES + devices + threads + approvals
+        return (
+            BOOTSTRAP_BASE_OVERHEAD_BYTES
+            + BOOTSTRAP_CONNECTOR_RELEASE_MAX_BYTES
+            + devices
+            + threads
+            + approvals
+        )
 
     @property
     def allowed_origins(self) -> frozenset[str]:
@@ -302,6 +339,15 @@ class Settings(BaseSettings):
         if not self.sub2api_contract_marker:
             return self.environment != "production"
         return self.sub2api_contract_marker == self.required_sub2api_contract_marker
+
+    @property
+    def connector_release_ready(self) -> bool:
+        if not self.connector_release_metadata_json.strip():
+            return self.environment != "production"
+        # Delayed import avoids the Settings/metadata-loader module cycle.
+        from .connector_release import admitted_connector_release
+
+        return admitted_connector_release(self) is not None
 
 
 @lru_cache

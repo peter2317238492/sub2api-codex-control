@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api-codex.invalid/schemas/connector-aggregate-verification-receipt-v1.json",
+  "title": "Sub2API Codex Connector complete public verification aggregate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format_version",
+    "kind",
+    "release",
+    "evidence",
+    "trust",
+    "verification_run",
+    "public_release",
+    "platform_receipts",
+    "vulnerability_evidence",
+    "verified_targets",
+    "verified_packages",
+    "core_inventory",
+    "vulnerability_inventory",
+    "release_inventory",
+    "signature_bundle"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://sub2api-codex.invalid/schemas/connector-aggregate-verification-receipt-v1.json"
+    },
+    "format_version": { "const": 1 },
+    "kind": { "const": "sub2api-codex-connector-public-verification-aggregate" },
+    "release": { "$ref": "#/$defs/release" },
+    "evidence": { "$ref": "#/$defs/releaseEvidence" },
+    "trust": { "$ref": "#/$defs/completeTrust" },
+    "verification_run": { "$ref": "#/$defs/verificationRun" },
+    "public_release": { "$ref": "#/$defs/publicRelease" },
+    "platform_receipts": { "$ref": "#/$defs/platformReceipts" },
+    "vulnerability_evidence": { "$ref": "#/$defs/vulnerabilityEvidence" },
+    "verified_targets": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "linux-amd64" },
+        { "const": "linux-arm64" },
+        { "const": "darwin-amd64" },
+        { "const": "darwin-arm64" }
+      ],
+      "items": false,
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "verified_packages": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/linuxAmd64Deb" },
+        { "$ref": "#/$defs/linuxAmd64Rpm" },
+        { "$ref": "#/$defs/linuxArm64Deb" },
+        { "$ref": "#/$defs/linuxArm64Rpm" },
+        { "$ref": "#/$defs/darwinAmd64Pkg" },
+        { "$ref": "#/$defs/darwinArm64Pkg" }
+      ],
+      "items": false,
+      "minItems": 6,
+      "maxItems": 6
+    },
+    "core_inventory": {
+      "type": "array",
+      "minItems": 92,
+      "maxItems": 92,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/inventory" }
+    },
+    "vulnerability_inventory": {
+      "type": "array",
+      "minItems": 43,
+      "maxItems": 43,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/inventory" }
+    },
+    "release_inventory": {
+      "type": "array",
+      "minItems": 135,
+      "maxItems": 135,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/inventory" }
+    },
+    "signature_bundle": { "const": "connector-public-verification-aggregate.json.sigstore.json" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "filename": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "relativePath": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+@-]*(/[A-Za-z0-9][A-Za-z0-9._+@-]*)*$" },
+    "semver": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size"],
+      "properties": {
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "signedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size", "signature_bundle"],
+      "properties": {
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 0 },
+        "signature_bundle": { "$ref": "#/$defs/filename" }
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size"],
+      "properties": {
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_repository", "source_commit", "version", "tag", "codex_version", "schema_digest", "control_protocol_version"],
+      "properties": {
+        "source_repository": { "const": "https://github.com/peter2317238492/sub2api-codex-control" },
+        "source_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "version": { "$ref": "#/$defs/semver" },
+        "tag": { "type": "string", "pattern": "^connector-v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "codex_version": { "$ref": "#/$defs/semver" },
+        "schema_digest": { "$ref": "#/$defs/sha256" },
+        "control_protocol_version": { "const": 1 }
+      }
+    },
+    "releaseEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest", "release_metadata", "checksums"],
+      "properties": {
+        "manifest": { "$ref": "#/$defs/signedFile" },
+        "release_metadata": { "$ref": "#/$defs/signedFile" },
+        "checksums": { "$ref": "#/$defs/signedFile" }
+      }
+    },
+    "sigstore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["certificate_oidc_issuer", "certificate_identity", "certificate_github_workflow_sha", "certificate_github_workflow_trigger"],
+      "properties": {
+        "certificate_oidc_issuer": { "const": "https://token.actions.githubusercontent.com" },
+        "certificate_identity": { "type": "string", "pattern": "^https://github\\.com/peter2317238492/sub2api-codex-control/\\.github/workflows/connector-release\\.yml@refs/tags/connector-v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "certificate_github_workflow_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "certificate_github_workflow_trigger": { "const": "push" }
+      }
+    },
+    "apple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["team_identifier", "application_identity", "installer_identity"],
+      "properties": {
+        "team_identifier": { "type": "string", "pattern": "^[A-Z0-9]{10}$" },
+        "application_identity": { "type": "string", "pattern": "^Developer ID Application: .+ \\([A-Z0-9]{10}\\)$" },
+        "installer_identity": { "type": "string", "pattern": "^Developer ID Installer: .+ \\([A-Z0-9]{10}\\)$" }
+      }
+    },
+    "rpm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signing_fingerprint"],
+      "properties": { "signing_fingerprint": { "type": "string", "pattern": "^[A-F0-9]{40,64}$" } }
+    },
+    "completeTrust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sigstore", "apple", "rpm"],
+      "properties": {
+        "sigstore": { "$ref": "#/$defs/sigstore" },
+        "apple": { "$ref": "#/$defs/apple" },
+        "rpm": { "$ref": "#/$defs/rpm" }
+      }
+    },
+    "verificationRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "run_id", "run_attempt"],
+      "properties": {
+        "repository": { "const": "peter2317238492/sub2api-codex-control" },
+        "run_id": { "type": "integer", "minimum": 1 },
+        "run_attempt": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "publicRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release_id", "workflow_run_id", "workflow_run_attempt", "draft", "prerelease", "immutable", "published_at", "descriptor"],
+      "properties": {
+        "release_id": { "type": "integer", "minimum": 1 },
+        "workflow_run_id": { "type": "integer", "minimum": 1 },
+        "workflow_run_attempt": { "type": "integer", "minimum": 1 },
+        "draft": { "const": false },
+        "prerelease": { "const": false },
+        "immutable": { "const": true },
+        "published_at": { "type": "string", "format": "date-time", "pattern": "Z$" },
+        "descriptor": { "$ref": "#/$defs/file" }
+      }
+    },
+    "platformReceipts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["linux", "darwin"],
+      "properties": {
+        "linux": { "$ref": "#/$defs/file" },
+        "darwin": { "$ref": "#/$defs/file" }
+      }
+    },
+    "vulnerabilityInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "role", "sha256", "size", "target"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "role": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 0 },
+        "target": { "type": "string", "minLength": 1 }
+      }
+    },
+    "vulnerabilityRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "path", "sha256", "size", "signature_bundle_path", "signature_bundle_sha256", "signature_bundle_size"],
+      "properties": {
+        "id": { "const": "connector" },
+        "kind": { "const": "connector-manifest-v1" },
+        "path": { "const": "connector/manifest.json" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "signature_bundle_path": { "const": "connector/manifest.json.sigstore.json" },
+        "signature_bundle_sha256": { "$ref": "#/$defs/sha256" },
+        "signature_bundle_size": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "vulnerabilityReportDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connector-linux-amd64-deb", "connector-linux-amd64-rpm", "connector-linux-arm64-deb", "connector-linux-arm64-rpm", "connector-darwin-amd64-pkg", "connector-darwin-arm64-pkg"],
+      "properties": {
+        "connector-linux-amd64-deb": { "$ref": "#/$defs/sha256" },
+        "connector-linux-amd64-rpm": { "$ref": "#/$defs/sha256" },
+        "connector-linux-arm64-deb": { "$ref": "#/$defs/sha256" },
+        "connector-linux-arm64-rpm": { "$ref": "#/$defs/sha256" },
+        "connector-darwin-amd64-pkg": { "$ref": "#/$defs/sha256" },
+        "connector-darwin-arm64-pkg": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "vulnerabilityPackageCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connector-linux-amd64-deb", "connector-linux-amd64-rpm", "connector-linux-arm64-deb", "connector-linux-arm64-rpm", "connector-darwin-amd64-pkg", "connector-darwin-arm64-pkg"],
+      "properties": {
+        "connector-linux-amd64-deb": { "type": "integer", "minimum": 1 },
+        "connector-linux-amd64-rpm": { "type": "integer", "minimum": 1 },
+        "connector-linux-arm64-deb": { "type": "integer", "minimum": 1 },
+        "connector-linux-arm64-rpm": { "type": "integer", "minimum": 1 },
+        "connector-darwin-amd64-pkg": { "type": "integer", "minimum": 1 },
+        "connector-darwin-arm64-pkg": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "vulnerabilityEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "verified_at", "receipt", "manifest", "sigstore", "core_roots", "scanner", "report_sha256", "scanned_package_counts", "evidence_inventory"],
+      "properties": {
+        "profile": { "const": "connector-release" },
+        "verified_at": { "type": "string", "format": "date-time", "pattern": "Z$" },
+        "receipt": { "$ref": "#/$defs/signedFile" },
+        "manifest": { "$ref": "#/$defs/file" },
+        "sigstore": { "$ref": "#/$defs/sigstore" },
+        "core_roots": {
+          "type": "array",
+          "prefixItems": [{ "$ref": "#/$defs/vulnerabilityRoot" }],
+          "items": false,
+          "minItems": 1,
+          "maxItems": 1
+        },
+        "scanner": { "$ref": "#/$defs/vulnerabilityScanner" },
+        "report_sha256": { "$ref": "#/$defs/vulnerabilityReportDigests" },
+        "scanned_package_counts": { "$ref": "#/$defs/vulnerabilityPackageCounts" },
+        "evidence_inventory": {
+          "type": "array",
+          "minItems": 55,
+          "maxItems": 55,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/vulnerabilityInventory" }
+        }
+      }
+    },
+    "vulnerabilityScanner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "binary_sha256", "scanner_install_receipt_sha256", "config_sha256", "ignorefile_sha256", "vulnerability_database_oci_digest", "vulnerability_database_metadata_sha256", "vulnerability_database_sha256", "vulnerability_database_updated_at", "java_database_oci_digest", "java_database_metadata_sha256", "java_database_sha256", "java_database_updated_at"],
+      "properties": {
+        "name": { "const": "trivy" },
+        "version": { "const": "0.74.0" },
+        "binary_sha256": { "$ref": "#/$defs/sha256" },
+        "scanner_install_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "config_sha256": { "$ref": "#/$defs/sha256" },
+        "ignorefile_sha256": { "$ref": "#/$defs/sha256" },
+        "vulnerability_database_oci_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "vulnerability_database_metadata_sha256": { "$ref": "#/$defs/sha256" },
+        "vulnerability_database_sha256": { "$ref": "#/$defs/sha256" },
+        "vulnerability_database_updated_at": { "type": "string", "format": "date-time", "pattern": "Z$" },
+        "java_database_oci_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "java_database_metadata_sha256": { "$ref": "#/$defs/sha256" },
+        "java_database_sha256": { "$ref": "#/$defs/sha256" },
+        "java_database_updated_at": { "type": "string", "format": "date-time", "pattern": "Z$" }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_id", "package_format", "filename", "sha256", "size"],
+      "properties": {
+        "target_id": { "enum": ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"] },
+        "package_format": { "enum": ["deb", "rpm", "pkg"] },
+        "filename": { "$ref": "#/$defs/filename" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "linuxAmd64Deb": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-amd64" }, "package_format": { "const": "deb" } } }] },
+    "linuxAmd64Rpm": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-amd64" }, "package_format": { "const": "rpm" } } }] },
+    "linuxArm64Deb": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-arm64" }, "package_format": { "const": "deb" } } }] },
+    "linuxArm64Rpm": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-arm64" }, "package_format": { "const": "rpm" } } }] },
+    "darwinAmd64Pkg": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "darwin-amd64" }, "package_format": { "const": "pkg" } } }] },
+    "darwinArm64Pkg": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "darwin-arm64" }, "package_format": { "const": "pkg" } } }] }
+  }
+}

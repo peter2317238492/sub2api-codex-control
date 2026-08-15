@@ -18,7 +18,11 @@ The following boundaries are mandatory:
 
 1. The Control API authenticates users through the exchange in ADR 0001 and
    performs object authorization on every device, thread, turn, command, and
-   approval. Database and Redis access use a dedicated role/schema and prefix.
+   approval. Every authorization-bearing mutation except logout revalidates the
+   sealed Sub2API access token; reads and browser WebSockets begin revalidation
+   within 15 seconds. Upstream rejection durably revokes the Control session,
+   while upstream uncertainty authorizes nothing. Database and Redis access use
+   a dedicated role/schema and prefix.
 2. Devices authenticate with an Ed25519 key created locally, a one-time pairing
    flow, and short-lived connection credentials. Pairing protocol v2 persists
    the Connector-generated pairing ID, code, poll token, and refresh credential

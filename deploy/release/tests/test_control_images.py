@@ -312,6 +312,10 @@ class ControlImageReleaseTests(unittest.TestCase):
         )
         self.assertEqual(values["CONTROL_RELEASE"], RELEASE)
         self.assertEqual(values["CONTROL_SOURCE_REPOSITORY"], SOURCE_REPOSITORY)
+        self.assertEqual(
+            values["CONTROL_MIGRATION_HEAD"], control_images.migration_head()
+        )
+        self.assertEqual(values["CONTROL_VCS_REF"], SOURCE_COMMIT)
         lock = json.loads(
             (self.release_dir / control_images.LOCK_FILENAME).read_text(
                 encoding="utf-8"
@@ -330,16 +334,12 @@ class ControlImageReleaseTests(unittest.TestCase):
             values["CONTROL_SOURCE_MANIFEST_SHA256"],
             source_bundle["manifest"]["sha256"],
         )
-        self.assertEqual(
-            values["CONTROL_MIGRATION_HEAD"], control_images.migration_head()
-        )
-        self.assertEqual(values["CONTROL_VCS_REF"], SOURCE_COMMIT)
         release_inputs = lock["release_inputs"]["files"]
         self.assertEqual(
             values["CONTROL_VERSIONS_LOCK_SHA256"],
             release_inputs["versions.lock.json"],
         )
-        contract_path = "docs/contracts/sub2api-auth.v0.1.175.json"
+        contract_path = "docs/contracts/sub2api-auth.v0.1.176.json"
         self.assertEqual(values["CONTROL_SUB2API_AUTH_CONTRACT_PATH"], contract_path)
         self.assertEqual(
             values["CONTROL_SUB2API_AUTH_CONTRACT_SHA256"],
@@ -372,10 +372,10 @@ class ControlImageReleaseTests(unittest.TestCase):
                 "CONTROL_RELEASE_EVIDENCE_SHA256S",
                 "CONTROL_RELEASE_INPUT_SHA256S",
                 "CONTROL_RELEASE_LOCK_SHA256",
-                "CONTROL_SOURCE_REPOSITORY",
                 "CONTROL_SOURCE_ARCHIVE_SHA256",
                 "CONTROL_SOURCE_ATTESTATION_SHA256",
                 "CONTROL_SOURCE_MANIFEST_SHA256",
+                "CONTROL_SOURCE_REPOSITORY",
                 "CONTROL_SUB2API_AUTH_CONTRACT_PATH",
                 "CONTROL_SUB2API_AUTH_CONTRACT_SHA256",
                 "CONTROL_VCS_REF",
@@ -684,7 +684,7 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
         self.assertEqual(set(images["required"]), set(control_images.COMPONENTS))
         self.assertEqual(set(images["properties"]), set(control_images.COMPONENTS))
 
-    def test_workflow_actions_are_commit_pinned_and_release_only_on_tag_push(
+    def test_workflow_actions_are_commit_pinned_and_release_is_guarded(
         self,
     ) -> None:
         workflow = (
@@ -787,6 +787,261 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
         self.assertLess(public_check, license_check)
         self.assertLess(license_check, compile_step)
         self.assertLess(compile_step, upload)
+
+    def test_connector_release_stages_complete_native_package_authorities(
+        self,
+    ) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/connector-release.yml").read_text()
+        linux_sign = workflow.index("  linux-native-sign:")
+        apple_sign = workflow.index("  native-sign:", linux_sign)
+        sigstore = workflow.index("  attest:", apple_sign)
+        linux_verify = workflow.index("  verify-linux-signed:", sigstore)
+        publish = workflow.index("  publish:", linux_verify)
+        public_macos = workflow.index("  verify-public-release-macos:", publish)
+        public_linux = workflow.index("  verify-public-release-linux:", publish)
+        self.assertLess(linux_sign, apple_sign)
+        self.assertLess(apple_sign, sigstore)
+        self.assertLess(sigstore, linux_verify)
+        self.assertLess(linux_verify, publish)
+        self.assertLess(publish, public_macos)
+        self.assertLess(publish, public_linux)
+        self.assertIn("environment: connector-release-linux", workflow)
+        self.assertIn("connector/release/linux-sign-rpm.sh", workflow)
+        self.assertIn("environment: connector-release-apple", workflow)
+        self.assertIn("connector/release/macos-sign-notarize.sh", workflow)
+        self.assertIn("MACOS_APPLICATION_CERTIFICATE_P12_BASE64", workflow)
+        self.assertIn("MACOS_INSTALLER_CERTIFICATE_P12_BASE64", workflow)
+        self.assertIn("MACOS_EXPECTED_APPLICATION_IDENTITY", workflow)
+        self.assertIn("MACOS_EXPECTED_INSTALLER_IDENTITY", workflow)
+        self.assertIn("RPM_SIGNING_PRIVATE_KEY_BASE64", workflow)
+        self.assertIn("RPM_EXPECTED_SIGNING_FINGERPRINT", workflow)
+        self.assertIn("--apple-installer-identity", workflow)
+        self.assertIn("--rpm-signing-fingerprint", workflow)
+        self.assertGreaterEqual(workflow.count("--target linux-amd64"), 2)
+        self.assertGreaterEqual(workflow.count("--target linux-arm64"), 2)
+        self.assertGreaterEqual(workflow.count("--target darwin-amd64"), 2)
+        self.assertGreaterEqual(workflow.count("--target darwin-arm64"), 2)
+        self.assertGreaterEqual(workflow.count('refs/tags/${RELEASE_TAG}^{}'), 2)
+        self.assertNotIn("MACOS_EXPECTED_SIGNING_IDENTITY", workflow)
+        self.assertNotIn("MACOS_CERTIFICATE_P12_BASE64", workflow)
+
+    def test_control_release_exports_offline_image_signature_closure(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github/workflows/control-images-release.yml"
+        ).read_text()
+        signing = workflow.index(
+            "Sign all digests and attach signed SBOM and SLSA v1 evidence"
+        )
+        save = workflow.index('cosign save "$image_ref"', signing)
+        offline = workflow.index(
+            "Verify all exported image trust bundles without registry access", save
+        )
+        upload = workflow.index(
+            "Transfer the offline-verifiable image trust bundles", offline
+        )
+        self.assertLess(signing, save)
+        self.assertLess(save, offline)
+        self.assertLess(offline, upload)
+        self.assertIn('cosign initialize', workflow[signing:offline])
+        self.assertIn('trusted_root.json', workflow[signing:upload])
+        self.assertIn('--offline', workflow[offline:upload])
+        self.assertIn('--local-image "$IMAGE_TRUST_DIR/$component"', workflow[offline:upload])
+        self.assertIn('name: control-image-trust-${{ github.run_attempt }}', workflow)
+
+    def test_control_final_image_tags_wait_for_complete_public_replay(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github/workflows/control-images-release.yml"
+        ).read_text()
+        attest = workflow.index("  attest:")
+        package_build = workflow.index("  package-build:", attest)
+        public = workflow.index("  verify-public-release:", package_build)
+        promote = workflow.index("  promote-images:", public)
+        self.assertLess(attest, package_build)
+        self.assertLess(package_build, public)
+        self.assertLess(public, promote)
+
+        attest_section = workflow[attest:package_build]
+        public_section = workflow[public:promote]
+        promote_section = workflow[promote:]
+        final_ref = '"${repository}:${GITHUB_REF_NAME}"'
+        self.assertNotIn(final_ref, workflow[:promote])
+        self.assertNotIn("docker buildx imagetools create", attest_section)
+        self.assertNotIn("docker buildx imagetools", public_section)
+        self.assertIn(
+            "Re-run the image-root verifier against immutable digests",
+            public_section,
+        )
+        self.assertIn('test "$authenticated_ref" = "$expected_ref"', public_section)
+        self.assertIn(
+            "needs:\n      - build\n      - verify-public-release",
+            promote_section,
+        )
+        self.assertIn("environment: control-images-release-promote", promote_section)
+        self.assertIn("contents: read\n      packages: write", promote_section)
+        self.assertNotIn("id-token: write", promote_section)
+        self.assertIn("ref: ${{ github.ref }}", promote_section)
+        self.assertIn("fetch-tags: true", promote_section)
+        self.assertIn("persist-credentials: false", promote_section)
+        self.assertIn("docker/login-action@", promote_section)
+        self.assertIn('git cat-file -e "${GITHUB_REF_NAME}^{tag}"', promote_section)
+        self.assertGreaterEqual(
+            promote_section.count('test "$peeled" = "$GITHUB_SHA"'), 2
+        )
+        self.assertIn(
+            'docker buildx imagetools inspect "${repository}@${digest}"',
+            promote_section,
+        )
+        self.assertIn("docker buildx imagetools create", promote_section)
+        self.assertIn('--tag "${repository}:${GITHUB_REF_NAME}"', promote_section)
+        self.assertIn('test "$promoted_digest" = "$digest"', promote_section)
+        self.assertGreaterEqual(promote_section.count("assert_remote_tag"), 4)
+
+    def test_control_server_packages_use_fixed_connector_and_separate_authorities(
+        self,
+    ) -> None:
+        workflow = (
+            REPO_ROOT / ".github/workflows/control-images-release.yml"
+        ).read_text()
+        attest = workflow.index("  attest:")
+        package_build = workflow.index("  package-build:", attest)
+        package_sign = workflow.index("  package-sign:", package_build)
+        publish = workflow.index("  publish:", package_sign)
+        self.assertLess(attest, package_build)
+        self.assertLess(package_build, package_sign)
+        self.assertLess(package_sign, publish)
+
+        build_section = workflow[package_build:package_sign]
+        sign_section = workflow[package_sign:publish]
+        self.assertIn("environment: control-server-release-compatibility", build_section)
+        self.assertIn("actions: read", build_section)
+        self.assertIn("packages: read", build_section)
+        self.assertNotIn("id-token: write", build_section)
+        for variable in (
+            "CONNECTOR_RELEASE_SOURCE_COMMIT",
+            "CONNECTOR_RELEASE_TAG",
+            "CONNECTOR_RELEASE_ID",
+            "CONNECTOR_RELEASE_WORKFLOW_RUN_ID",
+            "CONNECTOR_RELEASE_WORKFLOW_RUN_ATTEMPT",
+        ):
+            self.assertIn("${{ vars." + variable + " }}", build_section)
+        self.assertIn("github-token: ${{ github.token }}", build_section)
+        self.assertIn("run-id: ${{ vars.CONNECTOR_RELEASE_WORKFLOW_RUN_ID }}", build_section)
+        aggregate_verify = build_section.index("release.py verify-aggregate")
+        aggregate_parse = build_section.index(".public_release.descriptor.filename")
+        self.assertLess(aggregate_verify, aggregate_parse)
+        self.assertIn("create-public-release-descriptor", build_section)
+        self.assertIn(".assets | length == 103", build_section)
+        self.assertIn("connector-release-metadata.json.sigstore.json", build_section)
+        self.assertIn("oci_toolchain.py install", build_section)
+        self.assertIn("oci_toolchain.py export-images", build_section)
+        self.assertIn('temporary=$(mktemp "$RUNNER_TEMP/.oci-export-receipt.', build_section)
+        self.assertIn('> "$temporary"', build_section)
+        self.assertIn("os.fsync(descriptor)", build_section)
+        self.assertIn("os.link(source, destination", build_section)
+        self.assertIn('--oci-export-receipt "$RUNNER_TEMP/oci-export-receipt.json"', build_section)
+        self.assertIn("server_package.py build", build_section)
+
+        self.assertIn("environment: control-server-release-sigstore", sign_section)
+        self.assertIn("id-token: write", sign_section)
+        self.assertNotIn("packages: write", sign_section)
+        self.assertIn("server_package.py sign", sign_section)
+        self.assertIn("for mode in online offline", sign_section)
+        self.assertIn('--extract-to "$extract_to"', sign_section)
+        self.assertIn('--verification-receipt "$receipt"', sign_section)
+        self.assertIn('bundle="${receipt}.sigstore.json"', sign_section)
+        self.assertIn("control-server-package-receipts-signed-", sign_section)
+        self.assertGreaterEqual(sign_section.count('refs/tags/${tag}^{}'), 1)
+
+        scan = workflow.index("  vulnerability-scan:", package_sign)
+        vulnerability_attest = workflow.index("  vulnerability-attest:", scan)
+        scan_section = workflow[scan:vulnerability_attest]
+        vulnerability_attest_section = workflow[vulnerability_attest:publish]
+        for section in (scan_section, vulnerability_attest_section):
+            self.assertIn("control-images.lock.json", section)
+            self.assertIn("server-packages.manifest.json", section)
+            self.assertIn("check-vulnerabilities.py", section)
+        self.assertIn("core_roots: [", scan_section)
+        self.assertIn('id: "control"', scan_section)
+        self.assertIn('id: "server"', scan_section)
+        self.assertNotIn("artifact_path", scan_section)
+        self.assertNotIn("sbom_path", scan_section)
+        control_root_verify = vulnerability_attest_section.index(
+            'cosign verify-blob "$CONTROL_VULNERABILITY_DIR/control/control-images.lock.json"'
+        )
+        server_root_verify = vulnerability_attest_section.index(
+            'cosign verify-blob "$CONTROL_VULNERABILITY_DIR/server/server-packages.manifest.json"'
+        )
+        receipt_replay = vulnerability_attest_section.index(
+            "check-vulnerabilities.py verify-receipt"
+        )
+        self.assertLess(control_root_verify, receipt_replay)
+        self.assertLess(server_root_verify, receipt_replay)
+
+        publish_section = workflow[publish:]
+        self.assertIn("- package-sign", publish_section)
+        self.assertIn("- vulnerability-attest", publish_section)
+        self.assertIn("server-package-verify.py.sigstore.json", publish_section)
+        manifest_verify = publish_section.index(
+            'cosign verify-blob "$manifest"'
+        )
+        verifier_parse = publish_section.index(".consumer_verifier")
+        verifier_run = publish_section.index('python3 "$verifier" verify-release')
+        self.assertLess(manifest_verify, verifier_parse)
+        self.assertLess(verifier_parse, verifier_run)
+        self.assertIn("published package verification receipt differs from public replay", publish_section)
+        self.assertIn("--profile control-release", publish_section)
+
+    def test_connector_release_closes_vulnerability_and_public_platform_receipts(
+        self,
+    ) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/connector-release.yml").read_text()
+        attest = workflow.index("  attest:")
+        scan = workflow.index("  vulnerability-scan:", attest)
+        vulnerability_sign = workflow.index("  vulnerability-attest:", scan)
+        publish = workflow.index("  publish:", vulnerability_sign)
+        public_macos = workflow.index("  verify-public-release-macos:", publish)
+        public_linux = workflow.index("  verify-public-release-linux:", public_macos)
+        aggregate = workflow.index("  aggregate-public-verification:", public_linux)
+        self.assertLess(attest, scan)
+        self.assertLess(scan, vulnerability_sign)
+        self.assertLess(vulnerability_sign, publish)
+        self.assertLess(publish, public_macos)
+        self.assertLess(public_macos, public_linux)
+        self.assertLess(public_linux, aggregate)
+
+        vulnerability_section = workflow[scan:publish]
+        self.assertIn("scripts/install-trivy.sh", vulnerability_section)
+        self.assertIn("--list-all-pkgs", vulnerability_section)
+        self.assertIn("build-vulnerability-manifest.py", vulnerability_section)
+        self.assertIn("check-vulnerabilities.py", vulnerability_section)
+        self.assertIn("vulnerability-receipt.sigstore.json", vulnerability_section)
+        self.assertIn("core_roots: [{", vulnerability_section)
+        self.assertIn('kind: "connector-manifest-v1"', vulnerability_section)
+        self.assertNotIn("artifact_path", vulnerability_section)
+        self.assertNotIn("sbom_path", vulnerability_section)
+        root_verify = vulnerability_section.index(
+            'cosign verify-blob "$VULNERABILITY_DIR/connector/manifest.json"'
+        )
+        receipt_verify = vulnerability_section.index(
+            "check-vulnerabilities.py verify-receipt"
+        )
+        self.assertLess(root_verify, receipt_verify)
+        publish_section = workflow[publish:public_macos]
+        self.assertIn('test "${#unique[@]}" = 11', publish_section)
+        self.assertIn(".evidence_inventory[].path", publish_section)
+
+        public_section = workflow[public_macos:aggregate]
+        self.assertIn("gh release verify-asset", public_section)
+        self.assertIn("create-public-release-descriptor", public_section)
+        self.assertIn("connector-public-verification-darwin.json", public_section)
+        self.assertIn("connector-public-verification-linux.json", public_section)
+        self.assertGreaterEqual(public_section.count("verify-receipt"), 2)
+        aggregate_section = workflow[aggregate:]
+        self.assertIn("aggregate-verification-receipts", aggregate_section)
+        self.assertIn("verify-aggregate", aggregate_section)
+        self.assertIn("environment: connector-release-sigstore", aggregate_section)
+        self.assertIn("id-token: write", aggregate_section)
+        self.assertIn("retention-days: 90", aggregate_section)
 
     def test_workflow_verifies_runtime_constraints_before_installing_dev_extras(
         self,

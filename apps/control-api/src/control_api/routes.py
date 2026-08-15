@@ -11,9 +11,10 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings
+from .connector_release import admitted_connector_release, connector_release_metadata_sha256
 from .db import get_db_session
 from .dependencies import (
-    require_mutating_session,
+    require_logout_session,
     require_origin,
     require_recent_mutating_session,
     require_session,
@@ -32,7 +33,7 @@ from .schemas import (
     SessionView,
     UserView,
 )
-from .security import CookieTokens, client_ip, request_id
+from .security import CookieTokens, SessionCredentialTooLarge, client_ip, request_id
 from .services import (
     PairingCapacityExceeded,
     PairingConflict,
@@ -186,13 +187,52 @@ async def ready(request: Request) -> ReadinessResponse | JSONResponse:
         observe("database_migrations", request.app.state.database.schema_is_current()),
         observe("redis", request.app.state.store.ping()),
     )
+    settings: Settings = request.app.state.settings
+    current_connector_release = admitted_connector_release(settings)
+    connector_release_required = getattr(
+        request.app.state,
+        "connector_release_required",
+        settings.environment == "production",
+    )
+    startup_connector_release = getattr(
+        request.app.state,
+        "connector_release_admission",
+        None,
+    )
+    startup_connector_release_raw_sha256 = getattr(
+        request.app.state,
+        "connector_release_raw_sha256_admission",
+        None,
+    )
+    current_connector_release_raw = settings.connector_release_metadata_json
+    current_connector_release_raw_sha256 = connector_release_metadata_sha256(
+        current_connector_release_raw
+    )
+    if not connector_release_required and not current_connector_release_raw.strip():
+        connector_release_ok = (
+            current_connector_release is None
+            and startup_connector_release is None
+            and current_connector_release_raw_sha256 is not None
+            and current_connector_release_raw_sha256
+            == startup_connector_release_raw_sha256
+        )
+    else:
+        connector_release_ok = (
+            current_connector_release is not None
+            and current_connector_release == startup_connector_release
+            and current_connector_release_raw_sha256 is not None
+            and current_connector_release_raw_sha256
+            == startup_connector_release_raw_sha256
+        )
+
     checks = {
         "database": "ok" if database_ok else "failed",
         "database_migrations": "ok" if migrations_ok else "failed",
         "redis": "ok" if redis_ok else "failed",
         "sub2api_contract": (
-            "ok" if request.app.state.settings.sub2api_contract_ready else "failed"
+            "ok" if settings.sub2api_contract_ready else "failed"
         ),
+        "connector_release": "ok" if connector_release_ok else "failed",
     }
     if "failed" in checks.values():
         return JSONResponse(
@@ -266,11 +306,24 @@ async def exchange_session(
         raise HTTPException(status_code=502, detail="sub2api_auth_contract_error") from None
 
     try:
-        created = await request.app.state.session_service.create(db, user, _metadata(request))
+        created = await request.app.state.session_service.create(
+            db,
+            user,
+            _metadata(request),
+            access_token,
+        )
     except SessionCapacityExceeded:
         request.app.state.operational_metrics.session_exchange("capacity_exceeded")
         await db.rollback()
         raise HTTPException(status_code=429, detail="control_session_capacity_exceeded") from None
+    except SessionCredentialTooLarge:
+        request.app.state.operational_metrics.session_exchange("credential_too_large")
+        await db.rollback()
+        await _audit_exchange_failure(db, request, "access_token_too_large")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="sub2api_access_token_too_large",
+        ) from None
     _set_control_cookies(response, created.record, created.cookies, request.app.state.settings)
     request.app.state.operational_metrics.session_exchange("succeeded")
     return _session_view(created.record, request.app.state.settings)
@@ -289,7 +342,7 @@ async def current_session(
 async def logout_session(
     request: Request,
     response: Response,
-    record: ControlSession = Depends(require_mutating_session),
+    record: ControlSession = Depends(require_logout_session),
     db: AsyncSession = Depends(get_db_session),
 ) -> Response:
     await request.app.state.session_service.revoke(db, record, _metadata(request))

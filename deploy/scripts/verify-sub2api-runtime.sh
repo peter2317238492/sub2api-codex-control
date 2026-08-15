@@ -12,8 +12,12 @@ auth_max_age=${SUB2API_AUTH_EVIDENCE_MAX_AGE_SECONDS:-900}
 auth_probe_nonce=${SUB2API_AUTH_EVIDENCE_NONCE:-}
 auth_probe_user_id=${SUB2API_AUTH_EVIDENCE_EXPECTED_USER_ID:-}
 auth_probe_base_url=${SUB2API_AUTH_EVIDENCE_BASE_URL:-}
-expected_network=${SUB2API_EXPECTED_NETWORK:-${SUB2API_NETWORK_NAME:-sub2api-network}}
+expected_network=${SUB2API_EXPECTED_NETWORK:-${SUB2API_NETWORK_NAME:-sub2api-deploy_sub2api-network}}
 expected_alias=${SUB2API_EXPECTED_NETWORK_ALIAS:-sub2api}
+expected_bind_source=${SUB2API_EXPECTED_DATA_BIND_SOURCE:-}
+expected_bind_uid=${SUB2API_EXPECTED_DATA_BIND_UID:-}
+expected_bind_gid=${SUB2API_EXPECTED_DATA_BIND_GID:-}
+expected_bind_mode=${SUB2API_EXPECTED_DATA_BIND_MODE:-}
 
 fail() {
   echo "verify-sub2api-runtime: $*" >&2
@@ -43,6 +47,20 @@ if [ -n "$auth_evidence_file" ]; then
 fi
 [ -n "$expected_network" ] || fail "SUB2API_EXPECTED_NETWORK is required"
 [ -n "$expected_alias" ] || fail "SUB2API_EXPECTED_NETWORK_ALIAS is required"
+if [ -n "$expected_bind_source$expected_bind_uid$expected_bind_gid$expected_bind_mode" ]; then
+  [ -n "$expected_bind_source" ] \
+    || fail "SUB2API_EXPECTED_DATA_BIND_SOURCE is required with bind policy"
+  case "$expected_bind_uid" in
+    ''|*[!0-9]*|0) fail "SUB2API_EXPECTED_DATA_BIND_UID must be positive" ;;
+  esac
+  case "$expected_bind_gid" in
+    ''|*[!0-9]*|0) fail "SUB2API_EXPECTED_DATA_BIND_GID must be positive" ;;
+  esac
+  case "$expected_bind_mode" in
+    0700|0750|0755) ;;
+    *) fail "SUB2API_EXPECTED_DATA_BIND_MODE must be 0700, 0750, or 0755" ;;
+  esac
+fi
 
 umask 077
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/verify-sub2api-runtime.XXXXXX")
@@ -100,6 +118,21 @@ sha256sum "/proc/$pid1_host_pid/exe" > "$work_dir/pid1-sha256.txt"
 pid1_binary_sha256=$(awk 'NR == 1 && NF >= 1 {print $1}' "$work_dir/pid1-sha256.txt")
 [ "$pid1_binary_sha256" = "$actual_binary_sha256" ] \
   || fail "container PID 1 executable hash differs from /app/sub2api"
+: > "$work_dir/writable-file-sha256.txt"
+for writable_path in \
+  /app/sub2api.backup \
+  /app/sub2api.backup.backup \
+  /root/.ash_history
+do
+  if docker container exec --user 0 "$container_id" test -f "$writable_path"; then
+    docker container exec --user 0 "$container_id" sha256sum "$writable_path" \
+      >> "$work_dir/writable-file-sha256.txt"
+  else
+    writable_status=$?
+    [ "$writable_status" = "1" ] \
+      || fail "could not inspect prohibited writable file: $writable_path"
+  fi
+done
 docker container exec "$container_id" /app/sub2api --version > "$work_dir/version.txt" 2>&1
 docker container diff "$container_id" > "$work_dir/diff.txt"
 docker container inspect "$container_id" > "$work_dir/container-after.json"
@@ -124,11 +157,19 @@ set -- \
   --pid1-sha256 "$pid1_binary_sha256" \
   --version-output "$work_dir/version.txt" \
   --diff "$work_dir/diff.txt" \
+  --writable-file-sha256 "$work_dir/writable-file-sha256.txt" \
   --auth-max-age-seconds "$auth_max_age" \
   --expected-network "$expected_network" \
   --expected-alias "$expected_alias"
 if [ -n "$contract_file" ]; then
   set -- "$@" --contract-file "$contract_file"
+fi
+if [ -n "$expected_bind_source" ]; then
+  set -- "$@" \
+    --expected-bind-source "$expected_bind_source" \
+    --expected-bind-uid "$expected_bind_uid" \
+    --expected-bind-gid "$expected_bind_gid" \
+    --expected-bind-mode "$expected_bind_mode"
 fi
 if [ -n "$auth_evidence_file" ]; then
   set -- "$@" \

@@ -98,3 +98,11 @@ deploy/docker-compose/backups/*
 tests/e2e/reports/*
 !tests/e2e/reports/.gitignore
 !tests/e2e/reports/README.md
+
+# Keep only empty-directory sentinels for local monitoring evidence sinks.
+!deploy/monitoring/evidence/
+deploy/monitoring/evidence/*
+!deploy/monitoring/evidence/.gitignore
+!deploy/monitoring/delivery-evidence/
+deploy/monitoring/delivery-evidence/*
+!deploy/monitoring/delivery-evidence/.gitignore
