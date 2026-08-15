@@ -60,8 +60,8 @@ browser login flow and is not sent to the Control API.
 
 Click the download icon at the top of the device rail, or choose **Install
 Connector** in the empty state. Select the operating system, architecture, and
-package format. Compare the displayed SHA-256 before installing the `.deb`,
-`.rpm`, or signed and notarized `.pkg`.
+package format, download it, then run the checksum-and-install command shown by
+the PWA. Continue only when the SHA-256 matches exactly.
 
 See [Installation](installation.md) for package commands and the source-only
 evaluation path. The package does not install or upgrade Codex, and it does not
@@ -70,7 +70,9 @@ or firewall rules.
 
 ### 3. Create configuration
 
-As the ordinary user who owns Codex and the workspace, run:
+The formal wizard initializes one workspace. Enter its existing absolute path
+and a device name, then run the displayed command as the ordinary user who owns
+Codex and that workspace:
 
 ```sh
 sub2api-codex-connector-ctl init \
@@ -79,15 +81,8 @@ sub2api-codex-connector-ctl init \
   --display-name "My workstation"
 ```
 
-This creates a mode-`0600` private configuration. To add multiple workspaces at
-once, use the PWA's **Generate configuration** step and enter:
-
-- **Device name:** shown only in your own device list;
-- **State directory:** absolute private storage for identity and local state;
-- **Workspace roots:** 1 to 32 absolute directories allowed for remote threads;
-- **Sandbox:** `read-only` or at most `workspace-write`.
-
-Place the download at the path shown by the PWA. The default is:
+This creates a mode-`0600` private configuration on the device. Its default
+path is:
 
 ```text
 ${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
@@ -99,8 +94,9 @@ Print the effective path with:
 sub2api-codex-connector-ctl config-path
 ```
 
-State, workspaces, and `CODEX_HOME` must not contain one another. Never commit
-`connector.json`, send it in chat, or give it to an operator.
+State, workspaces, and `CODEX_HOME` must not contain one another. The browser
+does not need this file. Never commit `connector.json`, send it in chat, or give
+it to an operator.
 
 ### 4. Pair the device
 
@@ -112,14 +108,17 @@ sub2api-codex-connector-ctl pair
 
 The Connector reports a private, mode-`0600` `pairing-code.json` path on
 stderr. Read the 16-character one-time code only from that file. In the PWA,
-select **Pair existing Connector** and enter the code. The command exits after
-the claim is confirmed.
+select **Pair existing Connector** and enter the code. Keep `pair` running; it
+exits only after the browser claim is confirmed.
 
 The pairing code is a temporary credential. Do not screenshot it, paste it in
 chat, or write it to logs. Generate a new code if it expires, is denied, or has
 already been used.
 
 ### 5. Start and confirm online
+
+Only after `pair` has completed, start the background service as the same
+ordinary user:
 
 ```sh
 sub2api-codex-connector-ctl start
@@ -172,7 +171,10 @@ invalidates it and fails closed. Deny anything whose impact you cannot confirm.
 ## Change workspaces or sandbox
 
 The local device owns workspace and sandbox boundaries; the browser cannot
-silently expand them. After editing `connector.json`, restart the user service:
+silently expand them. Multi-root setup is an advanced local operation. Run
+`sub2api-codex-connector-ctl config-path`, edit that private mode-`0600`
+`connector.json`, and set `workspace_roots` to 1 to 32 existing absolute
+directories. After the edit, restart the user service:
 
 ```sh
 sub2api-codex-connector-ctl restart

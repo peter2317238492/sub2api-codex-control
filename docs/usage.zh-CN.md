@@ -53,14 +53,15 @@ https://control.example.com/codex/
 ### 2. 安装 Connector
 
 点击设备栏顶部的下载图标，或在“暂无设备”状态点击**安装 Connector**。选择操作系统、架构
-和包格式，核对页面显示的 SHA-256，再安装对应 `.deb`、`.rpm` 或已签名公证的 `.pkg`。
+和包格式，下载安装包，再执行 PWA 给出的校验与安装命令。只有 SHA-256 完全一致时才继续。
 
 完整安装命令和源码评估路径见[安装指南](installation.zh-CN.md)。安装包不会安装或升级 Codex，
 也不会修改 Codex 配置、登录文件、工作区、插件、shell 配置或防火墙。
 
 ### 3. 创建配置
 
-推荐以拥有 Codex 和工作区的普通用户运行：
+正式向导一次初始化一个工作区。填写已存在的绝对工作区路径和设备名称后，以拥有 Codex 和
+该工作区的普通用户执行页面给出的命令：
 
 ```sh
 sub2api-codex-connector-ctl init \
@@ -69,15 +70,7 @@ sub2api-codex-connector-ctl init \
   --display-name "我的工作站"
 ```
 
-这会创建 mode `0600` 的私密配置。需要一次添加多个工作区时，可在 PWA 的**生成配置**步骤
-填写以下内容：
-
-- **设备名称：** 只用于你自己的设备列表；
-- **State directory：** Connector 身份、配对凭据和本地状态的绝对私密目录；
-- **Workspace roots：** 允许远程线程使用的 1 到 32 个绝对目录；
-- **Sandbox：** `read-only` 或最高为 `workspace-write`。
-
-下载后，将配置保存到 PWA 显示的路径。默认路径是：
+命令会在设备本地创建 mode `0600` 的私密配置，默认路径是：
 
 ```text
 ${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
@@ -89,8 +82,8 @@ ${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
 sub2api-codex-connector-ctl config-path
 ```
 
-状态目录、工作区与 `CODEX_HOME` 不能互相包含。不要把 `connector.json` 提交到 Git、发到
-聊天或交给管理员。
+状态目录、工作区与 `CODEX_HOME` 不能互相包含。浏览器不需要取得该文件；不要把
+`connector.json` 提交到 Git、发到聊天或交给管理员。
 
 ### 4. 配对设备
 
@@ -101,13 +94,15 @@ sub2api-codex-connector-ctl pair
 ```
 
 Connector 会在 stderr 提示一个 mode `0600` 的 `pairing-code.json` 路径。只从该私密文件读取
-16 位一次性配对码，然后在 PWA 点击**配对已有 Connector**并输入。命令确认认领后会自行
-退出。
+16 位一次性配对码，然后在 PWA 点击**配对已有 Connector**并输入。保持 `pair` 运行，直到
+网页认领完成且命令自行退出。
 
 配对码是临时凭据。不要截图、复制到聊天或写入日志；过期、被拒绝或已使用的配对码必须重新
 生成。
 
 ### 5. 启动并确认在线
+
+只有 `pair` 已完成，才以同一普通用户启动后台服务：
 
 ```sh
 sub2api-codex-connector-ctl start
@@ -152,8 +147,9 @@ sub2api-codex-connector-ctl status
 
 ## 修改工作区或沙箱
 
-工作区和沙箱边界由设备本地配置拥有，不能从浏览器静默扩大。修改
-`connector.json` 后重启用户服务：
+工作区和沙箱边界由设备本地配置拥有，不能从浏览器静默扩大。多工作区属于高级本地操作：
+先运行 `sub2api-codex-connector-ctl config-path`，再编辑该 mode `0600` 私密
+`connector.json`，将 `workspace_roots` 设为 1 到 32 个已存在的绝对目录。修改后重启用户服务：
 
 ```sh
 sub2api-codex-connector-ctl restart

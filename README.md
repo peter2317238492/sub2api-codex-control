@@ -72,8 +72,8 @@ flowchart LR
 ## Highlights
 
 - **Self-service devices.** An authenticated user can download the matching
-  Connector package, generate a private configuration, pair a device, and
-  revoke it from the PWA.
+  Connector package, copy the local initialization command, pair a device, and
+  revoke it without operator assistance.
 - **Eight typed operations only.** Remote access is limited to `model/list`,
   `thread/start`, `thread/list`, `thread/read`, `thread/resume`, `turn/start`,
   `turn/steer`, and `turn/interrupt`.
@@ -110,25 +110,27 @@ https://your-sub2api.example/codex/
 Control exchanges the current Sub2API access session for a short-lived
 HttpOnly session. Your Sub2API refresh credential is not sent to Control.
 
-### 2. Install the Connector
+### 2. Download, verify, and install
 
 Click the download icon in the device rail, or select **Install Connector** in
 the empty state. Choose the package for your operating system and architecture,
-then verify the displayed SHA-256 before installing.
+download it, and run the checksum-and-install command shown by the PWA. Do not
+install the package unless its SHA-256 matches exactly.
 
 | Platform | Supported package | Install with |
 | --- | --- | --- |
 | Debian / Ubuntu `amd64`, `arm64` | `.deb` | `sudo apt install ./sub2api-codex-connector_*.deb` |
 | Fedora / RHEL `amd64`, `arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
-| macOS `amd64`, Apple silicon | signed and notarized `.pkg` | `sudo installer -pkg ./sub2api-codex-connector_*.pkg -target /` |
+| macOS `amd64`, Apple silicon | signed and notarized `.pkg` | `open ./sub2api-codex-connector_*.pkg` |
 
 Run Connector commands as the ordinary user who owns Codex and the workspace,
 not as `root`.
 
 ### 3. Create private configuration
 
-The recommended path is to let the installed helper create a mode-`0600`
-configuration:
+The formal wizard initializes one workspace. Fill in the device name and
+absolute workspace path in the PWA, then run the displayed command as the
+ordinary Codex user to create a mode-`0600` private configuration:
 
 ```sh
 sub2api-codex-connector-ctl init \
@@ -137,13 +139,10 @@ sub2api-codex-connector-ctl init \
   --display-name "My workstation"
 ```
 
-To configure multiple workspaces at once, fill in the device name, state
-directory, workspaces, and sandbox cap in the PWA and download
-`connector.json`. Place it at the private path described in the
-[installation guide](docs/installation.md#create-private-configuration); do not
-run long-term from the downloads directory.
+Multiple workspace roots are an advanced, device-local configuration; see
+[Change workspaces or sandbox](docs/usage.md#change-workspaces-or-sandbox).
 
-### 4. Pair the device
+### 4. Pair and claim the device
 
 ```sh
 sub2api-codex-connector-ctl pair
@@ -151,10 +150,13 @@ sub2api-codex-connector-ctl pair
 
 `pair` reports the path of a mode-`0600` file containing a one-time code. Keep
 the command running, select **Pair existing Connector** in the PWA, enter the
-16-character code, and wait for the claim to complete. Do not paste the code
-into chat, logs, or an issue.
+16-character code, and wait until the command confirms the claim and exits. Do
+not paste the code into chat, logs, or an issue.
 
 ### 5. Start the service
+
+Only after `pair` has confirmed the browser claim, start the background service
+as the same ordinary user:
 
 ```sh
 sub2api-codex-connector-ctl start
