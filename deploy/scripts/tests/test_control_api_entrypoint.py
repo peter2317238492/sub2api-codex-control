@@ -13,7 +13,11 @@ ENTRYPOINT = REPO_ROOT / "deploy/scripts/control-api-entrypoint.sh"
 
 class ControlAPIEntrypointTests(unittest.TestCase):
     def invoke(
-        self, auth_mode: str, *, redis_user: str = "default"
+        self,
+        auth_mode: str,
+        *,
+        redis_user: str = "default",
+        session_secret: str = "5a" * 32,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -22,7 +26,7 @@ class ControlAPIEntrypointTests(unittest.TestCase):
             session = root / "session"
             database.write_text("db-secret\n", encoding="utf-8")
             redis.write_text("redis secret\n", encoding="utf-8")
-            session.write_text("s" * 64 + "\n", encoding="utf-8")
+            session.write_text(session_secret + "\n", encoding="utf-8")
             for path in (database, redis, session):
                 path.chmod(0o600)
             binary_dir = root / "bin"
@@ -71,6 +75,31 @@ class ControlAPIEntrypointTests(unittest.TestCase):
         result = self.invoke("optional")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unsupported CONTROL_REDIS_AUTH_MODE", result.stderr)
+
+    def test_short_session_secret_fails_closed(self) -> None:
+        result = self.invoke("none", session_secret="too-short")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("session secret must contain at least 32 bytes", result.stderr)
+
+    def test_known_session_secret_placeholders_fail_closed(self) -> None:
+        insecure_values = (
+            "development-only-change-this-session-secret",
+            "replace-with-at-least-32-random-bytes",
+            "  REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES  ",
+            "a-test-secret-that-is-long-and-never-production",
+            "device-send-barrier-secret-with-at-least-32-bytes",
+            "production-secret-that-is-longer-than-32-bytes",
+        )
+        for index, session_secret in enumerate(insecure_values):
+            with self.subTest(case=index):
+                result = self.invoke("none", session_secret=session_secret)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "session secret uses a known development, test, or example value",
+                    result.stderr,
+                )
 
 
 if __name__ == "__main__":

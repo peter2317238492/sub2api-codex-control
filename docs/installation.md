@@ -8,8 +8,9 @@ There are three distinct installation paths:
 
 1. The isolated E2E path is available now and verifies the source in disposable
    infrastructure.
-2. After a signed `connector-v*` Release is published, ordinary users install
-   its native Connector package and complete setup from the PWA.
+2. After a signed `connector-v*` Release is published, ordinary users select its
+   native Connector package and complete post-install setup from the PWA. Native
+   installation may require local operating-system administrator approval.
 3. A production Control deployment is not available from the first public
    source release. It requires a complete signed release evidence set that has
    not yet been published.
@@ -71,6 +72,9 @@ only when the downloaded file's SHA-256 matches exactly.
 | Fedora / RHEL `amd64`, `arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
 | macOS Intel, Apple silicon | signed and notarized `.pkg` | `open ./sub2api-codex-connector_*.pkg` |
 
+This package step does not require a Sub2API administrator. It does use local
+`sudo` on Linux, and macOS Installer may request a local administrator credential.
+
 The package installs only the Connector, its user service, and its management
 command; it does not install or upgrade Codex. Run every command below as the
 ordinary user who owns Codex and the intended workspace.
@@ -91,8 +95,12 @@ sub2api-codex-connector-ctl init \
 The command writes a mode-`0600` configuration at:
 
 ```text
-${XDG_CONFIG_HOME:-$HOME/.config}/sub2api-codex-connector/connector.json
+$HOME/.config/sub2api-codex-connector/connector.json
 ```
+
+This is the fixed formal configuration path. A non-empty `XDG_CONFIG_HOME`
+override is rejected so the interactive command and packaged user service cannot
+select different files.
 
 Print the effective path with:
 
@@ -101,11 +109,35 @@ sub2api-codex-connector-ctl config-path
 ```
 
 The private configuration is created and kept on the device. Do not commit it,
-send it in chat, or give it to an operator. For advanced multi-root use, edit
-this local file after initialization and set `workspace_roots` to 1 to 32
-existing absolute directories. You may also lower `sandbox_cap` to `read-only`;
-its maximum is `workspace-write`. Preserve mode `0600`. State, workspaces, and
-`CODEX_HOME` must not contain one another.
+send it in chat, or give it to an operator. New initialization resolves the
+current `codex` command to an absolute executable path and binds the resulting
+file's SHA-256 to a private v2 managed layout. Do not edit `connector.json` in
+place: pair, start, and service startup fail closed when its digest changes.
+The formal command currently initializes one workspace and does not provide a
+controlled multi-root or sandbox-cap update. To choose a different workspace,
+revoke the device in the PWA, stop it, purge its v2 managed state, then run a
+fresh `init`, `pair`, and `start`.
+
+### Migrate a legacy configuration without losing state
+
+An older private configuration already at the fixed path but without a managed
+layout remains usable by `pair`, `start`, and `run-service`; the Connector still
+validates the configuration structure and uses the current valid `CODEX_HOME`.
+`purge-user-state` refuses that legacy configuration because it has no verified
+deletion boundary. Run `sub2api-codex-connector-ctl start` interactively once:
+it creates a private binding between the unchanged configuration digest and the
+current absolute Codex path. Background startup fails closed if that binding is
+missing or no longer matches.
+
+If an older installation used a non-empty `XDG_CONFIG_HOME`, first stop the
+Connector and make mode-`0600` backups of its `connector.json` and the state
+directory named by `state_dir`. Confirm that
+`$HOME/.config/sub2api-codex-connector` does not already exist. Then copy, rather
+than move, the old configuration to the fixed path; set its directory to mode
+`0700` and `connector.json` to `0600`; unset `XDG_CONFIG_HOME`; and run `pair`
+and `start`. Keep the original and both backups until the device is online and
+its preserved state is confirmed. Never overwrite an existing fixed-path
+configuration; leave both copies untouched and resolve that conflict manually.
 
 ## Pair and start
 
@@ -128,8 +160,11 @@ sub2api-codex-connector-ctl status
 
 The package installs a user-level `systemd` service on Linux or a `launchd`
 agent on macOS. Package upgrades and removal preserve the user's private
-Connector state. Revoke the device in the PWA before explicitly deleting that
-state with `sub2api-codex-connector-ctl purge-user-state --yes`.
+Connector state. For a v2 managed configuration, revoke the device in the PWA
+before explicitly deleting that state with
+`sub2api-codex-connector-ctl purge-user-state --yes`. Legacy configurations
+without a verified layout must follow the non-destructive migration guidance
+above instead.
 
 ## Build a Connector from source for development
 

@@ -47,7 +47,6 @@ from .models import (
     Command,
     CommandStatus,
     ConnectionStatus,
-    ControlSession,
     Device,
     DeviceConnection,
     DeviceOutbox,
@@ -91,6 +90,7 @@ ALLOWED_DEVICE_EVENTS = frozenset(
 )
 BROWSER_SESSION_RECHECK_SECONDS = 15.0
 BROWSER_SESSION_SUBSCRIBE_TIMEOUT_SECONDS = 5.0
+BROWSER_EVENT_SEND_TIMEOUT_SECONDS = 5.0
 BROWSER_EVENT_DB_POLL_SECONDS = 5.0
 _LOGGER = logging.getLogger(__name__)
 
@@ -132,6 +132,17 @@ class BrowserConnectionLease:
     @property
     def slots(self) -> tuple[BrowserLeaseSlot, BrowserLeaseSlot]:
         return (self.session_slot, self.user_slot)
+
+
+@dataclass(slots=True)
+class BrowserSessionGate:
+    authorized: asyncio.Event = field(default_factory=asyncio.Event)
+    verification_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    sends_drained: asyncio.Event = field(default_factory=asyncio.Event)
+    in_flight_sends: int = 0
+
+    def __post_init__(self) -> None:
+        self.sends_drained.set()
 
 
 def _utc(value: datetime) -> datetime:
@@ -492,8 +503,14 @@ class RealtimeService:
                 self._pump_browser_events(session.sub2api_user_id, live_queue, subscription_ready)
             )
             session_monitor_ready = asyncio.Event()
+            session_gate = BrowserSessionGate()
             session_monitor_task = asyncio.create_task(
-                self._monitor_browser_session(session.id, session_monitor_ready)
+                self._monitor_browser_session(
+                    session.id,
+                    raw_token,
+                    session_monitor_ready,
+                    session_gate,
+                )
             )
             lease_renewal_task = asyncio.create_task(self._renew_browser_connection_lease(lease))
             tasks.update({subscription_task, session_monitor_task, lease_renewal_task})
@@ -523,12 +540,16 @@ class RealtimeService:
                             "event cursor requires bootstrap",
                         ) from exc
                 for event in page.events:
-                    self._raise_if_browser_dependency_ended(
-                        subscription_task,
-                        session_monitor_task,
-                        lease_renewal_task,
+                    await self._send_browser_event_when_authorized(
+                        websocket,
+                        event.model_dump_json(),
+                        session_gate,
+                        (
+                            subscription_task,
+                            session_monitor_task,
+                            lease_renewal_task,
+                        ),
                     )
-                    await websocket.send_text(event.model_dump_json())
                     latest_cursor[0] = int(event.cursor)
                 if not page.has_more:
                     break
@@ -541,6 +562,7 @@ class RealtimeService:
                             session.sub2api_user_id,
                             live_queue,
                             latest_cursor,
+                            session_gate,
                             (
                                 subscription_task,
                                 session_monitor_task,
@@ -2714,6 +2736,7 @@ class RealtimeService:
         owner_user_id: str,
         queue: asyncio.Queue[None],
         latest_cursor: list[int],
+        session_gate: BrowserSessionGate,
         dependency_tasks: tuple[asyncio.Task[None], ...] = (),
     ) -> None:
         while True:
@@ -2745,11 +2768,64 @@ class RealtimeService:
                             "event cursor requires bootstrap",
                         ) from exc
                 for event in page.events:
-                    self._raise_if_browser_dependency_ended(*dependency_tasks)
-                    await websocket.send_text(event.model_dump_json())
+                    await self._send_browser_event_when_authorized(
+                        websocket,
+                        event.model_dump_json(),
+                        session_gate,
+                        dependency_tasks,
+                    )
                     latest_cursor[0] = int(event.cursor)
                 if not page.has_more:
                     break
+
+    async def _send_browser_event_when_authorized(
+        self,
+        websocket: WebSocket,
+        encoded_event: str,
+        session_gate: BrowserSessionGate,
+        dependency_tasks: tuple[asyncio.Task[None], ...],
+    ) -> None:
+        while True:
+            self._raise_if_browser_dependency_ended(*dependency_tasks)
+            async with session_gate.verification_lock:
+                self._raise_if_browser_dependency_ended(*dependency_tasks)
+                if session_gate.authorized.is_set():
+                    session_gate.in_flight_sends += 1
+                    session_gate.sends_drained.clear()
+                    break
+            await self._wait_for_browser_authorization(
+                session_gate.authorized,
+                dependency_tasks,
+            )
+        try:
+            self._raise_if_browser_dependency_ended(*dependency_tasks)
+            try:
+                async with asyncio.timeout(BROWSER_EVENT_SEND_TIMEOUT_SECONDS):
+                    await websocket.send_text(encoded_event)
+            except TimeoutError as exc:
+                raise BrowserSocketClose(1013, "browser event delivery unavailable") from exc
+        finally:
+            async with session_gate.verification_lock:
+                session_gate.in_flight_sends -= 1
+                if session_gate.in_flight_sends == 0:
+                    session_gate.sends_drained.set()
+
+    async def _wait_for_browser_authorization(
+        self,
+        authorized: asyncio.Event,
+        dependency_tasks: tuple[asyncio.Task[None], ...],
+    ) -> None:
+        authorization_wait = asyncio.create_task(authorized.wait())
+        try:
+            await asyncio.wait(
+                {authorization_wait, *dependency_tasks},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            self._raise_if_browser_dependency_ended(*dependency_tasks)
+        finally:
+            if not authorization_wait.done():
+                authorization_wait.cancel()
+            await asyncio.gather(authorization_wait, return_exceptions=True)
 
     @staticmethod
     async def _browser_receive_loop(websocket: WebSocket) -> None:
@@ -2761,7 +2837,9 @@ class RealtimeService:
     async def _monitor_browser_session(
         self,
         session_id: uuid.UUID,
+        raw_token: str,
         ready: asyncio.Event,
+        session_gate: BrowserSessionGate,
     ) -> None:
         subscription_ready = asyncio.Event()
         subscription = self._store.subscribe(
@@ -2792,9 +2870,11 @@ class RealtimeService:
                 subscription_ready_wait.cancel()
             await asyncio.gather(subscription_ready_wait, return_exceptions=True)
             subscription_ready_wait = None
-            expires_at = await self._active_browser_session_expiry(session_id)
-            if expires_at is None:
-                raise BrowserSocketClose(4401, "control session expired")
+            expires_at = await self._refresh_browser_session_authorization(
+                session_id,
+                raw_token,
+                session_gate,
+            )
             ready.set()
 
             expected_signal = str(session_id)
@@ -2804,7 +2884,11 @@ class RealtimeService:
                     raise BrowserSocketClose(4401, "control session expired")
                 done, _ = await asyncio.wait(
                     {next_signal},
-                    timeout=min(BROWSER_SESSION_RECHECK_SECONDS, remaining),
+                    timeout=min(
+                        BROWSER_SESSION_RECHECK_SECONDS,
+                        float(self._settings.session_upstream_recheck_seconds),
+                        remaining,
+                    ),
                 )
                 if next_signal in done:
                     signal = next_signal.result()
@@ -2814,9 +2898,11 @@ class RealtimeService:
 
                 # Pub/Sub is only a prompt. PostgreSQL remains the authority, and
                 # the periodic check covers a publish lost after a durable revoke.
-                expires_at = await self._active_browser_session_expiry(session_id)
-                if expires_at is None:
-                    raise BrowserSocketClose(4401, "control session expired")
+                expires_at = await self._refresh_browser_session_authorization(
+                    session_id,
+                    raw_token,
+                    session_gate,
+                )
         except asyncio.CancelledError:
             raise
         except BrowserSocketClose:
@@ -2831,6 +2917,7 @@ class RealtimeService:
                 "control session verification unavailable",
             ) from exc
         finally:
+            session_gate.authorized.clear()
             ready.set()
             if subscription_ready_wait is not None:
                 if not subscription_ready_wait.done():
@@ -2841,17 +2928,43 @@ class RealtimeService:
                     next_signal.cancel()
                 await asyncio.gather(next_signal, return_exceptions=True)
 
+    async def _refresh_browser_session_authorization(
+        self,
+        session_id: uuid.UUID,
+        raw_token: str,
+        session_gate: BrowserSessionGate,
+    ) -> datetime:
+        async with session_gate.verification_lock:
+            session_gate.authorized.clear()
+        try:
+            async with asyncio.timeout(BROWSER_EVENT_SEND_TIMEOUT_SECONDS):
+                await session_gate.sends_drained.wait()
+        except TimeoutError as exc:
+            raise BrowserSocketClose(1013, "browser event delivery unavailable") from exc
+        async with session_gate.verification_lock:
+            async with asyncio.timeout(self._settings.sub2api_timeout_seconds):
+                expires_at = await self._active_browser_session_expiry(session_id, raw_token)
+            if expires_at is None:
+                raise BrowserSocketClose(4401, "control session expired")
+            session_gate.authorized.set()
+            return expires_at
+
     async def _active_browser_session_expiry(
         self,
         session_id: uuid.UUID,
+        raw_token: str,
     ) -> datetime | None:
         async with self._database.session_factory() as db:
-            session = await db.get(ControlSession, session_id)
-        if (
-            session is None
-            or session.revoked_at is not None
-            or _utc(session.expires_at) <= datetime.now(UTC)
-        ):
+            # WebSocket monitors own the hard recheck cadence. Bypassing the
+            # shared read marker here prevents a nearly expired marker from
+            # being followed by another full interval of unverified access.
+            session = await self._sessions.resolve(
+                db,
+                raw_token,
+                touch=False,
+                force_upstream=True,
+            )
+        if session is None or session.id != session_id:
             return None
         return _utc(session.expires_at)
 

@@ -967,7 +967,6 @@ export const useControlStore = defineStore("control", () => {
     activeThread.value = null;
     threads.value = [];
     models.value = [];
-    connectorRelease.value = null;
     const replacement = devices.value.find((device) => device.status === "online") ?? devices.value[0];
     if (!replacement) return;
     const firstThreadId = selectSnapshotDevice(replacement.id);
@@ -1175,6 +1174,7 @@ export const useControlStore = defineStore("control", () => {
     devices.value = [];
     threads.value = [];
     models.value = [];
+    connectorRelease.value = null;
     activeThread.value = null;
     approvals.value = [];
     selectedDeviceId.value = null;

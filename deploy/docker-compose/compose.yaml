@@ -20,6 +20,7 @@ x-control-api-base: &control-api-base
     CONTROL_EXTERNAL_API_BASE_PATH: /codex-api
     CONTROL_BUILD_VERSION: ${CONTROL_RELEASE:-0.1.0}
     CONTROL_BUILD_VCS_REF: ${CONTROL_VCS_REF:-unknown}
+    CONTROL_CONNECTOR_RELEASE_METADATA_JSON: ${CONTROL_CONNECTOR_RELEASE_METADATA_JSON:?packaged Connector release metadata is required}
     CONTROL_ALLOWED_ORIGINS_CSV: ${CONTROL_PUBLIC_ORIGIN:?CONTROL_PUBLIC_ORIGIN must be set to the HTTPS origin}
     CONTROL_DATABASE_PASSWORD_FILE: /run/secrets/control_db_password
     CONTROL_DB_HOST: ${CONTROL_DB_HOST:-postgres}

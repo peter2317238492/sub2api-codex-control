@@ -40,6 +40,7 @@ from .commands import (
     command_scope,
     command_view,
 )
+from .connector_release import admitted_connector_release
 from .db import get_db_session
 from .dependencies import (
     require_mutating_session,
@@ -312,12 +313,25 @@ async def bootstrap_control(
     device_views = await asyncio.gather(
         *(device_summary(device, request.app.state.store) for device in devices)
     )
+    connector_release = admitted_connector_release(settings)
+    connector_release_required = getattr(
+        request.app.state,
+        "connector_release_required",
+        settings.environment == "production",
+    )
+    if connector_release_required:
+        connector_release = getattr(
+            request.app.state,
+            "connector_release_admission",
+            None,
+        )
     snapshot = ControlBootstrapResponse(
         event_cursor=str(event_cursor),
         devices=list(device_views),
         threads=thread_views,
         approvals=approval_views,
         models_by_device=models_by_device,
+        connector_release=connector_release,
     )
     if len(snapshot.model_dump_json().encode("utf-8")) > settings.bootstrap_max_response_bytes:
         raise HTTPException(status_code=413, detail="bootstrap_response_limit_exceeded")

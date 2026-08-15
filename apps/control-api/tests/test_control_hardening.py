@@ -47,7 +47,7 @@ from control_api.protocol import (
     HelloPayload,
     ensure_ascii_json_byte_length,
 )
-from control_api.realtime import ActiveDeviceSocket, RealtimeProtocolError
+from control_api.realtime import ActiveDeviceSocket, BrowserSessionGate, RealtimeProtocolError
 from control_api.services import RequestMetadata
 from control_api.storage import InMemoryKeyValueStore
 from control_api.thread_snapshot import serialized_json_byte_length
@@ -3739,6 +3739,8 @@ async def test_browser_event_forwarder_polls_durable_log_without_redis_wakeup(
 
     socket = SignallingWebSocket()
     latest_cursor = [0]
+    session_gate = BrowserSessionGate()
+    session_gate.authorized.set()
     monkeypatch.setattr(realtime_module, "BROWSER_EVENT_DB_POLL_SECONDS", 0.01)
     forwarder = asyncio.create_task(
         harness.app.state.realtime._forward_browser_queue(
@@ -3746,6 +3748,7 @@ async def test_browser_event_forwarder_polls_durable_log_without_redis_wakeup(
             "42",
             asyncio.Queue(),
             latest_cursor,
+            session_gate,
         )
     )
     await asyncio.wait_for(socket.delivered.wait(), timeout=1)

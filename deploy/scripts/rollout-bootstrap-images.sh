@@ -1523,7 +1523,7 @@ if service == "codex-pwa":
 else:
     value = json.loads(body)
     checks = value.get("checks") if isinstance(value, dict) else None
-    if value.get("status") != "ready" or not isinstance(checks, dict) or set(checks) != {"database", "database_migrations", "redis", "sub2api_contract"} or set(checks.values()) != {"ok"}:
+    if value.get("status") != "ready" or not isinstance(checks, dict) or set(checks) != {"connector_release", "database", "database_migrations", "redis", "sub2api_contract"} or set(checks.values()) != {"ok"}:
         raise SystemExit("API readiness body is invalid")
 result = {"container_id": item["container_id"], "health": "healthy", "image_id": item["image_id"], "networks": item["networks"], "ports": item["ports"], "restart_count": 0, "schema_version": 1, "service": service, "status": "ready"}
 target = pathlib.Path(sys.argv[4]); raw = (json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")

@@ -76,6 +76,7 @@ CHECK_CATALOG = (
 CHECK_COUNT = len(CHECK_CATALOG)
 CHECK_CATALOG_SHA256 = "3056c52085fbed3d43437a111ee73be56c051a62df7fd3aceef9fca1c54225a1"
 EXPECTED_READY_CHECKS = {
+    "connector_release": "ok",
     "database": "ok",
     "database_migrations": "ok",
     "redis": "ok",

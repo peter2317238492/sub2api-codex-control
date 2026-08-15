@@ -39,7 +39,7 @@
 | **Problem solved** | View and control Codex on your own device from a browser on another computer or phone |
 | **Connection model** | The user device makes an outbound WSS connection and opens no inbound port |
 | **Who can use it** | Every signed-in Sub2API user, isolated to their own devices and threads |
-| **Who configures it** | An operator enables the site once; users then install, configure, pair, use, and revoke devices themselves |
+| **Who configures it** | A Sub2API operator enables the site once; users then configure, pair, use, and revoke their own devices after native package installation |
 | **Security boundary** | Eight fixed RPCs, workspace allowlists, sandbox caps, and expiring approvals; no raw remote shell |
 | **Platforms** | Connector supports Linux `amd64` / `arm64` and macOS Intel / Apple silicon; Windows is not supported yet |
 
@@ -56,8 +56,9 @@ user-owned Codex installations. It combines three small components:
 
 The Connector does not open an inbound device port and does not modify Codex
 configuration, authentication files, workspaces, plugins, or shell profiles.
-Every ordinary Sub2API user owns and manages their own devices; routine setup,
-pairing, use, and revocation do not require an administrator.
+Every ordinary Sub2API user owns and manages their own devices; configuration,
+pairing, use, and revocation do not require a Sub2API administrator. Installing
+the system package may still require local `sudo` or macOS administrator approval.
 
 ```mermaid
 flowchart LR
@@ -71,16 +72,17 @@ flowchart LR
 
 ## Highlights
 
-- **Self-service devices.** An authenticated user can download the matching
+- **Self-service devices.** An authenticated user can select the matching
   Connector package, copy the local initialization command, pair a device, and
-  revoke it without operator assistance.
+  revoke it without Sub2API operator assistance after any local package approval.
 - **Eight typed operations only.** Remote access is limited to `model/list`,
   `thread/start`, `thread/list`, `thread/read`, `thread/resume`, `turn/start`,
   `turn/steer`, and `turn/interrupt`.
 - **Fail-closed approvals.** Command, file-change, and permission approvals are
   scoped, one-shot, epoch-bound, revocable, and denied on timeout or disconnect.
-- **Local workspace control.** The device owner selects the allowed workspace
-  roots and a maximum sandbox of `workspace-write` or `read-only`.
+- **Local workspace control.** The formal management command admits one
+  device-owned workspace and fixes the current sandbox ceiling at
+  `workspace-write`; direct expansion is rejected.
 - **No raw remote shell.** Shell, exec, arbitrary filesystem/process access,
   config changes, account login, plugin installation, and raw RPC pass-through
   are rejected before Codex dispatch.
@@ -95,8 +97,10 @@ Sub2API operator has enabled Control.
 
 Before starting, have a signed-in Sub2API account, a Linux or macOS device with
 the exact supported Codex CLI, at least one absolute workspace path, and
-outbound TCP 443 access to the site. You do not need an administrator to create
-a device, issue a pairing code, or edit Connector configuration for you.
+outbound TCP 443 access to the site. You do not need a Sub2API administrator to
+create a device, issue a pairing code, or edit Connector configuration for you.
+Native package installation may prompt for local `sudo` or macOS administrator
+approval; that local authorization is separate from Sub2API administration.
 
 ### 1. Sign in
 
@@ -123,6 +127,10 @@ install the package unless its SHA-256 matches exactly.
 | Fedora / RHEL `amd64`, `arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
 | macOS `amd64`, Apple silicon | signed and notarized `.pkg` | `open ./sub2api-codex-connector_*.pkg` |
 
+The PWA shows an exact filename and checksum command. Linux package installation
+uses local `sudo`; macOS Installer may request a local administrator credential.
+No Sub2API administrator needs to create or pair the device.
+
 Run Connector commands as the ordinary user who owns Codex and the workspace,
 not as `root`.
 
@@ -139,8 +147,16 @@ sub2api-codex-connector-ctl init \
   --display-name "My workstation"
 ```
 
-Multiple workspace roots are an advanced, device-local configuration; see
-[Change workspaces or sandbox](docs/usage.md#change-workspaces-or-sandbox).
+The configuration path is fixed at
+`$HOME/.config/sub2api-codex-connector/connector.json` so interactive commands
+and the user service always use the same file. A non-empty `XDG_CONFIG_HOME`
+override is rejected.
+
+The management command binds this file to a private v2 layout with its SHA-256.
+Do not edit it in place. This formal command currently supports one workspace
+per Connector. To change that workspace, revoke the device in the PWA, stop and
+purge the managed state, then run `init`, `pair`, and `start` again. Direct
+multi-root and sandbox-cap changes are not supported yet.
 
 ### 4. Pair and claim the device
 
@@ -209,8 +225,11 @@ user may explicitly remove that retained state afterward:
 sub2api-codex-connector-ctl purge-user-state --yes
 ```
 
-That command refuses root execution and refuses any path overlapping
-`CODEX_HOME`.
+For a v2 managed configuration, that command refuses root execution and
+revalidates the recorded configuration SHA-256, ownership, permissions,
+symlinks, and every configuration/state/workspace/`CODEX_HOME` overlap before
+deleting the two Connector-owned directories. It refuses legacy configurations
+without a verified layout instead of guessing what is safe to delete.
 
 ## Troubleshooting
 
@@ -219,6 +238,9 @@ That command refuses root execution and refuses any path overlapping
 | PWA returns to Sub2API | Sign in at `/` first, then reopen `/codex/` on the same host. |
 | Pairing does not complete | Keep `connector-ctl pair` running; check system time, HTTPS origin, outbound WSS, and code expiry. |
 | Codex version is rejected | Install exactly `codex-cli 0.147.0`; protocol drift is intentionally blocked. |
+| Managed configuration changed | Do not edit `connector.json`; revoke the device, then stop, purge, and re-initialize it. |
+| Legacy service binding is missing | Run `sub2api-codex-connector-ctl start` once as the ordinary Codex user so the unchanged legacy configuration can be bound to the current absolute Codex path. |
+| `XDG_CONFIG_HOME` is rejected | Back up the old configuration and its referenced state, copy it without overwriting to the fixed path with directory mode `0700` and file mode `0600`, then unset the override; follow the migration procedure in the installation guide. |
 | Workspace is rejected | Use an existing absolute path outside Connector state and `CODEX_HOME`. |
 | Device is offline | Run `connector-ctl status` and `connector-ctl logs`; verify outbound TLS access. |
 | Approval disappeared | It expired, was already resolved, belonged to another user, or became stale after reconnect. |
@@ -231,12 +253,13 @@ approvals, recovery, archiving, revocation, logout, and the remote data boundary
 | Ordinary users handle | Server operators handle |
 | --- | --- |
 | Downloading the matching Connector and creating private configuration | Deploying and upgrading the Control services |
-| Selecting local workspaces and the sandbox cap | TLS, Nginx, database, and Redis isolation |
+| Initializing the single allowed workspace with the current `workspace-write` ceiling | TLS, Nginx, database, and Redis isolation |
 | Pairing, starting, diagnosing, and revoking their own devices | Publishing and signing trusted packages and images |
 | Threads, turns, approvals, interruption, and archiving | Backups, restore rehearsals, rollback, and monitoring |
 
-Normal use never requires an operator to access a user's device, Codex login,
-workspace contents, or pairing code.
+Normal use never requires a Sub2API operator to access a user's device, Codex
+login, workspace contents, or pairing code. Native package installation remains
+a local operating-system authorization step where the platform requires it.
 
 ## For Server Operators
 

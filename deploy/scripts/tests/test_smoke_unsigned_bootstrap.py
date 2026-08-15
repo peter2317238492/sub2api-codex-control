@@ -90,6 +90,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 {
                     "status": "ready",
                     "checks": {
+                        "connector_release": "ok",
                         "database": "ok",
                         "database_migrations": "ok",
                         "redis": "ok",

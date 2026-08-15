@@ -16,6 +16,26 @@ required_secret() {
   export "$variable_name=$secret_value"
 }
 
+validate_session_secret() {
+  session_secret_bytes=$(
+    printf '%s' "$CONTROL_SESSION_HMAC_SECRET" | LC_ALL=C wc -c | tr -d '[:space:]'
+  )
+  if [ "$session_secret_bytes" -lt 32 ]; then
+    echo "control-api-entrypoint: session secret must contain at least 32 bytes" >&2
+    exit 1
+  fi
+
+  normalized_session_secret=$(
+    printf '%s' "$CONTROL_SESSION_HMAC_SECRET" | LC_ALL=C tr '[:upper:]' '[:lower:]'
+  )
+  case "$normalized_session_secret" in
+    *change-me*|*changeme*|*development-only*|*example-secret*|*longer-than-32-bytes*|*never-production*|*replace-with*|*test-secret*|*with-at-least-32-bytes*)
+      echo "control-api-entrypoint: session secret uses a known development, test, or example value" >&2
+      exit 1
+      ;;
+  esac
+}
+
 urlencode_secret() {
   secret_file=$1
   python -c 'import sys; from urllib.parse import quote; print(quote(sys.stdin.read().rstrip("\r\n"), safe=""))' < "$secret_file"
@@ -71,6 +91,7 @@ case "$redis_auth_mode" in
     ;;
 esac
 required_secret CONTROL_SESSION_HMAC_SECRET "$session_secret_file"
+validate_session_secret
 export CONTROL_METRICS_BEARER_TOKEN="$(python -c '
 import hashlib
 import hmac

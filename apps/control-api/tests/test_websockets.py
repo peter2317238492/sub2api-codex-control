@@ -16,6 +16,7 @@ from sqlalchemy import select
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+import control_api.realtime as realtime_module
 from control_api.app import create_app
 from control_api.commands import canonical_request_hash
 from control_api.config import Settings
@@ -31,13 +32,19 @@ from control_api.models import (
 )
 from control_api.realtime import (
     BrowserConnectionLimitExceeded,
+    BrowserSessionGate,
     BrowserSocketClose,
     RealtimeService,
 )
-from control_api.security import TokenDigester
+from control_api.security import SessionCredentialProtector, TokenDigester
 from control_api.services import RequestMetadata, SessionService
 from control_api.storage import InMemoryKeyValueStore
-from control_api.sub2api import Sub2APIUser
+from control_api.sub2api import (
+    RevokedSub2APIToken,
+    Sub2APIRequestIdentity,
+    Sub2APIUnavailable,
+    Sub2APIUser,
+)
 
 EPOCH = "epoch-0123456789abcdef0123456789"
 NEXT_EPOCH = "epoch-fedcba9876543210fedcba9876"
@@ -69,6 +76,10 @@ class RecordingBrowserWebSocket:
         self.closed = asyncio.Event()
         self.close_code: int | None = None
         self.close_reason: str | None = None
+        self.sent_text: list[str] = []
+
+    async def send_text(self, value: str) -> None:
+        self.sent_text.append(value)
 
     async def close(self, code: int, reason: str) -> None:
         self.close_code = code
@@ -98,10 +109,13 @@ async def monitor_browser_session_and_apply_close(
     realtime: RealtimeService,
     socket: RecordingBrowserWebSocket,
     session_id: uuid.UUID,
+    raw_token: str,
     ready: asyncio.Event,
+    session_gate: BrowserSessionGate | None = None,
 ) -> None:
+    gate = session_gate or BrowserSessionGate()
     try:
-        await realtime._monitor_browser_session(session_id, ready)
+        await realtime._monitor_browser_session(session_id, raw_token, ready, gate)
     except BrowserSocketClose as exc:
         await socket.close(exc.code, exc.reason)
 
@@ -791,6 +805,241 @@ def test_browser_websocket_lease_dependency_failure_closes_1013(
     assert closed.value.code == 1013
 
 
+@pytest.mark.parametrize(
+    ("error", "expected_code", "expect_revoked"),
+    [
+        (RevokedSub2APIToken("revoked"), 4401, True),
+        (Sub2APIUnavailable("temporarily unavailable"), 1013, False),
+    ],
+)
+def test_browser_websocket_periodically_rechecks_upstream_identity(
+    websocket_harness: WebSocketHarness,
+    error: Exception,
+    expected_code: int,
+    expect_revoked: bool,
+) -> None:
+    websocket_harness.settings.session_upstream_recheck_seconds = 1
+    access_token = "browser-upstream-recheck-token"
+    exchange = websocket_harness.client.post(
+        "/v1/session/exchange",
+        headers={"Origin": ORIGIN},
+        json={"access_token": access_token},
+    )
+    assert exchange.status_code == 201
+    cookie = websocket_harness.client.cookies.get(websocket_harness.settings.cookie_name)
+
+    with websocket_harness.client.websocket_connect(
+        "/codex-ws/browser?cursor=0",
+        headers={
+            "Origin": ORIGIN,
+            "Cookie": f"{websocket_harness.settings.cookie_name}={cookie}",
+        },
+    ) as socket:
+        # The monitor must bypass the fresh exchange marker on admission, then
+        # repeat that authoritative check at the configured cadence.
+        assert websocket_harness.sub2api.seen_tokens == [access_token, access_token]
+        websocket_harness.sub2api.result = error
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_json()
+        assert closed.value.code == expected_code
+
+    assert len(websocket_harness.sub2api.seen_tokens) >= 2
+    assert set(websocket_harness.sub2api.seen_tokens) == {access_token}
+
+    async def session_was_revoked() -> bool:
+        async with websocket_harness.database.session_factory() as db:
+            record = await db.scalar(select(ControlSession))
+        assert record is not None
+        return record.revoked_at is not None
+
+    assert websocket_harness.client.portal.call(session_was_revoked) is expect_revoked
+
+
+def test_browser_event_delivery_pauses_during_periodic_upstream_recheck(
+    websocket_harness: WebSocketHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(realtime_module, "BROWSER_SESSION_RECHECK_SECONDS", 0.01)
+    access_token = "browser-paused-delivery-token"
+    exchange = websocket_harness.client.post(
+        "/v1/session/exchange",
+        headers={"Origin": ORIGIN},
+        json={"access_token": access_token},
+    )
+    assert exchange.status_code == 201
+    raw_token = websocket_harness.client.cookies.get(websocket_harness.settings.cookie_name)
+    assert raw_token is not None
+
+    async def scenario() -> list[str]:
+        realtime = websocket_harness.app.state.realtime
+        async with websocket_harness.database.session_factory() as db:
+            session = await db.scalar(select(ControlSession))
+        assert session is not None
+
+        ready = asyncio.Event()
+        session_gate = BrowserSessionGate()
+        monitor = asyncio.create_task(
+            realtime._monitor_browser_session(
+                session.id,
+                raw_token,
+                ready,
+                session_gate,
+            )
+        )
+        release_recheck = asyncio.Event()
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=1)
+            assert session_gate.authorized.is_set()
+            original_verify = websocket_harness.sub2api.verify_access_token
+            recheck_started = asyncio.Event()
+
+            async def delayed_verify(
+                token: str,
+                request_identity: Sub2APIRequestIdentity,
+            ) -> Sub2APIUser:
+                recheck_started.set()
+                await release_recheck.wait()
+                return await original_verify(token, request_identity)
+
+            monkeypatch.setattr(
+                websocket_harness.sub2api,
+                "verify_access_token",
+                delayed_verify,
+            )
+            await asyncio.wait_for(recheck_started.wait(), timeout=1)
+            assert not session_gate.authorized.is_set()
+
+            socket = RecordingBrowserWebSocket()
+            delivery = asyncio.create_task(
+                realtime._send_browser_event_when_authorized(
+                    socket,  # type: ignore[arg-type]
+                    "sensitive-event",
+                    session_gate,
+                    (monitor,),
+                )
+            )
+            await asyncio.sleep(0)
+            assert socket.sent_text == []
+
+            release_recheck.set()
+            await asyncio.wait_for(delivery, timeout=1)
+            return socket.sent_text
+        finally:
+            release_recheck.set()
+            if not monitor.done():
+                monitor.cancel()
+            await asyncio.gather(monitor, return_exceptions=True)
+
+    assert websocket_harness.client.portal.call(scenario) == ["sensitive-event"]
+
+
+def test_browser_upstream_recheck_has_total_wall_clock_timeout(
+    websocket_harness: WebSocketHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(realtime_module, "BROWSER_SESSION_RECHECK_SECONDS", 0.01)
+    exchange = websocket_harness.client.post(
+        "/v1/session/exchange",
+        headers={"Origin": ORIGIN},
+        json={"access_token": "browser-bounded-recheck-token"},
+    )
+    assert exchange.status_code == 201
+    raw_token = websocket_harness.client.cookies.get(websocket_harness.settings.cookie_name)
+    assert raw_token is not None
+
+    async def scenario() -> tuple[int, str, bool]:
+        realtime = websocket_harness.app.state.realtime
+        async with websocket_harness.database.session_factory() as db:
+            session = await db.scalar(select(ControlSession))
+        assert session is not None
+
+        ready = asyncio.Event()
+        session_gate = BrowserSessionGate()
+        monitor = asyncio.create_task(
+            realtime._monitor_browser_session(
+                session.id,
+                raw_token,
+                ready,
+                session_gate,
+            )
+        )
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=1)
+            websocket_harness.settings.sub2api_timeout_seconds = 0.02
+            recheck_started = asyncio.Event()
+            never_finishes = asyncio.Event()
+
+            async def stalled_verify(
+                _token: str,
+                _request_identity: Sub2APIRequestIdentity,
+            ) -> Sub2APIUser:
+                recheck_started.set()
+                await never_finishes.wait()
+                raise AssertionError("unreachable")
+
+            monkeypatch.setattr(
+                websocket_harness.sub2api,
+                "verify_access_token",
+                stalled_verify,
+            )
+            await asyncio.wait_for(recheck_started.wait(), timeout=1)
+            with pytest.raises(BrowserSocketClose) as closed:
+                await asyncio.wait_for(monitor, timeout=1)
+            return closed.value.code, closed.value.reason, session_gate.authorized.is_set()
+        finally:
+            if not monitor.done():
+                monitor.cancel()
+            await asyncio.gather(monitor, return_exceptions=True)
+
+    assert websocket_harness.client.portal.call(scenario) == (
+        1013,
+        "control session verification unavailable",
+        False,
+    )
+
+
+def test_blocked_browser_event_send_fails_closed(
+    websocket_harness: WebSocketHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(realtime_module, "BROWSER_EVENT_SEND_TIMEOUT_SECONDS", 0.01)
+
+    class BlockingBrowserWebSocket(RecordingBrowserWebSocket):
+        def __init__(self) -> None:
+            super().__init__()
+            self.send_started = asyncio.Event()
+
+        async def send_text(self, value: str) -> None:
+            self.send_started.set()
+            await asyncio.Event().wait()
+
+    async def scenario() -> tuple[int, str, bool, int]:
+        session_gate = BrowserSessionGate()
+        session_gate.authorized.set()
+        socket = BlockingBrowserWebSocket()
+        with pytest.raises(BrowserSocketClose) as closed:
+            await websocket_harness.app.state.realtime._send_browser_event_when_authorized(
+                socket,  # type: ignore[arg-type]
+                "sensitive-event",
+                session_gate,
+                (),
+            )
+        assert socket.send_started.is_set()
+        return (
+            closed.value.code,
+            closed.value.reason,
+            session_gate.sends_drained.is_set(),
+            session_gate.in_flight_sends,
+        )
+
+    assert websocket_harness.client.portal.call(scenario) == (
+        1013,
+        "browser event delivery unavailable",
+        True,
+        0,
+    )
+
+
 def test_browser_connection_lease_renewal_failure_closes_1013(
     websocket_harness: WebSocketHarness,
     monkeypatch: pytest.MonkeyPatch,
@@ -851,6 +1100,7 @@ def test_cross_instance_logout_closes_browser_websocket_immediately(
                 websocket_harness.app.state.realtime,
                 socket,
                 session.id,
+                websocket_harness.client.cookies.get(websocket_harness.settings.cookie_name),
                 ready,
             )
         )
@@ -863,6 +1113,11 @@ def test_cross_instance_logout_closes_browser_websocket_immediately(
             websocket_harness.settings,
             websocket_harness.store,
             TokenDigester(websocket_harness.settings.session_hmac_secret.get_secret_value()),
+            websocket_harness.sub2api,
+            SessionCredentialProtector(
+                websocket_harness.settings.session_hmac_secret.get_secret_value(),
+                random_handle_bytes=websocket_harness.settings.session_token_bytes,
+            ),
         )
         async with websocket_harness.database.session_factory() as db:
             durable_session = await db.get(ControlSession, session.id)
@@ -919,6 +1174,11 @@ def test_browser_session_rechecks_database_after_subscribe_race(
             websocket_harness.settings,
             websocket_harness.store,
             TokenDigester(websocket_harness.settings.session_hmac_secret.get_secret_value()),
+            websocket_harness.sub2api,
+            SessionCredentialProtector(
+                websocket_harness.settings.session_hmac_secret.get_secret_value(),
+                random_handle_bytes=websocket_harness.settings.session_token_bytes,
+            ),
         )
         async with websocket_harness.database.session_factory() as db:
             durable_session = await db.get(ControlSession, authenticated_session.id)
@@ -936,6 +1196,7 @@ def test_browser_session_rechecks_database_after_subscribe_race(
                 websocket_harness.app.state.realtime,
                 socket,
                 authenticated_session.id,
+                websocket_harness.client.cookies.get(websocket_harness.settings.cookie_name),
                 ready,
             )
         )
@@ -983,6 +1244,7 @@ def test_browser_session_subscription_failure_is_fail_closed(
                 websocket_harness.app.state.realtime,
                 socket,
                 session.id,
+                websocket_harness.client.cookies.get(websocket_harness.settings.cookie_name),
                 ready,
             )
         )
@@ -1038,7 +1300,7 @@ def test_browser_session_database_failure_is_retryable_infrastructure_close(
     )
     assert exchange.status_code == 201
 
-    async def unavailable(_session_id: uuid.UUID) -> datetime | None:
+    async def unavailable(_session_id: uuid.UUID, _raw_token: str) -> datetime | None:
         raise RuntimeError("simulated session database failure")
 
     monkeypatch.setattr(
@@ -1059,6 +1321,7 @@ def test_browser_session_database_failure_is_retryable_infrastructure_close(
                 websocket_harness.app.state.realtime,
                 socket,
                 session.id,
+                websocket_harness.client.cookies.get(websocket_harness.settings.cookie_name),
                 ready,
             )
         )

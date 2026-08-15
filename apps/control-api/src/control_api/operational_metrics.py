@@ -18,6 +18,7 @@ SESSION_EXCHANGE_OUTCOMES = frozenset(
         "upstream_unavailable",
         "upstream_protocol_error",
         "capacity_exceeded",
+        "credential_too_large",
     }
 )
 PAIRING_OPERATIONS = frozenset({"start", "claim", "poll"})

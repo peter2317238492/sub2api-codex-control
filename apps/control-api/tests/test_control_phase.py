@@ -378,15 +378,90 @@ async def test_cross_user_device_thread_and_revoke_access_are_hidden(
 ) -> None:
     device, _, _ = await seed_device(harness, owner="owner-a")
     thread = await seed_thread(harness, device, owner="owner-a")
+    now = datetime.now(UTC)
+    approval = Approval(
+        owner_user_id="owner-a",
+        device_id=device.id,
+        external_command_id="owner-a-approval",
+        approval_kind="permission",
+        summary="Owner A only",
+        request={"private": "owner-a"},
+        status=ApprovalStatus.PENDING,
+        appserver_epoch=EPOCH,
+        requested_at=now,
+        expires_at=now + timedelta(seconds=120),
+    )
+    async with harness.database.session_factory() as db:
+        db.add(approval)
+        await db.commit()
     harness.sub2api.result = Sub2APIUser(user_id="owner-b", username="bob")
     assert (await exchange(harness, "another-valid-access-token")).status_code == 201
 
     devices = await harness.client.get("/v1/devices")
     assert devices.status_code == 200
     assert devices.json() == {"items": []}
-    assert (await harness.client.get(f"/v1/threads/{thread.id}")).status_code == 404
-    revoke = await harness.client.delete(f"/v1/devices/{device.id}", headers=csrf_headers(harness))
-    assert revoke.status_code == 404
+    bootstrap = await harness.client.get("/v1/bootstrap")
+    assert bootstrap.status_code == 200
+    assert bootstrap.json()["devices"] == []
+    assert bootstrap.json()["threads"] == []
+    assert bootstrap.json()["approvals"] == []
+    assert bootstrap.json()["models_by_device"] == {}
+    assert (await harness.client.get("/v1/approvals")).json() == {"items": []}
+
+    headers = csrf_headers(harness)
+    hidden_reads = [
+        await harness.client.get(f"/v1/devices/{device.id}/models"),
+        await harness.client.get(f"/v1/devices/{device.id}/threads"),
+        await harness.client.get(f"/v1/threads/{thread.id}"),
+    ]
+    hidden_mutations = [
+        await harness.client.post(
+            f"/v1/devices/{device.id}/models/sync",
+            headers={**headers, "Idempotency-Key": "cross-owner-models"},
+        ),
+        await harness.client.post(
+            f"/v1/devices/{device.id}/threads/sync",
+            headers={**headers, "Idempotency-Key": "cross-owner-threads"},
+        ),
+        await harness.client.post(
+            f"/v1/devices/{device.id}/threads",
+            headers={**headers, "Idempotency-Key": "cross-owner-start"},
+            json={"cwd": "/workspace"},
+        ),
+        await harness.client.post(
+            f"/v1/threads/{thread.id}/sync",
+            headers={**headers, "Idempotency-Key": "cross-owner-read"},
+        ),
+        await harness.client.post(
+            f"/v1/threads/{thread.id}/resume",
+            headers={**headers, "Idempotency-Key": "cross-owner-resume"},
+        ),
+        await harness.client.post(
+            f"/v1/threads/{thread.id}/turns",
+            headers={**headers, "Idempotency-Key": "cross-owner-turn"},
+            json={"text": "private"},
+        ),
+        await harness.client.post(
+            f"/v1/threads/{thread.id}/turns/current/steer",
+            headers={**headers, "Idempotency-Key": "cross-owner-steer"},
+            json={"text": "private"},
+        ),
+        await harness.client.post(
+            f"/v1/threads/{thread.id}/turns/current/interrupt",
+            headers={**headers, "Idempotency-Key": "cross-owner-interrupt"},
+        ),
+        await harness.client.post(
+            f"/v1/approvals/{approval.id}/decision",
+            headers=headers,
+            json={"decision": "approve"},
+        ),
+        await harness.client.delete(f"/v1/devices/{device.id}", headers=headers),
+    ]
+    assert all(response.status_code == 404 for response in [*hidden_reads, *hidden_mutations])
+    async with harness.database.session_factory() as db:
+        assert list((await db.scalars(select(Command))).all()) == []
+        stored = await db.get(Approval, approval.id)
+    assert stored is not None and stored.status == ApprovalStatus.PENDING
 
 
 async def test_sensitive_mutations_require_a_recent_control_session(
