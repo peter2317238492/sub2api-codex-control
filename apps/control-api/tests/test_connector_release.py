@@ -17,7 +17,7 @@ from control_api.connector_release import (
 from control_api.schemas import ConnectorReleaseMetadata
 
 REPOSITORY = "https://github.com/peter2317238492/sub2api-codex-control"
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 TAG = f"connector-v{VERSION}"
 
 
