@@ -174,8 +174,8 @@ class LifecycleFixture(unittest.TestCase):
                 "workflow_sha": COMMIT,
                 "workflow_trigger": "push",
                 "invocation_id": f"{REPOSITORY}/actions/runs/1/attempts/1",
-                "cosign_version": "v2.6.1",
-                "syft_version": "1.27.1",
+                "cosign_version": "v3.0.6",
+                "syft_version": "v1.44.0",
             },
             "source_date_epoch": 1,
             "common_payload_sha256": SHA_C,
@@ -193,6 +193,9 @@ class LifecycleFixture(unittest.TestCase):
                 **connector_evidence,
             },
             "image_trust": {},
+            # Online packages carry no OCI image archives, so they must bind a
+            # null export receipt.
+            "oci_export": None,
             "images": image_records,
             "lifecycle": {
                 "install": "bin/sub2api-control-install",
@@ -243,7 +246,7 @@ class LifecycleFixture(unittest.TestCase):
                 "size": 456,
             },
             "trust": {
-                "cosign_version": "v2.6.1",
+                "cosign_version": "v3.0.6",
                 "certificate_oidc_issuer": lifecycle.OIDC_ISSUER,
                 "certificate_identity": manifest["builder"]["workflow_identity"],
                 "certificate_github_workflow_sha": COMMIT,
@@ -507,7 +510,7 @@ class LifecycleTransactionTests(LifecycleFixture):
             "verification_receipt_sha256": "1" * 64,
             "verification_receipt_path": str(self.root / "installed-receipt.json"),
             "connector_metadata_sha256": "2" * 64,
-            "cosign_version": "v2.6.1",
+            "cosign_version": "v3.0.6",
             "verification_trust": {"fixture": True},
             "verification_trust_sha256": "3" * 64,
             "install_path": str(install_path),

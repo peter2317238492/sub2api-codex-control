@@ -23,6 +23,14 @@ assert SPEC is not None and SPEC.loader is not None
 control_images = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(control_images)
 
+CONNECTOR_TOOL_PATH = REPO_ROOT / "connector/release/release.py"
+CONNECTOR_SPEC = importlib.util.spec_from_file_location(
+    "connector_release_tool", CONNECTOR_TOOL_PATH
+)
+assert CONNECTOR_SPEC is not None and CONNECTOR_SPEC.loader is not None
+connector_release = importlib.util.module_from_spec(CONNECTOR_SPEC)
+CONNECTOR_SPEC.loader.exec_module(connector_release)
+
 
 SOURCE_REPOSITORY = "https://github.com/example/sub2api-codex-control"
 SOURCE_COMMIT = "1" * 40
@@ -158,6 +166,13 @@ class ControlImageReleaseTests(unittest.TestCase):
             "third_party/components.json": tool.canonical_json(components),
             "third_party/licenses/Fixture-LICENSE.txt": b"fixture dependency license\n",
         }
+        # The release source closure grows with the release surface; seed every
+        # path it requires so this fixture stays bound to that closure instead
+        # of drifting behind it.
+        for relative in sorted(tool.REQUIRED_SOURCE_PATHS):
+            contents.setdefault(
+                relative, b"{}\n" if relative.endswith(".json") else b"fixture\n"
+            )
         records = [
             {
                 "mode": "0555" if path.startswith("scripts/") else "0444",
@@ -793,37 +808,33 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
     ) -> None:
         workflow = (REPO_ROOT / ".github/workflows/connector-release.yml").read_text()
         linux_sign = workflow.index("  linux-native-sign:")
-        apple_sign = workflow.index("  native-sign:", linux_sign)
-        sigstore = workflow.index("  attest:", apple_sign)
+        sigstore = workflow.index("  attest:", linux_sign)
         linux_verify = workflow.index("  verify-linux-signed:", sigstore)
         publish = workflow.index("  publish:", linux_verify)
-        public_macos = workflow.index("  verify-public-release-macos:", publish)
         public_linux = workflow.index("  verify-public-release-linux:", publish)
-        self.assertLess(linux_sign, apple_sign)
-        self.assertLess(apple_sign, sigstore)
+        self.assertLess(linux_sign, sigstore)
         self.assertLess(sigstore, linux_verify)
         self.assertLess(linux_verify, publish)
-        self.assertLess(publish, public_macos)
         self.assertLess(publish, public_linux)
         self.assertIn("environment: connector-release-linux", workflow)
         self.assertIn("connector/release/linux-sign-rpm.sh", workflow)
-        self.assertIn("environment: connector-release-apple", workflow)
-        self.assertIn("connector/release/macos-sign-notarize.sh", workflow)
-        self.assertIn("MACOS_APPLICATION_CERTIFICATE_P12_BASE64", workflow)
-        self.assertIn("MACOS_INSTALLER_CERTIFICATE_P12_BASE64", workflow)
-        self.assertIn("MACOS_EXPECTED_APPLICATION_IDENTITY", workflow)
-        self.assertIn("MACOS_EXPECTED_INSTALLER_IDENTITY", workflow)
         self.assertIn("RPM_SIGNING_PRIVATE_KEY_BASE64", workflow)
         self.assertIn("RPM_EXPECTED_SIGNING_FINGERPRINT", workflow)
-        self.assertIn("--apple-installer-identity", workflow)
         self.assertIn("--rpm-signing-fingerprint", workflow)
-        self.assertGreaterEqual(workflow.count("--target linux-amd64"), 2)
-        self.assertGreaterEqual(workflow.count("--target linux-arm64"), 2)
-        self.assertGreaterEqual(workflow.count("--target darwin-amd64"), 2)
-        self.assertGreaterEqual(workflow.count("--target darwin-arm64"), 2)
+        for target_id in connector_release.released_target_ids():
+            self.assertGreaterEqual(workflow.count(f"--target {target_id}"), 2)
         self.assertGreaterEqual(workflow.count('refs/tags/${RELEASE_TAG}^{}'), 2)
-        self.assertNotIn("MACOS_EXPECTED_SIGNING_IDENTITY", workflow)
-        self.assertNotIn("MACOS_CERTIFICATE_P12_BASE64", workflow)
+        # This release publishes no Apple-signed artifact, so no Apple identity,
+        # certificate, or notarization input may reach the workflow.
+        for forbidden in (
+            "MACOS_",
+            "APPLE_",
+            "--apple-",
+            "macos-sign-notarize.sh",
+            "connector-release-apple",
+            "notarytool",
+        ):
+            self.assertNotIn(forbidden, workflow)
 
     def test_control_release_exports_offline_image_signature_closure(self) -> None:
         workflow = (
@@ -930,7 +941,12 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
         aggregate_parse = build_section.index(".public_release.descriptor.filename")
         self.assertLess(aggregate_verify, aggregate_parse)
         self.assertIn("create-public-release-descriptor", build_section)
-        self.assertIn(".assets | length == 103", build_section)
+        # Bound to the Connector release tool so the two releases cannot
+        # disagree about the published asset union.
+        self.assertIn(
+            f".assets | length == {connector_release.public_release_asset_count()}",
+            build_section,
+        )
         self.assertIn("connector-release-metadata.json.sigstore.json", build_section)
         self.assertIn("oci_toolchain.py install", build_section)
         self.assertIn("oci_toolchain.py export-images", build_section)
@@ -985,7 +1001,7 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
             'cosign verify-blob "$manifest"'
         )
         verifier_parse = publish_section.index(".consumer_verifier")
-        verifier_run = publish_section.index('python3 "$verifier" verify-release')
+        verifier_run = publish_section.index('python3 -I "$verifier" verify-release')
         self.assertLess(manifest_verify, verifier_parse)
         self.assertLess(verifier_parse, verifier_run)
         self.assertIn("published package verification receipt differs from public replay", publish_section)
@@ -999,19 +1015,22 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
         scan = workflow.index("  vulnerability-scan:", attest)
         vulnerability_sign = workflow.index("  vulnerability-attest:", scan)
         publish = workflow.index("  publish:", vulnerability_sign)
-        public_macos = workflow.index("  verify-public-release-macos:", publish)
-        public_linux = workflow.index("  verify-public-release-linux:", public_macos)
+        public_linux = workflow.index("  verify-public-release-linux:", publish)
         aggregate = workflow.index("  aggregate-public-verification:", public_linux)
         self.assertLess(attest, scan)
         self.assertLess(scan, vulnerability_sign)
         self.assertLess(vulnerability_sign, publish)
-        self.assertLess(publish, public_macos)
-        self.assertLess(public_macos, public_linux)
+        self.assertLess(publish, public_linux)
         self.assertLess(public_linux, aggregate)
 
         vulnerability_section = workflow[scan:publish]
         self.assertIn("scripts/install-trivy.sh", vulnerability_section)
-        self.assertIn("--list-all-pkgs", vulnerability_section)
+        # The scanner flags moved out of the workflow into the pinned scan
+        # policy, which check-vulnerabilities.py enforces on every report.
+        self.assertIn("run-vulnerability-scan.py", vulnerability_section)
+        self.assertIn("--policy security/vulnerability-policy.json", vulnerability_section)
+        policy = json.loads((REPO_ROOT / "security/vulnerability-policy.json").read_text())
+        self.assertIn("--list-all-pkgs", json.dumps(policy))
         self.assertIn("build-vulnerability-manifest.py", vulnerability_section)
         self.assertIn("check-vulnerabilities.py", vulnerability_section)
         self.assertIn("vulnerability-receipt.sigstore.json", vulnerability_section)
@@ -1026,16 +1045,22 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
             "check-vulnerabilities.py verify-receipt"
         )
         self.assertLess(root_verify, receipt_verify)
-        publish_section = workflow[publish:public_macos]
-        self.assertIn('test "${#unique[@]}" = 11', publish_section)
+        publish_section = workflow[publish:public_linux]
+        self.assertIn(
+            f'test "$evidence_count" = {connector_release.public_evidence_file_count()}',
+            publish_section,
+        )
         self.assertIn(".evidence_inventory[].path", publish_section)
 
-        public_section = workflow[public_macos:aggregate]
+        public_section = workflow[public_linux:aggregate]
         self.assertIn("gh release verify-asset", public_section)
         self.assertIn("create-public-release-descriptor", public_section)
-        self.assertIn("connector-public-verification-darwin.json", public_section)
         self.assertIn("connector-public-verification-linux.json", public_section)
-        self.assertGreaterEqual(public_section.count("verify-receipt"), 2)
+        self.assertNotIn("connector-public-verification-darwin.json", public_section)
+        self.assertGreaterEqual(
+            public_section.count("verify-receipt"),
+            len(connector_release.released_platforms()),
+        )
         aggregate_section = workflow[aggregate:]
         self.assertIn("aggregate-verification-receipts", aggregate_section)
         self.assertIn("verify-aggregate", aggregate_section)
@@ -1130,6 +1155,7 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
                 "CONTROL_RELEASE": RELEASE,
                 "CONTROL_VCS_REF": SOURCE_COMMIT,
                 "CONTROL_PUBLIC_ORIGIN": "https://control.example.com",
+                "CONTROL_CONNECTOR_RELEASE_METADATA_JSON": '{"releasable":false}',
             }
         )
         result = subprocess.run(

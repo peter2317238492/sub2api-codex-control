@@ -39,13 +39,11 @@
       "type": "array",
       "prefixItems": [
         { "const": "linux-amd64" },
-        { "const": "linux-arm64" },
-        { "const": "darwin-amd64" },
-        { "const": "darwin-arm64" }
+        { "const": "linux-arm64" }
       ],
       "items": false,
-      "minItems": 4,
-      "maxItems": 4
+      "minItems": 2,
+      "maxItems": 2
     },
     "verified_packages": {
       "type": "array",
@@ -53,13 +51,11 @@
         { "$ref": "#/$defs/linuxAmd64Deb" },
         { "$ref": "#/$defs/linuxAmd64Rpm" },
         { "$ref": "#/$defs/linuxArm64Deb" },
-        { "$ref": "#/$defs/linuxArm64Rpm" },
-        { "$ref": "#/$defs/darwinAmd64Pkg" },
-        { "$ref": "#/$defs/darwinArm64Pkg" }
+        { "$ref": "#/$defs/linuxArm64Rpm" }
       ],
       "items": false,
-      "minItems": 6,
-      "maxItems": 6
+      "minItems": 4,
+      "maxItems": 4
     },
     "core_inventory": {
       "type": "array",
@@ -177,7 +173,7 @@
       "required": ["sigstore", "apple", "rpm"],
       "properties": {
         "sigstore": { "$ref": "#/$defs/sigstore" },
-        "apple": { "$ref": "#/$defs/apple" },
+        "apple": { "type": "null" },
         "rpm": { "$ref": "#/$defs/rpm" }
       }
     },
@@ -209,10 +205,9 @@
     "platformReceipts": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["linux", "darwin"],
+      "required": ["linux"],
       "properties": {
-        "linux": { "$ref": "#/$defs/file" },
-        "darwin": { "$ref": "#/$defs/file" }
+        "linux": { "$ref": "#/$defs/file" }
       }
     },
     "vulnerabilityInventory": {
@@ -245,27 +240,23 @@
     "vulnerabilityReportDigests": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["connector-linux-amd64-deb", "connector-linux-amd64-rpm", "connector-linux-arm64-deb", "connector-linux-arm64-rpm", "connector-darwin-amd64-pkg", "connector-darwin-arm64-pkg"],
+      "required": ["connector-linux-amd64-deb", "connector-linux-amd64-rpm", "connector-linux-arm64-deb", "connector-linux-arm64-rpm"],
       "properties": {
         "connector-linux-amd64-deb": { "$ref": "#/$defs/sha256" },
         "connector-linux-amd64-rpm": { "$ref": "#/$defs/sha256" },
         "connector-linux-arm64-deb": { "$ref": "#/$defs/sha256" },
-        "connector-linux-arm64-rpm": { "$ref": "#/$defs/sha256" },
-        "connector-darwin-amd64-pkg": { "$ref": "#/$defs/sha256" },
-        "connector-darwin-arm64-pkg": { "$ref": "#/$defs/sha256" }
+        "connector-linux-arm64-rpm": { "$ref": "#/$defs/sha256" }
       }
     },
     "vulnerabilityPackageCounts": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["connector-linux-amd64-deb", "connector-linux-amd64-rpm", "connector-linux-arm64-deb", "connector-linux-arm64-rpm", "connector-darwin-amd64-pkg", "connector-darwin-arm64-pkg"],
+      "required": ["connector-linux-amd64-deb", "connector-linux-amd64-rpm", "connector-linux-arm64-deb", "connector-linux-arm64-rpm"],
       "properties": {
         "connector-linux-amd64-deb": { "type": "integer", "minimum": 1 },
         "connector-linux-amd64-rpm": { "type": "integer", "minimum": 1 },
         "connector-linux-arm64-deb": { "type": "integer", "minimum": 1 },
-        "connector-linux-arm64-rpm": { "type": "integer", "minimum": 1 },
-        "connector-darwin-amd64-pkg": { "type": "integer", "minimum": 1 },
-        "connector-darwin-arm64-pkg": { "type": "integer", "minimum": 1 }
+        "connector-linux-arm64-rpm": { "type": "integer", "minimum": 1 }
       }
     },
     "vulnerabilityEvidence": {
@@ -323,7 +314,7 @@
       "additionalProperties": false,
       "required": ["target_id", "package_format", "filename", "sha256", "size"],
       "properties": {
-        "target_id": { "enum": ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"] },
+        "target_id": { "enum": ["linux-amd64", "linux-arm64"] },
         "package_format": { "enum": ["deb", "rpm", "pkg"] },
         "filename": { "$ref": "#/$defs/filename" },
         "sha256": { "$ref": "#/$defs/sha256" },
@@ -333,8 +324,6 @@
     "linuxAmd64Deb": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-amd64" }, "package_format": { "const": "deb" } } }] },
     "linuxAmd64Rpm": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-amd64" }, "package_format": { "const": "rpm" } } }] },
     "linuxArm64Deb": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-arm64" }, "package_format": { "const": "deb" } } }] },
-    "linuxArm64Rpm": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-arm64" }, "package_format": { "const": "rpm" } } }] },
-    "darwinAmd64Pkg": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "darwin-amd64" }, "package_format": { "const": "pkg" } } }] },
-    "darwinArm64Pkg": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "darwin-arm64" }, "package_format": { "const": "pkg" } } }] }
+    "linuxArm64Rpm": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-arm64" }, "package_format": { "const": "rpm" } } }] }
   }
 }

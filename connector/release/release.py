@@ -11,6 +11,7 @@ import argparse
 import base64
 import binascii
 import datetime as dt
+import functools
 import hashlib
 import json
 import os
@@ -526,7 +527,7 @@ def load_config(path: Path) -> dict[str, Any]:
             raise ReleaseError(
                 f"target {target['id']} does not contain the complete native package matrix"
             )
-    if target_ids != {"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"}:
+    if target_ids != {"linux-amd64", "linux-arm64"}:
         raise ReleaseError(
             "release config must contain the complete supported target matrix"
         )
@@ -1032,7 +1033,7 @@ def target_record(state: dict[str, Any], target_id: str) -> dict[str, Any]:
 
 def record_native_evidence(args: argparse.Namespace) -> None:
     output = release_output_directory(args.output)
-    state = read_json(safe_file(output, WORK_STATE, "release work state"))
+    state = read_json(work_state_file(output))
     if state.get("release_mode") != "release":
         raise ReleaseError("native signing evidence is accepted only for release mode")
     record = target_record(state, args.target)
@@ -1316,7 +1317,7 @@ def validate_pkg_package_evidence(
 
 def record_native_package_evidence(args: argparse.Namespace) -> None:
     output = release_output_directory(args.output)
-    state = read_json(safe_file(output, WORK_STATE, "release work state"))
+    state = read_json(work_state_file(output))
     if state.get("release_mode") != "release":
         raise ReleaseError("native package evidence is accepted only for release mode")
     record = target_record(state, args.target)
@@ -1985,6 +1986,25 @@ def safe_file(
     return path
 
 
+def work_state_file(output: Path) -> Path:
+    """Locate the internal release work state.
+
+    WORK_STATE is a fixed dot-prefixed internal name, so it cannot go through
+    safe_file, whose release-asset name policy requires an alphanumeric first
+    character.  Apply the same regular-file and symlink checks here.
+    """
+    path = output / WORK_STATE
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError as exc:
+        raise ReleaseError(f"missing release work state: {WORK_STATE}") from exc
+    if not stat.S_ISREG(mode) or path.is_symlink():
+        raise ReleaseError(
+            f"release work state must be a regular non-symlink file: {WORK_STATE}"
+        )
+    return path
+
+
 def validate_work_state(
     output: Path,
     state: dict[str, Any],
@@ -2263,7 +2283,7 @@ def validate_release_context(
 def validate_work_state_command(args: argparse.Namespace) -> None:
     output = release_output_directory(args.output)
     config = load_config(args.config)
-    state = read_json(safe_file(output, WORK_STATE, "release work state"))
+    state = read_json(work_state_file(output))
     validate_work_state(output, state, config, require_unsigned_artifacts=True)
     if state["release_mode"] != "release":
         raise ReleaseError(
@@ -2559,7 +2579,7 @@ def validate_pre_finalize_inventory(output: Path, state: dict[str, Any]) -> None
 
 def finalize(args: argparse.Namespace) -> None:
     output = release_output_directory(args.output)
-    state = read_json(safe_file(output, WORK_STATE, "release work state"))
+    state = read_json(work_state_file(output))
     config = load_config(args.config)
     validate_work_state(output, state, config, require_unsigned_artifacts=False)
     validate_pre_finalize_inventory(output, state)
@@ -2951,11 +2971,7 @@ def platform_receipt_value(
     platform_name: str,
     args: argparse.Namespace,
 ) -> dict[str, Any]:
-    target_ids = (
-        ["linux-amd64", "linux-arm64"]
-        if platform_name == "linux"
-        else ["darwin-amd64", "darwin-arm64"]
-    )
+    target_ids = released_target_ids(platform_name)
     selected_targets = [
         target for target in manifest["targets"] if target["id"] in target_ids
     ]
@@ -3171,11 +3187,7 @@ def validate_platform_receipt(
         or verification_run["run_attempt"] <= 0
     ):
         raise ReleaseError("platform receipt verification run is invalid")
-    expected_targets = (
-        ["linux-amd64", "linux-arm64"]
-        if platform_name == "linux"
-        else ["darwin-amd64", "darwin-arm64"]
-    )
+    expected_targets = released_target_ids(platform_name)
     if receipt["verified_targets"] != expected_targets:
         raise ReleaseError("platform receipt target matrix is incomplete")
     if platform_name == "linux":
@@ -3211,7 +3223,10 @@ def validate_platform_receipt(
         receipt["core_inventory"], "platform receipt core inventory"
     )
     if set(inventory) != expected_core_asset_names(release["version"]):
-        raise ReleaseError("platform receipt core inventory is not the fixed 92-file matrix")
+        raise ReleaseError(
+            "platform receipt core inventory is not the fixed "
+            f"{expected_core_asset_count()}-file matrix"
+        )
     for item, expected_pair in zip(packages, expected_package_pairs, strict=True):
         if not isinstance(item, dict):
             raise ReleaseError("platform receipt package entry must be an object")
@@ -4985,11 +5000,15 @@ def verify(args: argparse.Namespace) -> None:
             raise ReleaseError(
                 "a public verification receipt requires the GitHub run id and attempt"
             )
-        if selected_ids == {"linux-amd64", "linux-arm64"}:
-            receipt_platform = "linux"
-        elif selected_ids == {"darwin-amd64", "darwin-arm64"}:
-            receipt_platform = "darwin"
-        else:
+        receipt_platform = next(
+            (
+                name
+                for name in released_platforms()
+                if selected_ids == set(released_target_ids(name))
+            ),
+            None,
+        )
+        if receipt_platform is None:
             raise ReleaseError(
                 "a public verification receipt requires exactly one complete platform"
             )
@@ -5447,16 +5466,137 @@ def parse_rfc3339(value: Any, context: str) -> str:
     return value
 
 
+@functools.lru_cache(maxsize=1)
+def released_target_matrix() -> tuple[tuple[str, str], ...]:
+    """The exact (goos, goarch) matrix this release publishes.
+
+    Derived from the single release-config source of truth so the asset
+    inventory, the platform receipts, and the public descriptor can never
+    disagree about which platforms the release covers.
+    """
+    config = load_config(DEFAULT_CONFIG)
+    return tuple(
+        (target["goos"], target["goarch"])
+        for target in sorted(config["targets"], key=lambda item: item["id"])
+    )
+
+
+# Vulnerability evidence shape.  Each released native package contributes its
+# artifact and SPDX SBOM under the "connector/" root prefix, and its Trivy
+# report, raw report, and scan-execution record outside it.  The remaining
+# entries are the target-independent scanner, policy, and database evidence.
+CONNECTOR_EVIDENCE_ROOT_FILES = 2
+CONNECTOR_EVIDENCE_FILES_PER_PACKAGE = 2
+PUBLIC_EVIDENCE_FILES_PER_PACKAGE = 3
+FIXED_SCANNER_EVIDENCE_FILES = 23
+
+
+def released_package_count() -> int:
+    """Number of native packages the released target matrix publishes."""
+    return sum(
+        1 if os_name == "darwin" else 2 for os_name, _arch in released_target_matrix()
+    )
+
+
+def connector_evidence_file_count() -> int:
+    return (
+        CONNECTOR_EVIDENCE_ROOT_FILES
+        + CONNECTOR_EVIDENCE_FILES_PER_PACKAGE * released_package_count()
+    )
+
+
+def public_evidence_file_count() -> int:
+    return (
+        FIXED_SCANNER_EVIDENCE_FILES
+        + PUBLIC_EVIDENCE_FILES_PER_PACKAGE * released_package_count()
+    )
+
+
+def vulnerability_evidence_file_count() -> int:
+    return connector_evidence_file_count() + public_evidence_file_count()
+
+
+def vulnerability_public_asset_count() -> int:
+    return public_evidence_file_count() + len(VULNERABILITY_PUBLIC_FIXED_ASSETS)
+
+
+def public_release_asset_count() -> int:
+    return expected_core_asset_count() + vulnerability_public_asset_count()
+
+
+PLATFORM_ORDER = ("linux", "darwin")
+
+
+def released_platforms() -> tuple[str, ...]:
+    seen = {os_name for os_name, _arch in released_target_matrix()}
+    return tuple(name for name in PLATFORM_ORDER if name in seen)
+
+
+def released_target_ids(platform_name: str | None = None) -> list[str]:
+    """Released target ids, platform-major and architecture-sorted."""
+    matrix = released_target_matrix()
+    return [
+        f"{os_name}-{arch}"
+        for os_name in released_platforms()
+        if platform_name is None or os_name == platform_name
+        for arch in sorted(arch for name, arch in matrix if name == os_name)
+    ]
+
+
+def package_formats_for(os_name: str) -> tuple[str, ...]:
+    return ("pkg",) if os_name == "darwin" else ("deb", "rpm")
+
+
+def released_package_pairs() -> list[tuple[str, str]]:
+    """(target id, package format) pairs in the released matrix order."""
+    return [
+        (target_id, package_format)
+        for target_id in released_target_ids()
+        for package_format in package_formats_for(target_id.split("-", 1)[0])
+    ]
+
+
+def vulnerability_target_names() -> list[str]:
+    """Canonically ordered vulnerability scan target names."""
+    return sorted(
+        f"connector-{target_id}-{package_format}"
+        for target_id, package_format in released_package_pairs()
+    )
+
+
+def expected_core_asset_count() -> int:
+    """Fail-closed size of the core asset matrix for the released targets."""
+    total = 3  # manifest, self-service metadata, checksums
+    blob_inputs = 3
+    attestations = 0
+    for os_name, _arch in released_target_matrix():
+        total += 3  # artifact, SPDX, in-toto
+        blob_inputs += 3
+        attestations += 1
+        if os_name == "darwin":
+            total += 1  # native executable evidence
+            blob_inputs += 1
+            formats = ("pkg",)
+        else:
+            formats = ("deb", "rpm")
+        for package_format in formats:
+            total += 3  # package, SPDX, in-toto
+            blob_inputs += 3
+            attestations += 1
+            if package_format in {"rpm", "pkg"}:
+                total += 1  # native package evidence
+                blob_inputs += 1
+            if package_format == "rpm":
+                total += 1  # detached OpenPGP public key
+                blob_inputs += 1
+    return total + blob_inputs + attestations
+
+
 def expected_core_asset_names(version: str) -> set[str]:
     names = {MANIFEST, CONNECTOR_RELEASE_METADATA, CHECKSUMS}
     blob_inputs = {MANIFEST, CONNECTOR_RELEASE_METADATA, CHECKSUMS}
     attestation_bundles: set[str] = set()
-    for os_name, arch in (
-        ("linux", "amd64"),
-        ("linux", "arm64"),
-        ("darwin", "amd64"),
-        ("darwin", "arm64"),
-    ):
+    for os_name, arch in released_target_matrix():
         target_id = f"{os_name}-{arch}"
         artifact = f"sub2api-codex-connector_{version}_{os_name}_{arch}"
         target_files = {artifact, f"{artifact}.spdx.json", f"{artifact}.intoto.json"}
@@ -5492,8 +5632,11 @@ def expected_core_asset_names(version: str) -> set[str]:
                 blob_inputs.add(public_key)
     names.update(f"{name}.sigstore.json" for name in blob_inputs)
     names.update(attestation_bundles)
-    if len(names) != 92:
-        raise ReleaseError("internal core asset inventory is not the fixed 92-file matrix")
+    expected = expected_core_asset_count()
+    if len(names) != expected:
+        raise ReleaseError(
+            f"internal core asset inventory is not the fixed {expected}-file matrix"
+        )
     return names
 
 
@@ -5723,7 +5866,7 @@ def validate_public_release_descriptor(descriptor: Any) -> dict[str, Any]:
     evidence_names = vulnerability_names - VULNERABILITY_PUBLIC_FIXED_ASSETS
     if (
         VULNERABILITY_PUBLIC_FIXED_ASSETS - vulnerability_names
-        or len(evidence_names) != 41
+        or len(evidence_names) != public_evidence_file_count()
         or any(
             not re.fullmatch(
                 rf"{re.escape(VULNERABILITY_PUBLIC_PREFIX)}[0-9a-f]{{16}}-[A-Za-z0-9][A-Za-z0-9._-]*",
@@ -5883,7 +6026,7 @@ def vulnerability_public_asset_map(
         if name in public:
             raise ReleaseError("public vulnerability asset derivation is not injective")
         public[name] = item
-    if len(public) != 41:
+    if len(public) != public_evidence_file_count():
         raise ReleaseError("public vulnerability evidence must contain exactly 41 files")
     return public
 
@@ -5892,8 +6035,11 @@ def expected_public_vulnerability_asset_names(
     inventory: list[dict[str, Any]],
 ) -> set[str]:
     names = set(vulnerability_public_asset_map(inventory)) | VULNERABILITY_PUBLIC_FIXED_ASSETS
-    if len(names) != 43:
-        raise ReleaseError("public vulnerability asset projection is not the fixed 43-file set")
+    if len(names) != vulnerability_public_asset_count():
+        raise ReleaseError(
+            "public vulnerability asset projection is not the fixed "
+            f"{vulnerability_public_asset_count()}-file set"
+        )
     return names
 
 
@@ -5954,8 +6100,14 @@ def validate_vulnerability_inventory(
     evidence_directory: Path | None = None,
 ) -> list[dict[str, Any]]:
     inventory = receipt["evidence_inventory"]
-    if not isinstance(inventory, list) or len(inventory) != 55:
-        raise ReleaseError("vulnerability receipt must inventory exactly 55 files")
+    if (
+        not isinstance(inventory, list)
+        or len(inventory) != vulnerability_evidence_file_count()
+    ):
+        raise ReleaseError(
+            "vulnerability receipt must inventory exactly "
+            f"{vulnerability_evidence_file_count()} files"
+        )
     order: list[tuple[str, str, str]] = []
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -6142,7 +6294,7 @@ def validate_vulnerability_inventory(
                 f"vulnerability receipt target evidence is incomplete: {target_name}"
             )
     connector_paths = [item for item in result if item["path"].startswith("connector/")]
-    if len(connector_paths) != 14:
+    if len(connector_paths) != connector_evidence_file_count():
         raise ReleaseError("vulnerability receipt must bind exactly 14 Connector core paths")
     vulnerability_public_asset_map(result)
     return result
@@ -6461,16 +6613,9 @@ def validate_vulnerability_manifest_bindings(
                 f"vulnerability manifest OCI {oci_role}",
             )
     targets = manifest["targets"]
-    if not isinstance(targets, list) or len(targets) != 6:
+    expected_names = vulnerability_target_names()
+    if not isinstance(targets, list) or len(targets) != len(expected_names):
         raise ReleaseError("vulnerability manifest target matrix is incomplete")
-    expected_names = [
-        "connector-darwin-amd64-pkg",
-        "connector-darwin-arm64-pkg",
-        "connector-linux-amd64-deb",
-        "connector-linux-amd64-rpm",
-        "connector-linux-arm64-deb",
-        "connector-linux-arm64-rpm",
-    ]
     if [target.get("name") for target in targets if isinstance(target, dict)] != expected_names:
         raise ReleaseError("vulnerability manifest targets are not canonically ordered")
     core_by_name = {item["filename"]: item for item in core_inventory}
@@ -6818,8 +6963,15 @@ def reconstruct_public_vulnerability_release(args: argparse.Namespace) -> None:
     public = vulnerability_public_asset_map(inventory)
     expected_core = expected_core_asset_names(args.version)
     expected_public = expected_core | set(public) | VULNERABILITY_PUBLIC_FIXED_ASSETS
-    if len(expected_public) != 135 or public_release_files(public_directory) != expected_public:
-        raise ReleaseError("public release is not the exact 92 + 43 asset union")
+    if (
+        len(expected_public) != public_release_asset_count()
+        or public_release_files(public_directory) != expected_public
+    ):
+        raise ReleaseError(
+            "public release is not the exact "
+            f"{expected_core_asset_count()} + {vulnerability_public_asset_count()} "
+            "asset union"
+        )
     for name in sorted(expected_core):
         copy_exclusive_file(public_directory / name, core_directory / name)
     for item in inventory:
@@ -6988,24 +7140,12 @@ def validate_aggregate_receipt(aggregate: Any) -> dict[str, Any]:
         or verification_run["run_attempt"] <= 0
     ):
         raise ReleaseError("aggregate verification run is invalid")
-    if aggregate["verified_targets"] != [
-        "linux-amd64",
-        "linux-arm64",
-        "darwin-amd64",
-        "darwin-arm64",
-    ]:
+    if aggregate["verified_targets"] != released_target_ids():
         raise ReleaseError("aggregate target matrix is incomplete")
     packages = aggregate["verified_packages"]
-    if not isinstance(packages, list) or len(packages) != 6:
+    expected_pairs = released_package_pairs()
+    if not isinstance(packages, list) or len(packages) != len(expected_pairs):
         raise ReleaseError("aggregate package matrix is incomplete")
-    expected_pairs = [
-        ("linux-amd64", "deb"),
-        ("linux-amd64", "rpm"),
-        ("linux-arm64", "deb"),
-        ("linux-arm64", "rpm"),
-        ("darwin-amd64", "pkg"),
-        ("darwin-arm64", "pkg"),
-    ]
     for item, pair in zip(packages, expected_pairs, strict=True):
         if not isinstance(item, dict) or set(item) != {
             "target_id",
@@ -7043,8 +7183,8 @@ def validate_aggregate_receipt(aggregate: Any) -> dict[str, Any]:
         raise ReleaseError("aggregate public inventory is not the exact classified union")
     if (
         set(core) != expected_core_asset_names(release["version"])
-        or len(vulnerability) != 43
-        or len(release_inventory) != 135
+        or len(vulnerability) != vulnerability_public_asset_count()
+        or len(release_inventory) != public_release_asset_count()
     ):
         raise ReleaseError("aggregate public inventory is not the fixed release matrix")
     for descriptor in aggregate["evidence"].values():
@@ -7104,8 +7244,10 @@ def validate_aggregate_receipt(aggregate: Any) -> dict[str, Any]:
     platform_receipts = aggregate["platform_receipts"]
     if not isinstance(platform_receipts, dict):
         raise ReleaseError("aggregate platform receipts must be an object")
-    require_exact_keys(platform_receipts, {"linux", "darwin"}, "aggregate platform receipts")
-    for platform_name in ("linux", "darwin"):
+    require_exact_keys(
+        platform_receipts, set(released_platforms()), "aggregate platform receipts"
+    )
+    for platform_name in released_platforms():
         validate_receipt_file_evidence(
             platform_receipts[platform_name],
             f"aggregate {platform_name} receipt",
@@ -7338,31 +7480,52 @@ def validate_aggregate_receipt(aggregate: Any) -> dict[str, Any]:
 def aggregate_verification_receipts(args: argparse.Namespace) -> None:
     config = load_config(args.config)
     require_cosign_version(args.cosign, config)
-    linux_path = regular_input_file(
-        args.linux_receipt, PLATFORM_RECEIPTS["linux"], "Linux verification receipt"
-    )
-    darwin_path = regular_input_file(
-        args.darwin_receipt, PLATFORM_RECEIPTS["darwin"], "Darwin verification receipt"
-    )
+    platforms = released_platforms()
+    receipt_arguments = {"linux": args.linux_receipt, "darwin": args.darwin_receipt}
+    receipt_paths: dict[str, Path] = {}
+    receipts: dict[str, dict[str, Any]] = {}
+    for platform_name in platforms:
+        argument = receipt_arguments[platform_name]
+        if argument is None:
+            raise ReleaseError(
+                f"the released matrix requires a {platform_name} verification receipt"
+            )
+        receipt_paths[platform_name] = regular_input_file(
+            argument,
+            PLATFORM_RECEIPTS[platform_name],
+            f"{platform_name} verification receipt",
+        )
+        receipts[platform_name] = validate_platform_receipt(
+            read_canonical_json(
+                receipt_paths[platform_name],
+                f"{platform_name} verification receipt",
+            ),
+            platform_name,
+        )
+    for platform_name, argument in receipt_arguments.items():
+        if platform_name not in platforms and argument is not None:
+            raise ReleaseError(
+                f"{platform_name} is not in the released matrix but a receipt was supplied"
+            )
     descriptor_path = regular_input_file(
         args.public_release_descriptor,
         PUBLIC_RELEASE_DESCRIPTOR,
         "public release descriptor",
     )
-    linux = validate_platform_receipt(
-        read_canonical_json(linux_path, "Linux verification receipt"), "linux"
-    )
-    darwin = validate_platform_receipt(
-        read_canonical_json(darwin_path, "Darwin verification receipt"), "darwin"
-    )
-    if (
-        linux["release"] != darwin["release"]
-        or linux["evidence"] != darwin["evidence"]
-        or linux["trust"]["sigstore"] != darwin["trust"]["sigstore"]
-        or linux["verification_run"] != darwin["verification_run"]
-        or linux["core_inventory"] != darwin["core_inventory"]
-    ):
-        raise ReleaseError("platform verification receipts do not describe the same release")
+    linux = receipts["linux"]
+    for platform_name, receipt in receipts.items():
+        if platform_name == "linux":
+            continue
+        if (
+            linux["release"] != receipt["release"]
+            or linux["evidence"] != receipt["evidence"]
+            or linux["trust"]["sigstore"] != receipt["trust"]["sigstore"]
+            or linux["verification_run"] != receipt["verification_run"]
+            or linux["core_inventory"] != receipt["core_inventory"]
+        ):
+            raise ReleaseError(
+                "platform verification receipts do not describe the same release"
+            )
     descriptor = validate_public_release_descriptor(
         read_canonical_json(descriptor_path, "public release descriptor")
     )
@@ -7458,8 +7621,9 @@ def aggregate_verification_receipts(args: argparse.Namespace) -> None:
         evidence_directory, vulnerability_expected_names
     )
     platform_packages = [
-        *linux["verified_packages"],
-        *darwin["verified_packages"],
+        package
+        for platform_name in platforms
+        for package in receipts[platform_name]["verified_packages"]
     ]
     validate_vulnerability_manifest_bindings(
         vulnerability_manifest,
@@ -7498,7 +7662,7 @@ def aggregate_verification_receipts(args: argparse.Namespace) -> None:
             or vulnerability_item["size"] != core_item["size"]
         ):
             raise ReleaseError("vulnerability release-root evidence differs from core release")
-    if len(core_bound_paths) != 14:
+    if len(core_bound_paths) != connector_evidence_file_count():
         raise ReleaseError("vulnerability evidence does not bind 14 Connector core paths")
     public_mapping = vulnerability_public_asset_map(vulnerability_inventory)
     vulnerability_public_names = set(public_mapping) | VULNERABILITY_PUBLIC_FIXED_ASSETS
@@ -7541,7 +7705,9 @@ def aggregate_verification_receipts(args: argparse.Namespace) -> None:
         "evidence": linux["evidence"],
         "trust": {
             "sigstore": linux["trust"]["sigstore"],
-            "apple": darwin["trust"]["apple"],
+            "apple": (
+                receipts["darwin"]["trust"]["apple"] if "darwin" in receipts else None
+            ),
             "rpm": linux["trust"]["rpm"],
         },
         "verification_run": linux["verification_run"],
@@ -7556,8 +7722,8 @@ def aggregate_verification_receipts(args: argparse.Namespace) -> None:
             "descriptor": receipt_file_evidence(descriptor_path),
         },
         "platform_receipts": {
-            "linux": receipt_file_evidence(linux_path),
-            "darwin": receipt_file_evidence(darwin_path),
+            platform_name: receipt_file_evidence(receipt_paths[platform_name])
+            for platform_name in platforms
         },
         "vulnerability_evidence": {
             "profile": vulnerability_receipt["profile"],
@@ -7817,7 +7983,7 @@ def parser() -> argparse.ArgumentParser:
         help="aggregate public platform and vulnerability verification evidence",
     )
     aggregate_parser.add_argument("--linux-receipt", type=Path, required=True)
-    aggregate_parser.add_argument("--darwin-receipt", type=Path, required=True)
+    aggregate_parser.add_argument("--darwin-receipt", type=Path)
     aggregate_parser.add_argument(
         "--public-release-descriptor", type=Path, required=True
     )

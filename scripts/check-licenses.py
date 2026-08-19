@@ -43,13 +43,13 @@ PACKAGE_JSON_PATHS = (
 )
 EXPECTED_WORKFLOW_SHA256 = {
     Path(".github/workflows/ci.yml"): (
-        "22bf387f0fddbf9710e76fd8fae31a9b6797e6c1ae2d7dfd3bc109572ad4d4ce"
+        "78c795be514d95555f82ffa699a4ac87d2f2b2f389e0861dcd1c69030ef22d7b"
     ),
     Path(".github/workflows/connector-release.yml"): (
-        "94ee42aaee8081d88d8bcb8231d199b56b8f3f993a6ee185ad62c69d9cc7e804"
+        "d915fc05c7ec379be6ff0da0dd2a901f2be9e0d487434348b74ffd113bb389b2"
     ),
     Path(".github/workflows/control-images-release.yml"): (
-        "de3177552af7460a200c050a598ad04a8df5c0c5be73f974315441b86291118c"
+        "78dd65264b5b7bbf8ab0f8477e5a46719720b61bbee8670e4d95e08d67682337"
     ),
 }
 SOURCE_ONLY_RELEASE_WORKFLOWS = {

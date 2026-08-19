@@ -1,0 +1,9 @@
+# Test-only dependency set for the release, deployment, and server-package
+# gates. These packages never enter a released image or package; they only
+# provide the independent JSON Schema validator the gates cross-check against.
+# Update intentionally with a full gate run.
+attrs==26.1.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+referencing==0.37.0
+rpds-py==2026.6.3
