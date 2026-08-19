@@ -46,16 +46,22 @@ EXPECTED_WORKFLOW_SHA256 = {
         "3779e5824077c571cf2e042ed9b558ffebc7501d5aacca02114b8d055cbbb78b"
     ),
     Path(".github/workflows/connector-release.yml"): (
-        "d915fc05c7ec379be6ff0da0dd2a901f2be9e0d487434348b74ffd113bb389b2"
+        "55cbfccb5efd19693aa60d7b2b9562803e3072c3a4910c2e81e3b7e66cc64640"
     ),
     Path(".github/workflows/control-images-release.yml"): (
-        "78dd65264b5b7bbf8ab0f8477e5a46719720b61bbee8670e4d95e08d67682337"
+        "879f8224485ef68f42fc4b3f639d3622539852a5255451469937167a6a700c7f"
     ),
 }
-SOURCE_ONLY_RELEASE_WORKFLOWS = {
-    Path(".github/workflows/connector-release.yml"): ("build",),
-    Path(".github/workflows/control-images-release.yml"): ("validate",),
+# Formal release workflows may run only from their protected tag push, and
+# their entry job must begin by proving the annotated tag sits on the current
+# protected main head with an exact successful CI run.
+PROTECTED_RELEASE_WORKFLOWS = {
+    Path(".github/workflows/connector-release.yml"): ("connector-v*", "build"),
+    Path(".github/workflows/control-images-release.yml"): ("control-v*", "validate"),
 }
+RELEASE_TAG_GUARD_STEP = (
+    "Require the protected main commit and its exact successful CI run"
+)
 NOTICE_RELATIONSHIPS = {
     "codex": ("generated-material", "Generated protocol material"),
     "sub2api": ("compatibility-reference", "Compatibility contract"),
@@ -372,7 +378,7 @@ def check_source_only_release_workflows(root: Path, errors: list[str]) -> None:
             )
         workflow_text[relative] = text
 
-    for relative, (guarded_job,) in SOURCE_ONLY_RELEASE_WORKFLOWS.items():
+    for relative, (tag_pattern, entry_job) in PROTECTED_RELEASE_WORKFLOWS.items():
         text = workflow_text.get(relative)
         if text is None:
             continue
@@ -383,35 +389,23 @@ def check_source_only_release_workflows(root: Path, errors: list[str]) -> None:
             for line in (trigger_block or "").splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         ]
-        if trigger_lines != ["workflow_dispatch:"]:
+        if trigger_lines != ["push:", "tags:", f'- "{tag_pattern}"']:
             errors.append(
-                f"{relative} must expose only workflow_dispatch while binary releases are disabled"
+                f"{relative} must be triggered only by its protected {tag_pattern} tag push"
             )
 
-        guard_block = yaml_block(text, "source-only-guard", 2)
-        if guard_block is None:
-            errors.append(f"{relative} lacks the source-only-guard job")
-        else:
-            if not re.search(r"(?m)^\s+exit 1\s*$", guard_block):
-                errors.append(
-                    f"{relative} source-only-guard must terminate with exit 1"
-                )
-            if re.search(r"(?m)^\s*(?:continue-on-error|if):", guard_block):
-                errors.append(
-                    f"{relative} source-only-guard must be unconditional and fail closed"
-                )
-
-        entry_block = yaml_block(text, guarded_job, 2)
+        entry_block = yaml_block(text, entry_job, 2)
         if entry_block is None:
-            errors.append(f"{relative} lacks guarded release entry job {guarded_job}")
+            errors.append(f"{relative} lacks protected release entry job {entry_job}")
         else:
-            if not re.search(r"(?m)^\s{4}needs:\s*source-only-guard\s*$", entry_block):
+            if RELEASE_TAG_GUARD_STEP not in entry_block:
                 errors.append(
-                    f"{relative} release entry job {guarded_job} must need source-only-guard"
+                    f"{relative} release entry job {entry_job} must first prove the "
+                    "protected main commit and its exact successful CI run"
                 )
             if re.search(r"(?m)^\s{4}if:", entry_block):
                 errors.append(
-                    f"{relative} release entry job {guarded_job} must not override failed needs"
+                    f"{relative} release entry job {entry_job} must not be conditional"
                 )
 
 

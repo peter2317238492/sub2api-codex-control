@@ -705,11 +705,13 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
         workflow = (
             REPO_ROOT / ".github/workflows/control-images-release.yml"
         ).read_text()
-        self.assertNotIn('tags:\n      - "control-v*"', workflow)
-        self.assertIn("workflow_dispatch:", workflow)
-        self.assertIn("source-only-guard:", workflow)
-        self.assertIn("needs: source-only-guard", workflow)
-        self.assertIn("exit 1", workflow)
+        self.assertIn('tags:\n      - "control-v*"', workflow)
+        self.assertNotIn("workflow_dispatch:", workflow)
+        self.assertNotIn("source-only-guard", workflow)
+        self.assertIn(
+            "Require the protected main commit and its exact successful CI run",
+            workflow,
+        )
         self.assertIn("permissions: {}", workflow)
         for action in re.findall(r"uses:\s+([^\s#]+)", workflow):
             reference = action.rsplit("@", 1)[-1]
@@ -724,30 +726,25 @@ class WorkflowAndComposePolicyTests(unittest.TestCase):
         self.assertIn("--expected-postgres-tools-repository", workflow)
         self.assertIn("for component in control-api pwa postgres-tools", workflow)
 
-    def test_binary_release_workflows_are_unreachable_in_source_only_mode(self) -> None:
-        for filename, forbidden_tag in (
-            ("control-images-release.yml", "control-v*"),
-            ("connector-release.yml", "connector-v*"),
+    def test_release_workflows_run_only_from_protected_tag_pushes(self) -> None:
+        for filename, tag_pattern, entry_job in (
+            ("control-images-release.yml", "control-v*", "validate"),
+            ("connector-release.yml", "connector-v*", "build"),
         ):
             with self.subTest(filename=filename):
                 workflow = (REPO_ROOT / ".github/workflows" / filename).read_text()
-                self.assertNotIn(forbidden_tag, workflow.split("jobs:", 1)[0])
-                self.assertIn("workflow_dispatch:", workflow.split("jobs:", 1)[0])
-                self.assertRegex(
-                    workflow,
-                    r"source-only-guard:[\s\S]*?exit 1",
-                )
-                publish_jobs = re.findall(
-                    r"^  ([A-Za-z0-9_-]+):\n(?:(?:    .*|\s*)\n)*?"
-                    r"    needs: ([A-Za-z0-9_-]+)",
-                    workflow,
-                    flags=re.MULTILINE,
-                )
+                trigger = workflow.split("jobs:", 1)[0]
                 self.assertIn(
-                    ("validate", "source-only-guard")
-                    if filename.startswith("control")
-                    else ("build", "source-only-guard"),
-                    publish_jobs,
+                    f'on:\n  push:\n    tags:\n      - "{tag_pattern}"\n', trigger
+                )
+                self.assertNotIn("workflow_dispatch:", trigger)
+                self.assertNotIn("pull_request:", trigger)
+                self.assertNotIn("schedule:", trigger)
+                entry = workflow.split(f"  {entry_job}:\n", 1)[1]
+                first_step = entry.split("- name: ", 1)[1].split("\n", 1)[0]
+                self.assertEqual(
+                    first_step,
+                    "Require the protected main commit and its exact successful CI run",
                 )
 
     def test_ci_runs_on_main_and_pull_requests(self) -> None:

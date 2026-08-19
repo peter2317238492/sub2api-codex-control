@@ -1,7 +1,9 @@
 name: Control images protected release
 
 on:
-  workflow_dispatch:
+  push:
+    tags:
+      - "control-v*"
 
 permissions: {}
 
@@ -19,23 +21,58 @@ env:
   COSIGN_EXPERIMENTAL: "1"
 
 jobs:
-  source-only-guard:
-    name: Binary release disabled until the formal package gates close
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Fail closed before any registry or release write
-        run: |
-          echo "Control binary publication remains disabled until server packages, protected environments, and production gates are complete." >&2
-          exit 1
-
   validate:
     name: Validate exact source and run release gates
-    needs: source-only-guard
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
+      actions: read
       contents: read
     steps:
+      - name: Require the protected main commit and its exact successful CI run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF_TYPE" = tag
+          test "$GITHUB_REF" = "refs/tags/$GITHUB_REF_NAME"
+          [[ "$GITHUB_REF_NAME" =~ ^control-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          api() {
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "$@"
+          }
+          test "$(api "repos/$GITHUB_REPOSITORY" --jq .default_branch)" = main
+          main_ref=$(api "repos/$GITHUB_REPOSITORY/git/ref/heads/main")
+          jq -e --arg sha "$GITHUB_SHA" \
+            '.ref == "refs/heads/main" and .object.type == "commit" and .object.sha == $sha' \
+            <<<"$main_ref" >/dev/null
+          tag_ref=$(api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME")
+          tag_object_sha=$(jq -er --arg ref "refs/tags/$GITHUB_REF_NAME" \
+            'if .ref == $ref and .object.type == "tag" and (.object.sha | test("^[0-9a-f]{40}$")) then .object.sha else error("release ref is not an annotated tag") end' \
+            <<<"$tag_ref")
+          tag_object=$(api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object_sha")
+          jq -e --arg tag "$GITHUB_REF_NAME" --arg sha "$GITHUB_SHA" \
+            '.tag == $tag and .object.type == "commit" and .object.sha == $sha' \
+            <<<"$tag_object" >/dev/null
+          runs=$(api \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&head_sha=$GITHUB_SHA&per_page=100")
+          read -r run_id run_attempt < <(jq -er \
+            --arg sha "$GITHUB_SHA" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            '[.workflow_runs[] | select(.event == "push" and .status == "completed" and .conclusion == "success" and .head_branch == "main" and .head_sha == $sha and .path == ".github/workflows/ci.yml" and .head_repository.full_name == $repo)] | if length == 1 then .[0] | "\(.id) \(.run_attempt)" else error("exact successful main CI run not found") end' \
+            <<<"$runs")
+          jobs=$(api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/attempts/$run_attempt/jobs?per_page=100")
+          jq -e \
+            --arg sha "$GITHUB_SHA" \
+            --argjson expected '["Connector","Control API","PWA and contracts","Public source policy and release tooling"]' \
+            '(.total_count == 4) and (([.jobs[] | select(.head_sha == $sha and .status == "completed" and .conclusion == "success") | .name] | sort) == ($expected | sort))' \
+            <<<"$jobs" >/dev/null
+
       - name: Check out the immutable tag candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
