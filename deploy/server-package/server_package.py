@@ -996,16 +996,18 @@ def validate_connector_metadata(
     )
     assets = value["assets"]
     packages = aggregate["verified_packages"]
-    if not isinstance(assets, list) or len(assets) != 6 or len(packages) != 6:
-        fail("Connector metadata does not contain the complete six-package matrix")
     expected_pairs = (
         ("linux", "amd64", "deb", "linux-amd64"),
         ("linux", "amd64", "rpm", "linux-amd64"),
         ("linux", "arm64", "deb", "linux-arm64"),
         ("linux", "arm64", "rpm", "linux-arm64"),
-        ("darwin", "amd64", "pkg", "darwin-amd64"),
-        ("darwin", "arm64", "pkg", "darwin-arm64"),
     )
+    if (
+        not isinstance(assets, list)
+        or len(assets) != len(expected_pairs)
+        or len(packages) != len(expected_pairs)
+    ):
+        fail("Connector metadata does not contain the complete package matrix")
     for asset_value, package, expected_pair in zip(
         assets, packages, expected_pairs, strict=True
     ):
