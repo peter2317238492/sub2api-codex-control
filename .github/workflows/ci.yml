@@ -41,6 +41,19 @@ jobs:
       - name: Test deterministic source and release verification
         run: python3 -m unittest discover -s deploy/release/tests -v
 
+      - name: Install the release-tooling test dependencies
+        run: |
+          python3 -m pip install \
+            --constraint deploy/constraints/release-tests.txt jsonschema
+          python3 deploy/scripts/verify-python-constraints.py \
+            deploy/constraints/release-tests.txt
+
+      - name: Test the deployment, server-package, and vulnerability gates
+        run: |
+          python3 -m unittest discover -s deploy/scripts/tests
+          python3 -m unittest discover -s deploy/server-package/tests
+          python3 -m unittest tests/test_vulnerability_gate.py tests/test_vulnerability_release_roots.py
+
       - name: Compile deployment tools
         run: |
           python3 -m compileall -q deploy/scripts deploy/release tests/e2e

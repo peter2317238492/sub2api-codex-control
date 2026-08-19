@@ -28,8 +28,14 @@
       "goarch": "amd64",
       "native_signature": "none",
       "packages": [
-        { "format": "deb", "native_signature": "none" },
-        { "format": "rpm", "native_signature": "rpm-openpgp" }
+        {
+          "format": "deb",
+          "native_signature": "none"
+        },
+        {
+          "format": "rpm",
+          "native_signature": "rpm-openpgp"
+        }
       ]
     },
     {
@@ -38,31 +44,13 @@
       "goarch": "arm64",
       "native_signature": "none",
       "packages": [
-        { "format": "deb", "native_signature": "none" },
-        { "format": "rpm", "native_signature": "rpm-openpgp" }
-      ]
-    },
-    {
-      "id": "darwin-amd64",
-      "goos": "darwin",
-      "goarch": "amd64",
-      "native_signature": "apple-developer-id-and-notarization",
-      "packages": [
         {
-          "format": "pkg",
-          "native_signature": "apple-developer-id-installer-notarized-stapled"
-        }
-      ]
-    },
-    {
-      "id": "darwin-arm64",
-      "goos": "darwin",
-      "goarch": "arm64",
-      "native_signature": "apple-developer-id-and-notarization",
-      "packages": [
+          "format": "deb",
+          "native_signature": "none"
+        },
         {
-          "format": "pkg",
-          "native_signature": "apple-developer-id-installer-notarized-stapled"
+          "format": "rpm",
+          "native_signature": "rpm-openpgp"
         }
       ]
     }

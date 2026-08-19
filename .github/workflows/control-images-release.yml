@@ -726,7 +726,7 @@ jobs:
               .draft == false and
               .prerelease == false and
               .immutable == true and
-              (.assets | length == 135) and
+              (.assets | length == 93) and
               all(.assets[]; .state == "uploaded")
             ' "$response" >/dev/null
           aggregate="$RUNNER_TEMP/connector-public-aggregate/connector-public-verification-aggregate.json"

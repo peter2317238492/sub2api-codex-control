@@ -23,7 +23,7 @@
     },
     "format_version": { "const": 1 },
     "kind": { "const": "sub2api-codex-connector-platform-verification" },
-    "platform": { "enum": ["linux", "darwin"] },
+    "platform": { "const": "linux" },
     "release": { "$ref": "#/$defs/release" },
     "evidence": { "$ref": "#/$defs/evidence" },
     "trust": { "$ref": "#/$defs/trust" },
@@ -33,7 +33,7 @@
       "minItems": 2,
       "maxItems": 2,
       "uniqueItems": true,
-      "items": { "enum": ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"] }
+      "items": { "enum": ["linux-amd64", "linux-arm64"] }
     },
     "verified_packages": { "type": "array", "items": { "$ref": "#/$defs/package" } },
     "core_inventory": {
@@ -71,31 +71,6 @@
             "items": false
           },
           "trust": { "$ref": "#/$defs/linuxTrust" }
-        }
-      },
-      "else": {
-        "properties": {
-          "verified_targets": {
-            "type": "array",
-            "minItems": 2,
-            "maxItems": 2,
-            "prefixItems": [
-              { "const": "darwin-amd64" },
-              { "const": "darwin-arm64" }
-            ],
-            "items": false
-          },
-          "verified_packages": {
-            "type": "array",
-            "minItems": 2,
-            "maxItems": 2,
-            "prefixItems": [
-              { "$ref": "#/$defs/darwinAmd64Pkg" },
-              { "$ref": "#/$defs/darwinArm64Pkg" }
-            ],
-            "items": false
-          },
-          "trust": { "$ref": "#/$defs/darwinTrust" }
         }
       }
     }
@@ -197,12 +172,6 @@
         { "type": "object", "properties": { "apple": { "type": "null" }, "rpm": { "$ref": "#/$defs/rpm" } } }
       ]
     },
-    "darwinTrust": {
-      "allOf": [
-        { "$ref": "#/$defs/trust" },
-        { "type": "object", "properties": { "apple": { "$ref": "#/$defs/apple" }, "rpm": { "type": "null" } } }
-      ]
-    },
     "verificationRun": {
       "type": "object",
       "additionalProperties": false,
@@ -218,8 +187,8 @@
       "additionalProperties": false,
       "required": ["target_id", "package_format", "filename", "sha256", "size"],
       "properties": {
-        "target_id": { "enum": ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"] },
-        "package_format": { "enum": ["deb", "rpm", "pkg"] },
+        "target_id": { "enum": ["linux-amd64", "linux-arm64"] },
+        "package_format": { "enum": ["deb", "rpm"] },
         "filename": { "$ref": "#/$defs/filename" },
         "sha256": { "$ref": "#/$defs/sha256" },
         "size": { "type": "integer", "minimum": 1 }
@@ -229,8 +198,6 @@
     "linuxAmd64Rpm": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-amd64" }, "package_format": { "const": "rpm" } } }] },
     "linuxArm64Deb": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-arm64" }, "package_format": { "const": "deb" } } }] },
     "linuxArm64Rpm": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "linux-arm64" }, "package_format": { "const": "rpm" } } }] },
-    "darwinAmd64Pkg": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "darwin-amd64" }, "package_format": { "const": "pkg" } } }] },
-    "darwinArm64Pkg": { "allOf": [{ "$ref": "#/$defs/package" }, { "type": "object", "properties": { "target_id": { "const": "darwin-arm64" }, "package_format": { "const": "pkg" } } }] },
     "inventory": {
       "type": "object",
       "additionalProperties": false,
