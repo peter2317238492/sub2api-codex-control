@@ -2534,7 +2534,7 @@ def validate_connector_release_metadata(
     if (
         metadata["format_version"] != 1
         or metadata["source_repository"] != RELEASE_REPOSITORY
-        or len(metadata["assets"]) != 6
+        or len(metadata["assets"]) != len(released_package_pairs())
     ):
         raise ReleaseError(
             "Connector self-service release metadata is not the official complete release"

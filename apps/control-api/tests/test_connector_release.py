@@ -29,8 +29,6 @@ def release_metadata() -> dict[str, Any]:
             ("linux", "amd64", "rpm"),
             ("linux", "arm64", "deb"),
             ("linux", "arm64", "rpm"),
-            ("darwin", "amd64", "pkg"),
-            ("darwin", "arm64", "pkg"),
         ),
         start=1,
     ):
@@ -102,7 +100,7 @@ def production_settings(connector_release_metadata_json: str) -> Settings:
 def test_release_metadata_requires_the_fixed_complete_native_inventory() -> None:
     metadata = ConnectorReleaseMetadata.model_validate(release_metadata())
     assert metadata.tag == TAG
-    assert len(metadata.assets) == 6
+    assert len(metadata.assets) == 4
 
     for mutate in (
         lambda value: value.update(format_version=True),
