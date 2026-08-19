@@ -19,6 +19,16 @@ PG_RESTORE_CONTAINER = REPO_ROOT / "deploy/scripts/pg-restore-via-container.sh"
 BOOTSTRAP_ADMISSION = REPO_ROOT / "deploy/scripts/bootstrap-admission.py"
 
 
+def load_backup_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("backup_production_state", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 FAKE_DOCKER = r"""#!/usr/bin/env python3
 import os
 import pathlib
@@ -194,6 +204,31 @@ class ProductionStateBackupTests(unittest.TestCase):
         self.assertNotIn("--host 127.0.0.1", source)
         self.assertNotIn('--port "$2"', source)
         self.assertGreaterEqual(source.count('-h 127.0.0.1 -p "$2"'), 3)
+
+    def test_record_inventory_keeps_claims_and_rejects_other_dot_entries(
+        self,
+    ) -> None:
+        module = load_backup_module()
+        with tempfile.TemporaryDirectory(dir=Path.home(), prefix=".records.") as raw:
+            root = Path(raw)
+            deployments = root / "deployments"
+            claims = deployments / module.STALE_BACKUP_CLAIM_DIRECTORY
+            claims.mkdir(parents=True)
+            (claims / "claim.json").write_text("{}\n", encoding="utf-8")
+            (deployments / "plan.json").write_text("{}\n", encoding="utf-8")
+
+            inventory, top_level = module.release_record_inventory(root, set())
+            self.assertEqual(top_level, ["deployments"])
+            paths = {item["path"] for item in inventory["entries"]}
+            self.assertIn(
+                f"deployments/{module.STALE_BACKUP_CLAIM_DIRECTORY}/claim.json", paths
+            )
+
+            (deployments / ".editor-swap").write_text("x\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                module.BackupError, "nested temporary entry"
+            ):
+                module.release_record_inventory(root, set())
 
     def test_live_sub2api_logs_are_excluded_from_host_archive(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
