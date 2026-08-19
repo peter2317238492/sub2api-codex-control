@@ -133,11 +133,11 @@ EOF
       fail "RPM postinstall script differs from release policy"
     [ "$(rpm -qp --qf '%{PREUN}' "$package")" = "$(cat "$temporary/expected-rpm-preun")" ] || \
       fail "RPM preuninstall script differs from release policy"
+    # The aggregate *SCRIPTS tags cover every trigger type and, unlike the
+    # per-type aliases, are understood by rpm 4.18 on the release runners.
     for tag in \
-      POSTUN PRETRANS POSTTRANS VERIFYSCRIPT TRIGGERPREIN TRIGGERSCRIPTS \
-      FILETRIGGERSCRIPTS TRANSFILETRIGGERSCRIPTS \
-      FILETRIGGERIN FILETRIGGERUN FILETRIGGERPOSTUN \
-      TRANSFILETRIGGERIN TRANSFILETRIGGERUN TRANSFILETRIGGERPOSTUN
+      POSTUN PRETRANS POSTTRANS VERIFYSCRIPT TRIGGERSCRIPTS \
+      FILETRIGGERSCRIPTS TRANSFILETRIGGERSCRIPTS
     do
       value=$(rpm -qp --qf "%{$tag}" "$package")
       [ -z "$value" ] || [ "$value" = '(none)' ] || fail "RPM contains an unapproved $tag script"
