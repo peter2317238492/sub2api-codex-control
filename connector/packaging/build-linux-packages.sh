@@ -112,7 +112,6 @@ Version: $version
 Release: 1
 Summary: Outbound-only user Connector for Sub2API Codex Control
 License: Apache-2.0
-BuildArch: $rpm_arch
 Requires: systemd
 
 %description
