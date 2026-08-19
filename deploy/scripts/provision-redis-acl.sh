@@ -102,9 +102,15 @@ shift 2
 seen_on=0 seen_password=0 seen_keys=0 seen_channels=0 seen_reset=0
 seen_ping=0 seen_get=0 seen_set=0 seen_del=0 seen_incr=0 seen_expire=0
 seen_eval=0 seen_publish=0 seen_subscribe=0 seen_unsubscribe=0 seen_setinfo=0
+seen_sanitize=0 seen_resetchannels=0
 for token in "$@"; do
   case "$token" in
     on) seen_on=$((seen_on + 1)) ;;
+    # Redis 7+ prints these informational hardening tokens in ACL LIST:
+    # sanitize-payload is the default payload check, and resetchannels is
+    # exactly the deny-then-allow channel baseline this user is built on.
+    sanitize-payload) seen_sanitize=$((seen_sanitize + 1)) ;;
+    resetchannels) seen_resetchannels=$((seen_resetchannels + 1)) ;;
     \#*) seen_password=$((seen_password + 1)) ;;
     "~${redis_prefix}*") seen_keys=$((seen_keys + 1)) ;;
     "&${redis_prefix}*") seen_channels=$((seen_channels + 1)) ;;
@@ -132,6 +138,12 @@ for count in \
   "$seen_expire" "$seen_eval" "$seen_publish" "$seen_subscribe" \
   "$seen_unsubscribe" "$seen_setinfo"; do
   [ "$count" = 1 ] || {
+    echo "provision-redis-acl: dedicated user ACL is not exact" >&2
+    exit 1
+  }
+done
+for count in "$seen_sanitize" "$seen_resetchannels"; do
+  [ "$count" = 0 ] || [ "$count" = 1 ] || {
     echo "provision-redis-acl: dedicated user ACL is not exact" >&2
     exit 1
   }
