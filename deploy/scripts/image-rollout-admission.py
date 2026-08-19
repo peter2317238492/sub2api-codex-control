@@ -19,6 +19,7 @@ import os
 import re
 import stat
 import sys
+import tempfile
 import types
 import uuid
 from datetime import datetime, timezone
@@ -36,6 +37,10 @@ TARGET_READY_RECORD_SHA256 = "0ebbddff6ce9124246398402de8a84b05bf681344dedb9e24a
 TARGET_BUNDLE_ID = "20260812T224530Z"
 TARGET_TRANSPORT_SHA256 = "aa69279c8dafe51d596977df1197d1793ea650e52444d5bad0cdcbe987f00fe7"
 TARGET_SCHEMA_SHA256 = "3d247f26e2faa54dbf2b9865bfdafa9e5f80bcf2a1a872a0401db0bf4add3e73"
+# Resolved system temporary root.  Only ever consulted by the unprivileged
+# test escape hatch below, which stays inert whenever this helper runs as
+# root -- the only way production ever invokes it.
+UNPRIVILEGED_TEST_TEMP_ROOT = Path(tempfile.gettempdir()).resolve()
 TARGET_TOOL_OWNER_UID = 0
 TARGET_COMPOSE_PROJECT = "sub2api-codex-control"
 TARGET_SMOKE_CHECK_COUNT = 9
@@ -809,7 +814,7 @@ def trusted_regular_metadata(path: Path, label: str, expected_mode: int) -> os.s
     if (
         os.geteuid() != 0
         and os.environ.get("IMAGE_ROLLOUT_TEST_ALLOW_UNPRIVILEGED_TOOLS") == "1"
-        and Path("/private/tmp") in path.parents
+        and UNPRIVILEGED_TEST_TEMP_ROOT in path.parents
     ):
         expected_uid = os.geteuid()
     if (
@@ -831,7 +836,7 @@ def validate_trusted_ancestors(path: Path, stop: Path, label: str) -> None:
     if (
         os.geteuid() != 0
         and os.environ.get("IMAGE_ROLLOUT_TEST_ALLOW_UNPRIVILEGED_TOOLS") == "1"
-        and Path("/private/tmp") in current.parents
+        and UNPRIVILEGED_TEST_TEMP_ROOT in current.parents
     ):
         expected_uid = os.geteuid()
     while True:

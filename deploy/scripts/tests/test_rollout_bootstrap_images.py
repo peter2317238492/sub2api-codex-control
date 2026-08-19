@@ -121,7 +121,7 @@ def descriptor(path: Path) -> dict[str, Any]:
 
 
 def temporary_parent() -> str:
-    return "/opt" if os.geteuid() == 0 else "/private/tmp"
+    return "/opt" if os.geteuid() == 0 else str(Path(tempfile.gettempdir()).resolve())
 
 
 def shell_commands(script: str) -> list[str]:
@@ -156,7 +156,7 @@ def command_flags(script: str, command: str) -> set[str]:
 
 def helper_required_flags(command: str) -> set[str]:
     result = subprocess.run(
-        ["/usr/bin/python3", "-B", "-I", str(ADMISSION), command, "--help"],
+        [sys.executable, "-B", "-I", str(ADMISSION), command, "--help"],
         check=False,
         capture_output=True,
         text=True,
@@ -1389,7 +1389,7 @@ class RealRecordGateTests(unittest.TestCase):
         write_json(real_root / "tampered.json", tampered)
         rejected = subprocess.run(
             [
-                "/usr/bin/python3",
+                sys.executable,
                 "-B",
                 "-I",
                 str(helper),

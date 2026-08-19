@@ -55,7 +55,7 @@ class ImmutableSub2APIMigrationStaticTests(unittest.TestCase):
             "SUB2API_IMMUTABLE_COMPOSE_SHA256",
             "SUB2API_COMPOSE_ENV_FILE",
             "SUB2API_COMPOSE_ENV_SHA256",
-            'safe_file(compose_candidate,',
+            'safe_file(\n    compose_candidate,',
             'safe_file(\n    compose_environment,',
             'config --no-interpolate --format json',
             '"image": image',

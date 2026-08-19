@@ -393,11 +393,20 @@ class SecureDirectory:
                 )
             except FileNotFoundError:
                 try:
-                    os.mkdir(
-                        self.entry_name,
-                        self.exact_mode or 0o755,
-                        dir_fd=self.parent.fd,
-                    )
+                    # os.mkdir masks its mode with the caller's umask.  Under a
+                    # restrictive operator umask the directory would be created
+                    # with a mode the failure path below cannot recognise, so a
+                    # post-mkdir failure would leave behind the very inode this
+                    # run created.  Request the mode with the umask cleared.
+                    previous_umask = os.umask(0)
+                    try:
+                        os.mkdir(
+                            self.entry_name,
+                            self.exact_mode or 0o755,
+                            dir_fd=self.parent.fd,
+                        )
+                    finally:
+                        os.umask(previous_umask)
                     created = True
                     self.created = True
                     before = os.stat(
