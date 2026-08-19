@@ -27,9 +27,16 @@ SPEC.loader.exec_module(TOOL)
 
 class OciToolchainTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
+        # The toolchain refuses to read or write under a group/other-writable
+        # parent, and a shared temporary root such as /tmp is mode 1777, so
+        # build these fixtures under the invoking user's home; otherwise that
+        # check fires before the behaviour each test is asserting.
+        self.temporary = tempfile.TemporaryDirectory(
+            dir=Path.home(), prefix=".oci-toolchain-tests."
+        )
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
+        os.chmod(self.root, 0o755)
 
     @staticmethod
     def sha(raw: bytes) -> str:
