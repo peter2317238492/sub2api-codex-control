@@ -4,6 +4,7 @@ import asyncio
 import base64
 import gc
 import json
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -2150,13 +2151,17 @@ async def test_sweep_lease_renews_and_reentry_cannot_run_concurrently(
             settings=SimpleNamespace(retention_sweep_batch_size=500),
         )
     )
+    # The retention sweep is gated on time.monotonic(), which is uptime on
+    # Linux, so an absolute 0.0 only looks "over a minute ago" on a host that
+    # has been up for a minute. Anchor the deadline to the current clock.
+    retention_due = time.monotonic() - 61.0
     first = asyncio.create_task(
-        _run_sweep_cycle(fake_app, 0.0, lease_ttl_seconds=1)  # type: ignore[arg-type]
+        _run_sweep_cycle(fake_app, retention_due, lease_ttl_seconds=1)  # type: ignore[arg-type]
     )
     await started.wait()
     acquired, _ = await _run_sweep_cycle(  # type: ignore[arg-type]
         fake_app,
-        0.0,
+        retention_due,
         lease_ttl_seconds=1,
     )
     assert acquired is False

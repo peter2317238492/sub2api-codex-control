@@ -29,8 +29,16 @@ def write_json(path: Path, value: object, mode: int = 0o600) -> None:
 
 class RuntimeVerifierHardeningTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
+        # The bind verifier walks every ancestor to the filesystem root and
+        # rejects group/other-writable ones before it reaches the ownership
+        # check. A shared temporary root such as /tmp is mode 1777, so build
+        # these fixtures under the invoking user's home instead; otherwise the
+        # ownership assertions can never be reached.
+        self.temporary = tempfile.TemporaryDirectory(
+            dir=Path.home(), prefix=".sub2api-runtime-tests."
+        )
         self.root = Path(self.temporary.name).resolve()
+        os.chmod(self.root, 0o755)
         self.bind_source = self.root / "sub2api-data"
         self.bind_source.mkdir(mode=0o755)
         self.bind_uid = self.bind_source.stat().st_uid

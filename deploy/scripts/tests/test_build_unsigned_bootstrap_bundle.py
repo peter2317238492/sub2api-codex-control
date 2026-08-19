@@ -1307,9 +1307,15 @@ class PublicationSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(BUNDLE.BundleError, "already reserved"):
             BUNDLE.reserve_bundle_id(self.output, "20260812T000000Z")
 
+        # Build the replacement while the original inode is still allocated,
+        # then swap it in: unlinking first lets the kernel hand the same inode
+        # back and the ownership check would legitimately match.
         path = first.ownership.path
+        replacement = self.output / "another-invocation.claim.json"
+        BUNDLE.write_private(replacement, b"another invocation\n")
         path.unlink()
-        BUNDLE.write_private(path, b"another invocation\n")
+        replacement.rename(path)
+        self.assertNotEqual(path.lstat().st_ino, first.ownership.inode)
         BUNDLE.cleanup_owned_paths([first.ownership])
         self.assertEqual(path.read_bytes(), b"another invocation\n")
 
