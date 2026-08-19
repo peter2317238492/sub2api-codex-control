@@ -726,7 +726,7 @@ class Smoke:
         )
         assert isinstance(device, dict)
         self.check(
-            device.get("connector_version") == "0.1.1"
+            device.get("connector_version") == "0.1.2"
             and device.get("codex_version") == "0.147.0",
             "online device reports the pinned Connector and Codex versions",
         )

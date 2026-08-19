@@ -375,8 +375,8 @@ fi
 
 awk -F/ '{
   path = ""
-  for (index = 1; index < NF; index++) {
-    path = (path == "" ? $index : path "/" $index)
+  for (i = 1; i < NF; i++) {
+    path = (path == "" ? $i : path "/" $i)
     print path
   }
 }' "$expected_payload" | LC_ALL=C sort -u > "$temporary/expected-payload-directories"
