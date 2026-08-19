@@ -23,7 +23,7 @@ Supported release assets will appear only on the repository's
 [GitHub Releases page](https://github.com/peter2317238492/sub2api-codex-control/releases).
 Do not use GitHub's automatically generated source archives as installers.
 
-Commands in this guide assume a POSIX shell on Linux or macOS. The Connector
+Commands in this guide assume a POSIX shell on Linux. The Connector
 source supports those targets; Windows is not a supported runtime target in
 this source version.
 
@@ -78,10 +78,9 @@ only when the downloaded file's SHA-256 matches exactly.
 | --- | --- | --- |
 | Debian / Ubuntu `amd64`, `arm64` | `.deb` | `sudo apt install ./sub2api-codex-connector_*.deb` |
 | Fedora / RHEL `amd64`, `arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
-| macOS Intel, Apple silicon | signed and notarized `.pkg` | `open ./sub2api-codex-connector_*.pkg` |
 
 This package step does not require a Sub2API administrator. It does use local
-`sudo` on Linux, and macOS Installer may request a local administrator credential.
+`sudo` on Linux.
 
 The package installs only the Connector, its user service, and its management
 command; it does not install or upgrade Codex. Run every command below as the
@@ -167,7 +166,7 @@ sub2api-codex-connector-ctl status
 ```
 
 The package installs a user-level `systemd` service on Linux or a `launchd`
-agent on macOS. Package upgrades and removal preserve the user's private
+service. Package upgrades and removal preserve the user's private
 Connector state. For a v2 managed configuration, revoke the device in the PWA
 before explicitly deleting that state with
 `sub2api-codex-connector-ctl purge-user-state --yes`. Legacy configurations

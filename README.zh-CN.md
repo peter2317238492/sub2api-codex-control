@@ -39,7 +39,7 @@
 
 | 使用者 | Release 标签 | 受支持的下载路径 |
 | --- | --- | --- |
-| 普通用户 | `connector-v*` | 优先使用 Control PWA 显示的安装包与 SHA-256；同一签名 `.deb`、`.rpm` 或已公证 `.pkg` 必须存在于对应 GitHub Release |
+| 普通用户 | `connector-v*` | 优先使用 Control PWA 显示的安装包与 SHA-256；同一签名 `.deb` 或 `.rpm` 必须存在于对应 GitHub Release |
 | 服务器管理员 | `control-v*` | 下载 online/offline 服务器包及其证据，再按[正式部署流程](docs/runbooks/deployment.md)操作 |
 
 不要把 GitHub 自动生成的 **Source code** 压缩包当作生产安装包。如果 PWA 元数据、Release
@@ -54,7 +54,7 @@
 | **谁可以使用** | 每个已登录的 Sub2API 普通用户，只能看到并管理自己的设备和线程 |
 | **谁负责配置** | Sub2API 管理员一次性启用站点；原生包安装后，配置、配对、使用和撤销均由用户自助完成 |
 | **安全边界** | 固定八类 RPC、工作区白名单、沙箱上限、限时审批，不提供原始远程 shell |
-| **支持平台** | Connector 支持 Linux `amd64` / `arm64` 与 macOS Intel / Apple 芯片；暂不支持 Windows |
+| **支持平台** | Connector 支持 Linux `amd64` / `arm64`；本次发布不支持 macOS 与 Windows |
 
 ## 项目介绍
 
@@ -68,7 +68,7 @@ Sub2API Codex Control 是与 Sub2API 同源部署的自托管 Codex 控制平面
 
 Connector 不开放设备入站端口，也不会修改 Codex 配置、登录凭据、工作区、插件或 shell
 配置。每个普通 Sub2API 用户都拥有并管理自己的设备；配置、配对、使用和撤销不需要
-Sub2API 管理员协助。安装系统包仍可能需要本机 `sudo` 或 macOS 管理员授权。
+Sub2API 管理员协助。安装系统包仍可能需要本机 `sudo`。
 
 ```mermaid
 flowchart LR
@@ -97,10 +97,10 @@ flowchart LR
 
 以下流程适用于正式 `connector-v*` Release 发布，并且你的 Sub2API 站点已启用 Control 之后。
 
-开始前准备好：已登录的 Sub2API 账号、安装了准确版本 Codex CLI 的 Linux 或 macOS 设备、
+开始前准备好：已登录的 Sub2API 账号、安装了准确版本 Codex CLI 的 Linux 设备、
 至少一个允许远程使用的绝对工作区路径，以及到站点 TCP 443 的出站网络。你不需要 Sub2API
 管理员创建设备、下发配对码或代为修改 Connector 配置。原生包安装可能要求本机 `sudo` 或
-macOS 管理员授权，这与 Sub2API 管理权限无关。
+这与 Sub2API 管理权限无关。
 
 ### 1. 登录
 
@@ -122,9 +122,8 @@ Control API。
 | --- | --- | --- |
 | Debian / Ubuntu `amd64`、`arm64` | `.deb` | `sudo apt install ./sub2api-codex-connector_*.deb` |
 | Fedora / RHEL `amd64`、`arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
-| macOS Intel、Apple 芯片 | 已签名并公证的 `.pkg` | `open ./sub2api-codex-connector_*.pkg` |
 
-PWA 会给出精确文件名和校验命令。Linux 安装使用本机 `sudo`，macOS Installer 也可能要求
+PWA 会给出精确文件名和校验命令。Linux 安装使用本机 `sudo`。
 本机管理员凭据；Sub2API 管理员不需要代为创建设备或完成配对。
 
 后续 Connector 命令必须由拥有 Codex 和工作区的普通用户执行，不要以 `root` 运行。
@@ -167,7 +166,7 @@ sub2api-codex-connector-ctl start
 sub2api-codex-connector-ctl status
 ```
 
-Linux 包安装用户级 `systemd` 服务，macOS 包安装 `launchd` agent。安装和升级不会修改现有
+Linux 包安装用户级 `systemd` 服务。安装和升级不会修改现有
 Codex 文件。
 
 ### 6. 使用 Codex

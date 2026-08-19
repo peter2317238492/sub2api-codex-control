@@ -15,14 +15,14 @@ create the device or issue its pairing code:
 
 - a working Sub2API account;
 - the same HTTPS site with Control enabled;
-- a Linux or macOS device with exactly `codex-cli 0.147.0`;
+- a Linux device with exactly `codex-cli 0.147.0`;
 - at least one existing absolute workspace path;
 - outbound TCP 443 access from the device to the Control site.
 
 The Sub2API operator deploys the site, publishes trusted packages, and maintains
 the service. Each user handles post-install configuration, pairing, startup,
 daily operation, diagnosis, and revocation. Installing the native package may
-still require local `sudo` or macOS administrator approval.
+still require local `sudo`.
 
 ## Interface map
 
@@ -70,7 +70,7 @@ Do not install an automatically generated source archive or mix assets from
 different tags. Stop if the PWA tag, filename, or checksum differs.
 
 This does not require Sub2API administrator assistance. Linux package installation
-uses local `sudo`; macOS Installer may request local administrator approval.
+uses local `sudo`.
 
 See [Installation](installation.md) for package commands and the source-only
 evaluation path. The package does not install or upgrade Codex, and it does not
