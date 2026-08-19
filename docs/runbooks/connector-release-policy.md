@@ -44,18 +44,20 @@ workflow/source commit, and the `push` trigger supplied from an external trust
 policy. It never learns trust roots from the downloaded manifest, tag, or
 release assets.
 
-For macOS, also use Developer ID signing and require an Apple `notarytool`
-submission of the signed command-line binary archive to return `Accepted`.
-Standalone command-line binaries do not carry a stapled ticket, so acceptance
-evidence is recorded and `codesign --verify --strict` is run on macOS. Windows
-artifacts require Authenticode if Windows becomes supported. Keep Apple signing
-and App Store Connect credentials only in the protected
-`connector-release-apple` environment. Its approved Apple Team ID and full
-Developer ID Application identity are duplicated as public trust variables in
-the separate `connector-release-sigstore` environment and must match a fresh
-`codesign -d` report. The Sigstore job has short-lived GitHub OIDC and read-only
-contents; the distinct `connector-release-publish` job has contents write and a
-read-only Administration token used to require repository release immutability,
+macOS is not in this release's target matrix. Its installer would require
+Developer ID Application and Developer ID Installer signing plus an Apple
+`notarytool` submission returning `Accepted`, and no such credential exists, so
+the workflow publishes no macOS artifact and rejects any Apple input reaching
+it. Adding macOS back means restoring the `darwin-*` targets in
+`connector/release/release-config.json`, reinstating the Apple signing and
+macOS public-verification jobs, and holding the signing and App Store Connect
+credentials in a protected `connector-release-apple` environment whose approved
+Team ID and full Developer ID Application identity are duplicated as public
+trust variables in the separate `connector-release-sigstore` environment.
+Windows artifacts would require Authenticode if Windows becomes supported. The
+Sigstore job has short-lived GitHub OIDC and read-only contents; the distinct
+`connector-release-publish` job has contents write and a read-only
+Administration token used to require repository release immutability,
 but no OIDC. No job combines Apple credentials, Sigstore issuance, and release
 publication authority.
 
@@ -67,7 +69,7 @@ Verification order is fail-closed:
 3. verify signed checksums, artifact SHA-256, and size;
 4. verify SPDX subjects and SLSA subjects/builder plus DSSE attestations;
 5. verify every selected artifact/evidence signature and platform-native status,
-   including the externally pinned Apple identity for macOS;
+   including the externally pinned RPM OpenPGP signing fingerprint;
 6. only then stage the replacement binary.
 
 `connector/release/release.py verify` implements this order and rejects
@@ -79,8 +81,8 @@ mode is deliberately marked non-releasable and is accepted only with
 Consumers pass `--target` for the artifact they intend to install. Full
 manifest/checksum authentication and inventory validation still cover the
 whole release; target-specific artifact/SBOM/provenance/signature verification
-is limited to the selection. A Darwin target additionally requires macOS and
-external Apple Team ID/full signing-identity inputs.
+is limited to the selection. An RPM target additionally requires the external
+pinned OpenPGP signing fingerprint and its public key.
 
 Publication uses GitHub's immutable-release flow: preflight the repository
 setting, create a draft, attach the complete verified asset set, publish once,
@@ -91,9 +93,9 @@ and require the resulting release to report `isImmutable=true`.
 The repository contains the complete release automation and local rejection
 tests. That is not proof that a release has been signed. Production admission
 still requires an actual protected-tag run whose GitHub OIDC identity matches
-the externally pinned repository/tag and whose Apple Developer ID/notarization
-step succeeds. The workflow fails closed if those external identities or
-credentials are unavailable.
+the externally pinned repository/tag and whose RPM OpenPGP signing step
+succeeds. The workflow fails closed if those external identities or credentials
+are unavailable.
 
 ## Update behavior
 

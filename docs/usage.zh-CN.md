@@ -12,12 +12,12 @@
 
 - 一个可以正常登录的 Sub2API 账号；
 - 已启用 Control 的同一 HTTPS 站点地址；
-- 一台 Linux 或 macOS 设备，以及准确版本的 `codex-cli 0.147.0`；
+- 一台 Linux 设备，以及准确版本的 `codex-cli 0.147.0`；
 - 至少一个已存在的绝对工作区路径；
 - 设备到 Control 站点 TCP 443 的出站网络。
 
 Sub2API 管理员负责部署站点、发布可信安装包和维护服务。用户自行完成 Connector 安装后的
-配置、配对、启动、日常操作、诊断和撤销；安装原生包仍可能需要本机 `sudo` 或 macOS
+配置、配对、启动、日常操作、诊断和撤销；安装原生包仍可能需要本机 `sudo`
 管理员授权。
 
 ## 界面布局
@@ -60,7 +60,7 @@ https://control.example.com/codex/
 的精确 `connector-v*` 标签下。不要安装 GitHub 自动生成的源码压缩包，也不要混用不同标签
 的文件；只要 PWA 显示的标签、文件名或校验值不一致，就应停止。
 
-此步骤不需要 Sub2API 管理员协助；Linux 安装使用本机 `sudo`，macOS Installer 也可能要求
+此步骤不需要 Sub2API 管理员协助；Linux 安装使用本机 `sudo`。
 本机管理员授权。
 
 完整安装命令和源码评估路径见[安装指南](installation.zh-CN.md)。安装包不会安装或升级 Codex，

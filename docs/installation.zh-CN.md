@@ -18,7 +18,7 @@ Connector 目前可从源码构建用于开发与评估。在上述签名 Releas
 [GitHub Releases 页面](https://github.com/peter2317238492/sub2api-codex-control/releases)。
 不要把 GitHub 自动生成的源码压缩包当作安装包。
 
-本文命令假设使用 Linux 或 macOS 的 POSIX shell。当前源码支持这两个 Connector 运行目标，
+本文命令假设使用 Linux 的 POSIX shell。本次发布仅支持 Linux Connector 运行目标，
 不支持 Windows Connector。
 
 ## 隔离全栈验证
@@ -66,9 +66,8 @@ Codex app-server；它不会使用真实账号或真实供应商密钥。除非�
 | --- | --- | --- |
 | Debian / Ubuntu `amd64`、`arm64` | `.deb` | `sudo apt install ./sub2api-codex-connector_*.deb` |
 | Fedora / RHEL `amd64`、`arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
-| macOS Intel、Apple 芯片 | 已签名并公证的 `.pkg` | `open ./sub2api-codex-connector_*.pkg` |
 
-此安装步骤不需要 Sub2API 管理员，但 Linux 会使用本机 `sudo`，macOS Installer 也可能要求
+此安装步骤不需要 Sub2API 管理员，但 Linux 会使用本机 `sudo`。
 本机管理员凭据。
 
 安装包只安装 Connector、用户级服务定义和管理命令，不会安装或升级 Codex。安装完成后，
@@ -140,7 +139,7 @@ sub2api-codex-connector-ctl start
 sub2api-codex-connector-ctl status
 ```
 
-Linux 包安装用户级 `systemd` 服务，macOS 包安装 `launchd` agent。升级和卸载会保留用户的
+Linux 包安装用户级 `systemd` 服务。升级和卸载会保留用户的
 私密 Connector 状态。对于 v2 受管配置，需要彻底清除时，先在 PWA 撤销设备，再运行
 `sub2api-codex-connector-ctl purge-user-state --yes`；没有可信布局的旧配置应按上述无损迁移
 指引处理。

@@ -41,7 +41,7 @@ That page is intentionally empty while this source candidate is under review.
 
 | Audience | Release tag | Supported path |
 | --- | --- | --- |
-| Ordinary users | `connector-v*` | Prefer the package and SHA-256 shown by the Control PWA; the same signed `.deb`, `.rpm`, or notarized `.pkg` must exist in the matching GitHub Release |
+| Ordinary users | `connector-v*` | Prefer the package and SHA-256 shown by the Control PWA; the same signed `.deb` or `.rpm` must exist in the matching GitHub Release |
 | Server operators | `control-v*` | Download the online or offline server package and its evidence, then follow the [formal deployment procedure](docs/runbooks/deployment.md) |
 
 Never install GitHub's automatically generated **Source code** archives as a
@@ -57,7 +57,7 @@ not agree exactly, stop rather than substituting another asset.
 | **Who can use it** | Every signed-in Sub2API user, isolated to their own devices and threads |
 | **Who configures it** | A Sub2API operator enables the site once; users then configure, pair, use, and revoke their own devices after native package installation |
 | **Security boundary** | Eight fixed RPCs, workspace allowlists, sandbox caps, and expiring approvals; no raw remote shell |
-| **Platforms** | Connector supports Linux `amd64` / `arm64` and macOS Intel / Apple silicon; Windows is not supported yet |
+| **Platforms** | Connector supports Linux `amd64` / `arm64`; macOS and Windows are not supported in this release |
 
 ## What it is
 
@@ -74,7 +74,7 @@ The Connector does not open an inbound device port and does not modify Codex
 configuration, authentication files, workspaces, plugins, or shell profiles.
 Every ordinary Sub2API user owns and manages their own devices; configuration,
 pairing, use, and revocation do not require a Sub2API administrator. Installing
-the system package may still require local `sudo` or macOS administrator approval.
+the system package may still require local `sudo`.
 
 ```mermaid
 flowchart LR
@@ -111,11 +111,11 @@ flowchart LR
 This flow applies after a signed `connector-v*` Release is published and your
 Sub2API operator has enabled Control.
 
-Before starting, have a signed-in Sub2API account, a Linux or macOS device with
+Before starting, have a signed-in Sub2API account, a Linux device with
 the exact supported Codex CLI, at least one absolute workspace path, and
 outbound TCP 443 access to the site. You do not need a Sub2API administrator to
 create a device, issue a pairing code, or edit Connector configuration for you.
-Native package installation may prompt for local `sudo` or macOS administrator
+Native package installation may prompt for local `sudo`
 approval; that local authorization is separate from Sub2API administration.
 
 ### 1. Sign in
@@ -141,10 +141,9 @@ install the package unless its SHA-256 matches exactly.
 | --- | --- | --- |
 | Debian / Ubuntu `amd64`, `arm64` | `.deb` | `sudo apt install ./sub2api-codex-connector_*.deb` |
 | Fedora / RHEL `amd64`, `arm64` | `.rpm` | `sudo dnf install ./sub2api-codex-connector_*.rpm` |
-| macOS `amd64`, Apple silicon | signed and notarized `.pkg` | `open ./sub2api-codex-connector_*.pkg` |
 
 The PWA shows an exact filename and checksum command. Linux package installation
-uses local `sudo`; macOS Installer may request a local administrator credential.
+uses local `sudo`.
 No Sub2API administrator needs to create or pair the device.
 
 Run Connector commands as the ordinary user who owns Codex and the workspace,
@@ -196,7 +195,7 @@ sub2api-codex-connector-ctl status
 ```
 
 The package installs a user-level `systemd` service on Linux or a `launchd`
-agent on macOS. It preserves existing Codex files during install and upgrade.
+service. It preserves existing Codex files during install and upgrade.
 
 ### 6. Control Codex
 

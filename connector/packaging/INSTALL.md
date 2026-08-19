@@ -9,7 +9,7 @@ configuration. The Connector has no inbound listener.
 After signature verification and native package installation, each ordinary
 user initializes and pairs their own Connector without Sub2API administrator
 assistance. Installing the native package may still require local `sudo` or
-macOS administrator approval:
+local administrator approval:
 
 ```sh
 sub2api-codex-connector-ctl init \
@@ -56,16 +56,12 @@ package lifecycle helper's `rollback` command, then must reinstall the matching
 previous verified native package so package-manager metadata again matches the
 binary.
 
-For a normal rollback, verify and install the immediately previous `.deb`,
-`.rpm`, or `.pkg` through the same native package flow. Stop only this Connector
-first; do not stop or edit Codex. On uninstall, the package manager removes only
+For a normal rollback, verify and install the immediately previous `.deb` or
+`.rpm` through the same native package flow. Stop only this Connector first; do
+not stop or edit Codex. On uninstall, the package manager removes only
 package-owned files. User configuration, pairing credentials, and state remain
-unless that user explicitly runs. Linux users use their distribution package
-manager. On macOS, run the package-owned uninstaller before removing the package:
-
-```sh
-sudo /usr/local/libexec/sub2api-codex-connector/uninstall-macos
-```
+unless that user explicitly removes them, using their distribution package
+manager.
 
 Each user can then explicitly remove only their own retained Connector data:
 
