@@ -103,6 +103,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          install -d -m 0755 "$(dirname "$RELEASE_DIR")"
           source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")
           repository="https://github.com/${GITHUB_REPOSITORY}"
           identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/connector-release.yml@${GITHUB_REF}"
