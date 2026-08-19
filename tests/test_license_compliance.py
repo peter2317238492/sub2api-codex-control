@@ -44,6 +44,21 @@ class LicenseComplianceTests(unittest.TestCase):
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / relative, destination)
         shutil.copytree(ROOT / "third_party", self.root / "third_party")
+        # Every component pins its version against a file in the tree; copy
+        # whatever the policy names so this fixture cannot fall behind it.
+        components = json.loads(
+            (ROOT / "third_party/components.json").read_text(encoding="utf-8")
+        )
+        for component in components["components"]:
+            evidence = component.get("version_evidence") or {}
+            relative = evidence.get("path")
+            if not relative:
+                continue
+            destination = self.root / relative
+            if destination.exists():
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / relative, destination)
         for source in (ROOT / "connector").rglob("*.go"):
             destination = self.root / source.relative_to(ROOT)
             destination.parent.mkdir(parents=True, exist_ok=True)
