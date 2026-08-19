@@ -240,9 +240,9 @@ class ConnectorReleaseProvenanceEvidence(ConnectorReleaseFileEvidence):
 
 
 class ConnectorReleaseAsset(ConnectorReleaseFileEvidence):
-    os: Literal["linux", "darwin"]
+    os: Literal["linux"]
     arch: Literal["amd64", "arm64"]
-    package_format: Literal["deb", "rpm", "pkg"]
+    package_format: Literal["deb", "rpm"]
     download_url: str = Field(min_length=1, max_length=2048)
     sbom: ConnectorReleaseSbomEvidence
     provenance: ConnectorReleaseProvenanceEvidence
@@ -266,7 +266,7 @@ class ConnectorReleaseMetadata(StrictModel):
     config_path_hint: Literal["~/.config/sub2api-codex-connector/connector.json"]
     pair_command: Literal["sub2api-codex-connector-ctl pair"]
     start_command: Literal["sub2api-codex-connector-ctl start"]
-    assets: list[ConnectorReleaseAsset] = Field(min_length=6, max_length=6)
+    assets: list[ConnectorReleaseAsset] = Field(min_length=4, max_length=4)
 
     @model_validator(mode="after")
     def validate_immutable_release_inventory(self) -> ConnectorReleaseMetadata:
@@ -287,8 +287,6 @@ class ConnectorReleaseMetadata(StrictModel):
             ("linux", "amd64", "rpm"),
             ("linux", "arm64", "deb"),
             ("linux", "arm64", "rpm"),
-            ("darwin", "amd64", "pkg"),
-            ("darwin", "arm64", "pkg"),
         }
         actual_tuples = {
             (asset.os, asset.arch, asset.package_format) for asset in self.assets

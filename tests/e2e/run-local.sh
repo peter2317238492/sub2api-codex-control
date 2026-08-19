@@ -245,8 +245,79 @@ cat > "$connector_config" <<EOF
 EOF
 chmod 0600 "$connector_config"
 
+# The base Compose file requires packaged Connector release metadata; give the
+# stack a shape-valid Linux-matrix fixture so the real admission path runs.
+connector_release_metadata=$(python3 - <<'E2E_METADATA_PY'
+import json
+
+repository = "https://github.com/peter2317238492/sub2api-codex-control"
+version = "0.1.0"
+tag = f"connector-v{version}"
+assets = []
+for index, (arch, package_format) in enumerate(
+    (("amd64", "deb"), ("amd64", "rpm"), ("arm64", "deb"), ("arm64", "rpm")),
+    start=1,
+):
+    filename = f"sub2api-codex-connector_{version}_linux_{arch}.{package_format}"
+    assets.append(
+        {
+            "os": "linux",
+            "arch": arch,
+            "package_format": package_format,
+            "filename": filename,
+            "download_url": f"{repository}/releases/download/{tag}/{filename}",
+            "sha256": f"{index:064x}",
+            "size": 1000 + index,
+            "signature_bundle": f"{filename}.sigstore.json",
+            "sbom": {
+                "format": "SPDX-2.3-json",
+                "filename": f"{filename}.spdx.json",
+                "sha256": f"{index + 10:064x}",
+                "size": 2000 + index,
+                "signature_bundle": f"{filename}.spdx.json.sigstore.json",
+            },
+            "provenance": {
+                "predicate_type": "https://slsa.dev/provenance/v1",
+                "filename": f"{filename}.intoto.json",
+                "sha256": f"{index + 20:064x}",
+                "size": 3000 + index,
+                "signature_bundle": f"{filename}.intoto.json.sigstore.json",
+                "attestation_bundle": f"{filename}.intoto.sigstore.json",
+            },
+        }
+    )
+print(
+    json.dumps(
+        {
+            "format_version": 1,
+            "release_mode": "release",
+            "releasable": True,
+            "source_repository": repository,
+            "source_commit": "a" * 40,
+            "version": version,
+            "tag": tag,
+            "codex_version": "0.147.0",
+            "schema_digest": "511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b",
+            "manifest": {
+                "filename": "manifest.json",
+                "sha256": "b" * 64,
+                "size": 4000,
+                "signature_bundle": "manifest.json.sigstore.json",
+            },
+            "config_path_hint": "~/.config/sub2api-codex-connector/connector.json",
+            "pair_command": "sub2api-codex-connector-ctl pair",
+            "start_command": "sub2api-codex-connector-ctl start",
+            "assets": assets,
+        },
+        separators=(",", ":"),
+    )
+)
+E2E_METADATA_PY
+)
+
 cat > "$env_file" <<EOF
 CONTROL_RELEASE=0.1.0-e2e
+CONTROL_CONNECTOR_RELEASE_METADATA_JSON=$connector_release_metadata
 CONTROL_VCS_REF=e2e
 CONTROL_PUBLIC_ORIGIN=https://127.0.0.1:$port
 CONTROL_BIND_ADDRESS=127.0.0.1
