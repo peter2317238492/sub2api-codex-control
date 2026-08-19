@@ -122,50 +122,57 @@ class LicenseComplianceTests(unittest.TestCase):
         errors = CHECK_LICENSES.validate(self.root)
         self.assertTrue(any("neutral contributors author" in error for error in errors))
 
-    def test_binary_tag_trigger_fails_closed(self) -> None:
+    def test_extra_release_trigger_fails_closed(self) -> None:
         path = self.root / ".github/workflows/connector-release.yml"
         text = path.read_text(encoding="utf-8")
         path.write_text(
             text.replace(
-                "on:\n  workflow_dispatch:\n",
-                "on:\n  push:\n    tags:\n      - 'connector-v*'\n  workflow_dispatch:\n",
+                'on:\n  push:\n    tags:\n      - "connector-v*"\n',
+                'on:\n  push:\n    tags:\n      - "connector-v*"\n  workflow_dispatch:\n',
                 1,
             ),
             encoding="utf-8",
-        )
-        errors = CHECK_LICENSES.validate(self.root)
-        self.assertTrue(
-            any("must expose only workflow_dispatch" in error for error in errors)
-        )
-
-    def test_release_guard_bypass_fails_closed(self) -> None:
-        path = self.root / ".github/workflows/control-images-release.yml"
-        text = path.read_text(encoding="utf-8")
-        path.write_text(
-            text.replace("          exit 1", "          exit 0", 1), encoding="utf-8"
         )
         errors = CHECK_LICENSES.validate(self.root)
         self.assertTrue(
             any(
-                "source-only-guard must terminate with exit 1" in error
-                for error in errors
+                "must be triggered only by its protected" in error for error in errors
             )
         )
 
-    def test_conditional_release_guard_exit_fails_closed(self) -> None:
-        path = self.root / ".github/workflows/connector-release.yml"
+    def test_missing_tag_guard_step_fails_closed(self) -> None:
+        path = self.root / ".github/workflows/control-images-release.yml"
         text = path.read_text(encoding="utf-8")
         path.write_text(
             text.replace(
-                "          exit 1",
-                "          if false; then\n            exit 1\n          fi",
+                "Require the protected main commit and its exact successful CI run",
+                "Prepare the runner",
                 1,
             ),
             encoding="utf-8",
         )
         errors = CHECK_LICENSES.validate(self.root)
         self.assertTrue(
-            any("connector-release.yml SHA-256 mismatch" in error for error in errors)
+            any(
+                "must first prove the protected main commit" in error
+                for error in errors
+            )
+        )
+
+    def test_conditional_release_entry_job_fails_closed(self) -> None:
+        path = self.root / ".github/workflows/connector-release.yml"
+        text = path.read_text(encoding="utf-8")
+        path.write_text(
+            text.replace(
+                "  build:\n    name:",
+                "  build:\n    if: github.actor == 'trusted'\n    name:",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        errors = CHECK_LICENSES.validate(self.root)
+        self.assertTrue(
+            any("must not be conditional" in error for error in errors)
         )
 
     def test_unguarded_release_job_fails_closed(self) -> None:

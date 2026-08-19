@@ -18,17 +18,18 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != "Bearer e2e-access-token-value":
             self._json(401, {"message": "unauthorized"})
             return
+        # The frozen Sub2API auth contract wraps every response in the exact
+        # {"code":0,"message":"success","data":{...}} envelope, and /auth/me
+        # returns the user object directly with an integer id.
         self._json(
             200,
             {
                 "code": 0,
+                "message": "success",
                 "data": {
-                    "user": {
-                        "id": "e2e-user-42",
-                        "username": "e2e-user",
-                        "status": "active",
-                        "tokenVersion": 1,
-                    }
+                    "id": 42,
+                    "username": "e2e-user",
+                    "status": "active",
                 },
             },
         )

@@ -1278,7 +1278,7 @@ class Smoke:
         self,
         access_token: str | None,
         *,
-        expected_user_id: str = "e2e-user-42",
+        expected_user_id: str = "42",
         pairing_code: str | None = None,
         expected_device_id: str | None = None,
         workspace_root: str | None = None,
@@ -1749,7 +1749,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("--base-url is required; smoke has no default target")
         base_url = args.base_url
         expected_user_id = args.expected_user_id or os.environ.get(
-            "SUB2API_EXPECTED_USER_ID", "e2e-user-42"
+            "SUB2API_EXPECTED_USER_ID", "42"
         )
         if args.expected_user_id_file:
             if (
