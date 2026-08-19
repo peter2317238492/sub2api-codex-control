@@ -10,7 +10,7 @@ it is not proof that the production host already satisfies them.
 | --- | --- | --- |
 | Control API | `0.1.0` | API image digest and source commit recorded |
 | PWA | `0.1.0` | PWA image digest built from the same release commit |
-| Connector | `0.1.0`; executable protected-tag pipeline and local fail-closed tests in `connector/release/` | selected artifact passes the verifier against externally pinned GitHub issuer/identity/source SHA/trigger and the pinned RPM OpenPGP fingerprint; immutable release and all required bundles/evidence exist; no trusted release run is recorded yet |
+| Connector | `0.1.1` (`connector-v0.1.0` burned: its first pipeline run failed and formal tags are immutable); executable protected-tag pipeline and local fail-closed tests in `connector/release/` | selected artifact passes the verifier against externally pinned GitHub issuer/identity/source SHA/trigger and the pinned RPM OpenPGP fingerprint; immutable release and all required bundles/evidence exist; no trusted release run is recorded yet |
 | Control envelope | version `1` | unknown versions rejected before dispatch |
 | Codex CLI | exactly `0.147.0` | Connector version check succeeds before app-server start |
 | app-server v2 schema | SHA-256 `511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b` | generated bundle reproduces and Connector config carries this digest |

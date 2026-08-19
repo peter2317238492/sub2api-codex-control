@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	DefaultConnectorVersion = "0.1.0"
+	DefaultConnectorVersion = "0.1.1"
 	DefaultCodexVersion     = "0.147.0"
 	PinnedSchemaDigest      = "511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b"
 )
