@@ -16,7 +16,7 @@ case "$format" in deb|rpm|pkg) ;; *) fail "unsupported package format" ;; esac
 case "$arch" in amd64|arm64) ;; *) fail "unsupported architecture" ;; esac
 printf '%s\n' "$version" | awk -F. '
   NF != 3 { exit 1 }
-  { for (index = 1; index <= NF; index++) if ($index !~ /^[0-9]+$/) exit 1 }
+  { for (i = 1; i <= NF; i++) if ($i !~ /^[0-9]+$/) exit 1 }
 ' || fail "version must be an exact three-component semantic version"
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
