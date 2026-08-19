@@ -50,6 +50,12 @@ jobs:
 
       - name: Test the deployment, server-package, and vulnerability gates
         run: |
+          # These tools refuse to read or write under a group/other-writable
+          # ancestor, which is what production requires of them. The shared
+          # runner /tmp is mode 1777, so give the suites a private temporary
+          # root whose ancestors are all safe.
+          install -d -m 0700 "$HOME/.gate-tmp"
+          export TMPDIR="$HOME/.gate-tmp"
           python3 -m unittest discover -s deploy/scripts/tests
           python3 -m unittest discover -s deploy/server-package/tests
           python3 -m unittest tests/test_vulnerability_gate.py tests/test_vulnerability_release_roots.py
