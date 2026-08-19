@@ -3,7 +3,7 @@
 ## Scope and topology
 
 This deployment adds `control-api` and `codex-pwa` sidecars without modifying
-Sub2API. The target must already run the exact immutable `0.1.176` tuple in
+Sub2API. The target must already run the exact immutable `0.1.178` tuple in
 `versions.lock.json`; this runbook provides no in-place updater or legacy
 compatibility path. Only the Control API joins the existing external Docker
 network named by `SUB2API_NETWORK_NAME` (default
@@ -39,7 +39,7 @@ retain the corresponding production smoke output with the release matrix.
 
 ## Preconditions
 
-1. Prove the live Sub2API matches the exact `0.1.176` manifest, image ID, labels,
+1. Prove the live Sub2API matches the exact `0.1.178` manifest, image ID, labels,
    PID 1 SHA-256, read-only rootfs, empty Docker diff, admitted `/app/data` mount,
    and locked auth fixture. Record that attestation with the immutable image
    digests, source commit, migration revision, Connector version, Codex version,
@@ -126,7 +126,7 @@ The 2026-08-12 read-only inspection found this legacy self-updated state:
 That state is historical drift evidence only. It is not accepted by the formal
 release gate and must not be encoded as a production compatibility exception.
 Before Control services start, the Sub2API container must run the locked
-`0.1.176` linux/amd64 manifest
+`0.1.178` linux/amd64 manifest
 `weishaw/sub2api@sha256:989c1a56f3598b4e907fc23c80377db1ad22d024f673e6725d80b970d43b6c00`
 with image/config ID
 `sha256:40d807a98dbd6c56dd5838ca1a2efe4f60bf2dd88c3621f11eab090c98d38742`.
@@ -167,11 +167,11 @@ disposable mode-`0600` token files are copied into a private read-only probe
 mount; raw tokens and token hashes never enter the evidence. Prebuilt external
 authentication evidence and alternate probe origins are prohibited.
 
-The immutable gate pins the exact 0.1.176 manifest/image ID, container
+The immutable gate pins the exact 0.1.178 manifest/image ID, container
 `Config.Image`, entrypoint/Cmd, loopback `8080` binding, external network,
 admitted `/app/data` storage identity, runtime tuple, and empty writable diff. It verifies
 that the live PID 1 binary equals the official archive/image binary. A
-successful check produces `CONTROL_SUB2API_CONTRACT_MARKER=0.1.176/e803e38`;
+successful check produces `CONTROL_SUB2API_CONTRACT_MARKER=0.1.178/e0c48a1`;
 any different value or `UNVERIFIED` blocks deployment.
 
 ## Mandatory pre-mutation snapshot
@@ -417,7 +417,7 @@ Redis restore containers use the backup-bound local image IDs with
 `--network none --pull never`; an absent image fails instead of being acquired.
 It then verifies pulled
 image IDs/OCI labels and Sub2API runtime/auth identity. The runtime attestation
-must report `admission_profile=immutable-image-v1`, exact `0.1.176/e803e385...`
+must report `admission_profile=immutable-image-v1`, exact `0.1.178/e0c48a19...`
 identity, and no writable-layer drift. The wrapper then records the live
 database revision and rechecks Compose, Sub2API, and the database revision.
 Immediately before the destructive window, it records the exact API container
@@ -609,8 +609,8 @@ expected identity explicitly:
 Also confirm:
 
 - the final Sub2API runtime attestation reports `immutable-image-v1`, the exact
-  `0.1.176` manifest/image ID/PID 1 binary, no writable-layer drift, and the
-  locked `sub2api-auth.v0.1.176.json` digest with fresh identity-bound auth
+  `0.1.178` manifest/image ID/PID 1 binary, no writable-layer drift, and the
+  locked `sub2api-auth.v0.1.178.json` digest with fresh identity-bound auth
   evidence; a banner or smoke response alone is insufficient;
 - `docker inspect` shows no raw Sub2API key, database password, Redis password,
   or session HMAC value in Compose environment metadata.

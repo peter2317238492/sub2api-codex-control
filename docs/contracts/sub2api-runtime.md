@@ -1,24 +1,25 @@
 # Sub2API runtime contract
 
-Status: formally frozen at Sub2API `0.1.176`; production admission accepts only
+Status: formally frozen at Sub2API `0.1.178`; production admission accepts only
 the explicit `immutable-image-v1` profile.
 
-The upstream `v0.1.176` annotated tag object
-`14e6d7ee7bdb1e4cb6bc59129a7ee1dd1110c52a` resolves to commit
-`e803e3851c0a7e222cfadeafad7b8636ab959d11`. The release was published at
-`2026-08-13T01:46:35Z`. Its linux/amd64 archive SHA-256 is
-`ff639ed55f7d940ab86ab75242fe915d8bc3b067d63a95239628f75c20716ba5`;
-the extracted `/app/sub2api` binary is 117797026 bytes with SHA-256
-`ee2505964d8614388591b7cd98157ae6e3b7edad2489b83a0baef601834038e4`
-and reports build time `2026-08-13T01:36:58Z`.
+The upstream `v0.1.178` annotated tag object
+`15290e66c66801a7ce435a6d24b178ee9486f284` resolves to commit
+`e0c48a19ed794a565e3858662520afe0a1f9f0ba`. The release was published at
+`2026-08-18T10:03:00Z`. Its linux/amd64 archive SHA-256 is
+`ae2d10ccb923cdd15fe537dace5fd0cb5f3c52178403aa5df5878c25f6ddc28b`;
+the extracted `/app/sub2api` binary is 118476962 bytes with SHA-256
+`3d76ba8505b5b089d609726a966774a1312117e2e865845403ed28fdce7c5d0e`
+and reports build time `2026-08-18T09:52:21Z`.
 
 Exact runtime and image values are machine-readable in `versions.lock.json`.
 The pinned refresh/logout/session-binding/storage shape is in
-`sub2api-auth.v0.1.176.json`, whose SHA-256
-`a02d18e193d66a8607c09078d9d90e8883b8d660c587e52b015f9e51401f6e04`
-is locked there. A byte-for-byte comparison from `v0.1.175` to `v0.1.176`
+`sub2api-auth.v0.1.178.json`, whose SHA-256
+`a4b3b4804f30347255478c5772a6a6ee25b5c484d688b0a78a980ee4279709e2`
+is locked there. A blob-level comparison from `v0.1.176` to `v0.1.178`
 found no change in the frozen frontend auth, JWT middleware, session-binding
-middleware, refresh handler, or response wrapper.
+middleware, refresh handler, or response wrapper, so the contract carries
+over verbatim.
 
 ## Historical rejected runtime
 
@@ -30,7 +31,7 @@ for incident history, but neither the old image nor its formerly exact writable
 shape is an accepted production compatibility profile. It must fail the
 current gate.
 
-The frozen `0.1.176` authentication contract is:
+The frozen `0.1.178` authentication contract is:
 
 - access token localStorage key: `auth_token`
 - refresh token localStorage key: `refresh_token`
@@ -59,14 +60,15 @@ logout endpoints directly and rotates the existing Sub2API localStorage keys.
 ## Production freeze gate
 
 The only admitted linux/amd64 manifest is
-`weishaw/sub2api@sha256:989c1a56f3598b4e907fc23c80377db1ad22d024f673e6725d80b970d43b6c00`,
-with image/config ID
-`sha256:40d807a98dbd6c56dd5838ca1a2efe4f60bf2dd88c3621f11eab090c98d38742`.
-The `0.1.176` multi-platform tag resolves first to the distinct index digest
-`sha256:905baf250580334dacd902471f61da7b8b1e5da57e3c8c1769489952d51771a1`;
+`weishaw/sub2api@sha256:12021771416425cc99516215fb54089c23edc846bd7316bd91a5cf4ca15148d1`;
+under the production containerd image store the daemon reports that manifest
+digest as the image ID. The `0.1.178` multi-platform tag resolves first to the
+distinct index digest
+`sha256:e0f019383025679bd3b0f912c21fe7d8afdba8e42613391fa7fa208cc0762e60`;
 the index must not be substituted for the amd64 RepoDigest. The image was
-created at `2026-08-13T01:45:34.06109435Z`, and its version, revision, source,
-description, and maintainer labels match the lock.
+created at `2026-08-18T10:01:23.430283417Z`, and its version, revision, source,
+and maintainer labels match the lock (the `0.1.178` image no longer carries a
+description label).
 
 Admission requires digest-only `Config.Image`, the exact RepoDigest/image ID,
 read-only rootfs, all Linux capabilities dropped, no-new-privileges, PID 1 at
