@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -836,8 +837,16 @@ def test_browser_websocket_periodically_rechecks_upstream_identity(
         },
     ) as socket:
         # The monitor must bypass the fresh exchange marker on admission, then
-        # repeat that authoritative check at the configured cadence.
-        assert websocket_harness.sub2api.seen_tokens == [access_token, access_token]
+        # repeat that authoritative check at the configured cadence. Admission
+        # finishes after the socket is accepted, so wait for that second
+        # authoritative check instead of racing it.
+        deadline = time.monotonic() + 5.0
+        while len(websocket_harness.sub2api.seen_tokens) < 2:
+            assert time.monotonic() < deadline, (
+                "admission did not repeat the authoritative upstream check"
+            )
+            time.sleep(0.01)
+        assert websocket_harness.sub2api.seen_tokens[:2] == [access_token, access_token]
         websocket_harness.sub2api.result = error
         with pytest.raises(WebSocketDisconnect) as closed:
             socket.receive_json()
