@@ -966,16 +966,36 @@ class UnsignedBootstrapBundleVerifierTests(unittest.TestCase):
         )
         readme = (REPO_ROOT / "deploy/README.md").read_text(encoding="utf-8")
 
-        staging = deployment.index("### Immutable source staging")
+        # The formal route authenticates the standalone verifier, admits the
+        # release directory through it, and only then lets the extracted
+        # package's wrappers do privileged work.
+        lifecycle = deployment.index("### Formal server-package lifecycle")
+        verifier_gate = deployment.index("server-package-verify.py", lifecycle)
+        release_gate = deployment.index("verify-release", verifier_gate)
+        package_root = deployment.index("PACKAGE_ROOT=", release_gate)
+        wrapper = deployment.index("sub2api-control-install", package_root)
+        self.assertLess(verifier_gate, release_gate)
+        self.assertLess(release_gate, package_root)
+        self.assertLess(package_root, wrapper)
+        self.assertIn(
+            "Only the extracted\npackage and receipt produced by that command "
+            "may enter the installed lifecycle.",
+            deployment,
+        )
+
+        # The retained historical staging appendix keeps the same ordering:
+        # verify the archive, extract it, re-verify the extracted source, and
+        # only then run a privileged command.
+        staging = deployment.index(
+            "## Appendix A: Historical source staging (development only)"
+        )
         archive_gate = deployment.index("verify-archive --bundle", staging)
         extraction = deployment.index("/usr/bin/tar --extract", archive_gate)
         source_gate = deployment.index('"$trusted_verifier" verify', extraction)
-        first_later_privileged = deployment.index(
-            "sudo install -d -o root -g root -m 0700", source_gate
-        )
+        pointer_publication = deployment.index("ACTIVE_SOURCE", source_gate)
         self.assertLess(archive_gate, extraction)
         self.assertLess(extraction, source_gate)
-        self.assertLess(source_gate, first_later_privileged)
+        self.assertLess(source_gate, pointer_publication)
         self.assertIn("--bundle-trust-anchor /", deployment)
         self.assertIn("ACTIVE_SOURCE", deployment)
         self.assertIn("ACTIVE_SOURCE", unsigned)

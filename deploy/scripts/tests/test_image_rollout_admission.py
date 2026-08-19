@@ -26,10 +26,15 @@ CLOSURE_SCHEMA = REPO_ROOT / "deploy/schemas/authenticated-smoke-closure.schema.
 EXPECTED_SCHEMA_SHA256 = (
     "3d247f26e2faa54dbf2b9865bfdafa9e5f80bcf2a1a872a0401db0bf4add3e73"
 )
-PRODUCT_ARTIFACT_ROOT = Path(
-    "/Users/example/Documents/"
-    "sub2api-control-release-fixture-0.1.0-bootstrap.20260813.1"
+# The frozen bootstrap artifact bundle is operator-private and is never
+# published.  Point IMAGE_ROLLOUT_PRODUCT_ARTIFACT_ROOT at it to re-check the
+# frozen constants against the real bundle; the check skips without it.
+PRODUCT_ARTIFACT_ROOT = (
+    Path(os.environ["IMAGE_ROLLOUT_PRODUCT_ARTIFACT_ROOT"]).resolve()
+    if os.environ.get("IMAGE_ROLLOUT_PRODUCT_ARTIFACT_ROOT")
+    else None
 )
+TEST_TEMP_ROOT = Path(tempfile.gettempdir()).resolve()
 OLD_RELEASE = "0.1.0-bootstrap.old"
 NEW_RELEASE = "0.1.0-bootstrap.new"
 OLD_VCS = "1" * 64
@@ -231,18 +236,25 @@ def run_admission(
 
 
 def jsonschema_python() -> Path | None:
-    for path in (
-        Path("/private/tmp/sub2api-closure-v2/bin/python"),
-        Path("/private/tmp/sub2api-public-ci-fix.2CA7ks/venv/bin/python"),
-    ):
-        if path.exists():
-            result = subprocess.run(
-                [str(path), "-c", "import jsonschema"],
-                check=False,
-                capture_output=True,
-            )
-            if result.returncode == 0:
-                return path
+    """Locate an interpreter that can import ``jsonschema``.
+
+    The running interpreter is preferred so the external validation cross-check
+    works anywhere the suite runs.  ``JSONSCHEMA_PYTHON`` overrides it.
+    """
+    candidates = [Path(sys.executable)]
+    override = os.environ.get("JSONSCHEMA_PYTHON")
+    if override:
+        candidates.insert(0, Path(override))
+    for path in candidates:
+        if not path.exists():
+            continue
+        result = subprocess.run(
+            [str(path), "-c", "import jsonschema"],
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            return path
     return None
 
 
@@ -347,7 +359,7 @@ def artifact_manifest() -> dict[str, Any]:
 
 class TemporaryCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
+        self.temporary = tempfile.TemporaryDirectory(dir=TEST_TEMP_ROOT)
         self.root = Path(self.temporary.name)
         self.tools_root = self.root / "rollout-tools"
         scripts = self.tools_root / "deploy/scripts"
@@ -1392,6 +1404,11 @@ class RunningTests(TemporaryCase):
 
 class FrozenProductTargetTests(unittest.TestCase):
     def test_product_target_constants_match_immutable_artifact_and_ready(self) -> None:
+        if PRODUCT_ARTIFACT_ROOT is None:
+            self.skipTest(
+                "set IMAGE_ROLLOUT_PRODUCT_ARTIFACT_ROOT to the operator-private "
+                "bootstrap artifact bundle to re-check the frozen constants"
+            )
         bundle_id = "20260812T224530Z"
         bundle = PRODUCT_ARTIFACT_ROOT / bundle_id
         manifest_path = bundle / "artifact-manifest.json"
