@@ -201,6 +201,13 @@ def stable_copy(source: Path, destination: Path, label: str) -> dict[str, object
     }
 
 
+# bootstrap-production-unsigned.sh records one-shot stale-backup exception
+# claims in this hidden directory beside the deployment records. They are
+# anti-replay markers, so they belong in the snapshot; every other nested
+# dot-prefixed entry is still treated as a stray temporary file.
+STALE_BACKUP_CLAIM_DIRECTORY = ".stale-backup-exception-claims"
+
+
 def release_record_inventory(
     root: Path, excluded_top_level: set[str]
 ) -> tuple[dict[str, object], list[str]]:
@@ -227,7 +234,10 @@ def release_record_inventory(
             relative = path.relative_to(root)
             if "auth-probe-inputs" in relative.parts:
                 fail("release records retain sensitive authentication probe inputs")
-            if any(part.startswith(".") for part in relative.parts):
+            if any(
+                part.startswith(".") and part != STALE_BACKUP_CLAIM_DIRECTORY
+                for part in relative.parts
+            ):
                 fail("release records retain one nested temporary entry")
             try:
                 info = path.lstat()
