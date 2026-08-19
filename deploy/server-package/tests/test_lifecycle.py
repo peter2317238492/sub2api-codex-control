@@ -82,8 +82,6 @@ class LifecycleFixture(unittest.TestCase):
     def connector_metadata(self) -> dict[str, object]:
         assets = []
         for os_name, arch, package_format in (
-            ("darwin", "amd64", "pkg"),
-            ("darwin", "arm64", "pkg"),
             ("linux", "amd64", "deb"),
             ("linux", "amd64", "rpm"),
             ("linux", "arm64", "deb"),

@@ -244,12 +244,10 @@ def connector_release_metadata(value: Any) -> dict[str, Any]:
         or metadata.get("pair_command") != "sub2api-codex-connector-ctl pair"
         or metadata.get("start_command") != "sub2api-codex-connector-ctl start"
         or not isinstance(assets, list)
-        or len(assets) != 6
+        or len(assets) != 4
     ):
         fail("Connector release metadata is not one complete public release")
     expected_matrix = {
-        ("darwin", "amd64", "pkg"),
-        ("darwin", "arm64", "pkg"),
         ("linux", "amd64", "deb"),
         ("linux", "amd64", "rpm"),
         ("linux", "arm64", "deb"),

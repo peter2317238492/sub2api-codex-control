@@ -950,8 +950,8 @@ def _validate_connector_metadata(raw: bytes) -> dict[str, Any]:
         fail("Connector release metadata Codex version is invalid")
     require_sha256(metadata["schema_digest"], "Connector schema digest")
     assets = metadata["assets"]
-    if not isinstance(assets, list) or len(assets) != 6:
-        fail("Connector release metadata must contain exactly six native packages")
+    if not isinstance(assets, list) or len(assets) != 4:
+        fail("Connector release metadata must contain exactly four native packages")
     tuples: list[tuple[str, str, str]] = []
     for asset in assets:
         if not isinstance(asset, dict):
@@ -964,8 +964,6 @@ def _validate_connector_metadata(raw: bytes) -> dict[str, Any]:
         require_sha256(asset.get("sha256"), "Connector asset SHA-256")
         tuples.append((os_name, arch, package_format))
     expected = [
-        ("darwin", "amd64", "pkg"),
-        ("darwin", "arm64", "pkg"),
         ("linux", "amd64", "deb"),
         ("linux", "amd64", "rpm"),
         ("linux", "arm64", "deb"),

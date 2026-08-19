@@ -48,8 +48,6 @@ TEST_BACKUP_GID = 65_534 if os.getegid() == 0 else os.getegid()
 
 def connector_metadata_value() -> dict[str, object]:
     matrix = (
-        ("darwin", "amd64", "pkg"),
-        ("darwin", "arm64", "pkg"),
         ("linux", "amd64", "deb"),
         ("linux", "amd64", "rpm"),
         ("linux", "arm64", "deb"),
