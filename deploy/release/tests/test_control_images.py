@@ -354,7 +354,7 @@ class ControlImageReleaseTests(unittest.TestCase):
             values["CONTROL_VERSIONS_LOCK_SHA256"],
             release_inputs["versions.lock.json"],
         )
-        contract_path = "docs/contracts/sub2api-auth.v0.1.176.json"
+        contract_path = "docs/contracts/sub2api-auth.v0.1.178.json"
         self.assertEqual(values["CONTROL_SUB2API_AUTH_CONTRACT_PATH"], contract_path)
         self.assertEqual(
             values["CONTROL_SUB2API_AUTH_CONTRACT_SHA256"],

@@ -1929,7 +1929,7 @@ def require_server_source_closure(source_root: Path) -> list[str]:
         "deploy/server-package/toolchain.json",
         "deploy/server-package/server-packages.schema.json",
         "deploy/server-package/OCI-TOOLCHAIN.md",
-        "docs/contracts/sub2api-auth.v0.1.176.json",
+        "docs/contracts/sub2api-auth.v0.1.178.json",
         "connector/internal/config/config.go",
         "connector/internal/protocol/protocol.go",
         "connector/release/release.py",

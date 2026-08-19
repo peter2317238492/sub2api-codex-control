@@ -146,7 +146,7 @@ REQUIRED_SERVER_SOURCE_PATHS = {
     "deploy/server-package/server-packages.schema.json",
     "deploy/server-package/server_package.py",
     "deploy/server-package/toolchain.json",
-    "docs/contracts/sub2api-auth.v0.1.176.json",
+    "docs/contracts/sub2api-auth.v0.1.178.json",
     "migrations/README.md",
     "migrations/alembic.ini",
     "migrations/env.py",
