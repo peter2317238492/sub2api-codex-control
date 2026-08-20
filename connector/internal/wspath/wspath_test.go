@@ -9,7 +9,7 @@ import (
 // portableRemotes are valid in the remote form on every supported platform:
 // each names a Windows volume and is also a plain absolute POSIX path.
 var portableRemotes = []string{
-	"/c/Users/peter/code/app",
+	"/c/Users/example/code/app",
 	"/c/a",
 	"/d/work/project/sub/dir/leaf",
 	"/unc/nas/share/proj",
@@ -67,7 +67,7 @@ func TestValidatePOSIXMatchesTheControlAPIContract(t *testing.T) {
 		want      bool
 	}{
 		{name: "single component", candidate: "/a", want: true},
-		{name: "nested", candidate: "/Users/peter/code/app", want: true},
+		{name: "nested", candidate: "/Users/example/code/app", want: true},
 		{name: "unicode", candidate: "/срм/проект", want: true},
 		{name: "at the byte limit", candidate: remoteOfSize(t, MaxPathBytes), want: true},
 		{name: "empty", candidate: ""},
@@ -130,7 +130,7 @@ func TestMapperLocalOnlyAcceptsRoundTrippingRemotePaths(t *testing.T) {
 		"/unc",
 		"/unc/nas",
 		"/unc/nas/share",
-		"/C/Users/peter",
+		"/C/Users/example",
 		"/UNC/nas/share/proj",
 		"/Unc/nas/share/proj",
 		"/c/./app",
@@ -165,7 +165,7 @@ func TestMapperLocalOnlyAcceptsRoundTrippingRemotePaths(t *testing.T) {
 		"/c/a\x7fb",
 		"/c/app\u212a",
 		"relative/path",
-		"c:/Users/peter",
+		"c:/Users/example",
 		remoteOfSize(t, MaxPathBytes),
 		remoteOfSize(t, MaxPathBytes+1),
 	)

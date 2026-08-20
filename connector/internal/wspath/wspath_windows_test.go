@@ -14,16 +14,16 @@ func TestRemoteProjectsWindowsPaths(t *testing.T) {
 		local string
 		want  string
 	}{
-		{name: "drive path", local: `C:\Users\peter\code\app`, want: "/c/Users/peter/code/app"},
+		{name: "drive path", local: `C:\Users\example\code\app`, want: "/c/Users/example/code/app"},
 		{name: "lower-case drive", local: `c:\a\b`, want: "/c/a/b"},
 		{name: "forward slashes", local: `D:/work/app`, want: "/d/work/app"},
 		{name: "mixed separators", local: `D:/work\app`, want: "/d/work/app"},
-		{name: "trailing separator", local: `C:\Users\peter\`, want: "/c/Users/peter"},
+		{name: "trailing separator", local: `C:\Users\example\`, want: "/c/Users/example"},
 		{name: "unc path", local: `\\nas\share\proj`, want: "/unc/nas/share/proj"},
 		{name: "unc forward slashes", local: `//nas/share/proj`, want: "/unc/nas/share/proj"},
 		{name: "unc trailing separator", local: `\\nas\share\proj\`, want: "/unc/nas/share/proj"},
 		{name: "unc deep path", local: `\\nas\share\a\b\c\d`, want: "/unc/nas/share/a/b/c/d"},
-		{name: "case is preserved below the drive", local: `C:\Users\Peter\Code`, want: "/c/Users/Peter/Code"},
+		{name: "case is preserved below the drive", local: `C:\Users\Example\Code`, want: "/c/Users/Example/Code"},
 		{name: "unicode components", local: `C:\Пример\проект`, want: "/c/Пример/проект"},
 		{name: "spaces", local: `C:\Program Files\app`, want: "/c/Program Files/app"},
 		{name: "near-miss device names", local: `C:\COM0\CONS\NULL\COM10`, want: "/c/COM0/CONS/NULL/COM10"},
@@ -105,7 +105,7 @@ func TestLocalMapsRemotePathsToWindowsPaths(t *testing.T) {
 		remote string
 		want   string
 	}{
-		{name: "drive path", remote: "/c/Users/peter/code/app", want: `C:\Users\peter\code\app`},
+		{name: "drive path", remote: "/c/Users/example/code/app", want: `C:\Users\example\code\app`},
 		{name: "single component", remote: "/d/work", want: `D:\work`},
 		{name: "unc path", remote: "/unc/nas/share/proj", want: `\\nas\share\proj`},
 		{name: "unc deep path", remote: "/unc/nas/share/a/b/c", want: `\\nas\share\a\b\c`},
@@ -131,7 +131,7 @@ func TestLocalRejectsRemotePathsThatDoNotNameAWindowsPath(t *testing.T) {
 		name   string
 		remote string
 	}{
-		{name: "upper-case drive", remote: "/C/Users/peter"},
+		{name: "upper-case drive", remote: "/C/Users/example"},
 		{name: "upper-case unc prefix", remote: "/UNC/nas/share/proj"},
 		{name: "mixed-case unc prefix", remote: "/Unc/nas/share/proj"},
 		{name: "volume root", remote: "/c"},
@@ -176,7 +176,7 @@ func TestPathMatchingIsCaseInsensitiveOnWindows(t *testing.T) {
 	}{
 		{name: "same path in a different case", got: mapper.SamePath(`C:\Users\Peter`, `c:\users\peter`), want: true},
 		{name: "same unc path in a different case", got: mapper.SamePath(`\\NAS\Share\Proj`, `\\nas\share\proj`), want: true},
-		{name: "same path with mixed separators", got: mapper.SamePath(`C:\Users\Peter`, `C:/Users/Peter/`), want: true},
+		{name: "same path with mixed separators", got: mapper.SamePath(`C:\Users\Example`, `C:/Users/Example/`), want: true},
 		{name: "different path", got: mapper.SamePath(`C:\Users\Peter`, `C:\Users\Peters`), want: false},
 		{name: "child in a different case", got: mapper.Contains(`C:\Work`, `c:\work\sub\dir`), want: true},
 		{name: "root in a different case", got: mapper.Contains(`c:\work`, `C:\WORK`), want: true},

@@ -10,7 +10,7 @@ func TestInitializeValidatesWorkspaceRootsAsPOSIXPaths(t *testing.T) {
 		roots    []string
 		accepted bool
 	}{
-		{name: "projected drive root", roots: []string{"/c/Users/peter/code"}, accepted: true},
+		{name: "projected drive root", roots: []string{"/c/Users/example/code"}, accepted: true},
 		{name: "projected UNC root", roots: []string{"/unc/nas/share/proj"}, accepted: true},
 		{name: "posix root", roots: []string{"/work/project"}, accepted: true},
 		{name: "filesystem root", roots: []string{"/"}},
