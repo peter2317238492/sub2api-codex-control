@@ -22,7 +22,7 @@ import (
 const testDeviceID = "11111111-1111-4111-8111-111111111111"
 
 func TestPairingRecoversLostStartAndCompletionResponsesAcrossRestarts(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := newPairingStateDir(t)
 	credentialsPath := filepath.Join(stateDir, "device-credentials.json")
 	codePath := filepath.Join(stateDir, "pairing-code.json")
 	pendingPath := filepath.Join(stateDir, "pending-pairing.json")
@@ -126,7 +126,7 @@ func TestPairingRecoversLostStartAndCompletionResponsesAcrossRestarts(t *testing
 }
 
 func TestExpiredPairingDeletesPendingSecrets(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := newPairingStateDir(t)
 	credentialsPath := filepath.Join(stateDir, "device-credentials.json")
 	codePath := filepath.Join(stateDir, "pairing-code.json")
 	request, signer, _ := validStartRequest(t)
@@ -152,7 +152,7 @@ func TestExpiredPairingDeletesPendingSecrets(t *testing.T) {
 }
 
 func TestTransientPollFailureRetainsPendingButRemovesPublishedCode(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := newPairingStateDir(t)
 	credentialsPath := filepath.Join(stateDir, "device-credentials.json")
 	codePath := filepath.Join(stateDir, "pairing-code.json")
 	request, signer, _ := validStartRequest(t)
@@ -175,7 +175,7 @@ func TestTransientPollFailureRetainsPendingButRemovesPublishedCode(t *testing.T)
 }
 
 func TestPendingPairingRejectsConfigurationDriftBeforeNetwork(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := newPairingStateDir(t)
 	credentialsPath := filepath.Join(stateDir, "device-credentials.json")
 	request, signer, _ := validStartRequest(t)
 	var requests atomic.Int32
@@ -198,7 +198,7 @@ func TestPendingPairingRejectsConfigurationDriftBeforeNetwork(t *testing.T) {
 }
 
 func TestPairingErrorsNeverReflectResponseBodiesOrSecrets(t *testing.T) {
-	credentialsPath := filepath.Join(t.TempDir(), "device-credentials.json")
+	credentialsPath := filepath.Join(newPairingStateDir(t), "device-credentials.json")
 	request, signer, _ := validStartRequest(t)
 	const bodySecret = "REFLECTED-PAIRING-BODY-SENTINEL"
 	client := signedClient(signer, func(httpRequest *http.Request) (*http.Response, error) {
@@ -277,7 +277,7 @@ func TestPairingRejectsNoncanonicalSignedInputsBeforeSigning(t *testing.T) {
 				return nil, nil
 			})
 			_, err := LoadOrPair(
-				t.Context(), filepath.Join(t.TempDir(), "device-credentials.json"), client, request, nil,
+				t.Context(), filepath.Join(newPairingStateDir(t), "device-credentials.json"), client, request, nil,
 			)
 			if err == nil {
 				t.Fatal("noncanonical signed input was accepted")
@@ -319,7 +319,7 @@ func TestPairingPollURLMustMatchExpectedPairingPath(t *testing.T) {
 }
 
 func TestPairingStateLockRejectsConcurrentEntryWithoutNetwork(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := newPairingStateDir(t)
 	credentialsPath := filepath.Join(stateDir, "device-credentials.json")
 	codePath := filepath.Join(stateDir, "pairing-code.json")
 	request, signer, _ := validStartRequest(t)
@@ -408,7 +408,7 @@ func TestPairingStateLockRejectsConcurrentEntryWithoutNetwork(t *testing.T) {
 }
 
 func TestPairingStateLockIsExclusiveAcrossProcesses(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := newPairingStateDir(t)
 	command := exec.Command(os.Args[0], "-test.run=^TestPairingStateLockHelper$")
 	command.Env = append(os.Environ(), "SUB2API_PAIRING_LOCK_HELPER=1", "SUB2API_PAIRING_LOCK_DIR="+stateDir)
 	stdin, err := command.StdinPipe()
@@ -487,7 +487,7 @@ func TestPairingStateLockHelper(t *testing.T) {
 }
 
 func TestExistingCredentialsRemoveStaleTransientPairingState(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := newPairingStateDir(t)
 	credentialsPath := filepath.Join(stateDir, "device-credentials.json")
 	codePath := filepath.Join(stateDir, "pairing-code.json")
 	credentials := Credentials{Version: 1, DeviceID: testDeviceID, RefreshCredential: "dcr_refresh-only"}
@@ -531,11 +531,11 @@ func validStartRequest(t *testing.T) (StartRequest, func([]byte) string, ed25519
 	privateKey := ed25519.NewKeyFromSeed(seed)
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 	return StartRequest{
-			PublicKey: base64.RawURLEncoding.EncodeToString(publicKey), DisplayName: "device",
-			ConnectorVersion: "0.1.0", CodexVersion: "0.147.0", WorkspaceRoots: []string{"/work/project"},
-		}, func(message []byte) string {
-			return base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, message))
-		}, publicKey
+		PublicKey: base64.RawURLEncoding.EncodeToString(publicKey), DisplayName: "device",
+		ConnectorVersion: "0.1.0", CodexVersion: "0.147.0", WorkspaceRoots: []string{"/work/project"},
+	}, func(message []byte) string {
+		return base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, message))
+	}, publicKey
 }
 
 func signedClient(
@@ -609,15 +609,13 @@ func mustRead(t *testing.T, path string) []byte {
 	return data
 }
 
-func assertPrivateFile(t *testing.T, path string) {
+// newPairingStateDir names a state directory that does not exist yet, so
+// securefile creates it with a protected access control list instead of
+// adopting the access control list a temporary directory inherits from the
+// user profile.
+func newPairingStateDir(t *testing.T) string {
 	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		t.Fatalf("state file %q mode = %v, want regular 0600", path, info.Mode())
-	}
+	return filepath.Join(t.TempDir(), "state")
 }
 
 func assertPairingCodeRemoved(t *testing.T, path string) {
@@ -643,7 +641,7 @@ func testResponse(request *http.Request, status int, body []byte) *http.Response
 }
 
 func TestPairingContextCancellationIsSanitized(t *testing.T) {
-	credentialsPath := filepath.Join(t.TempDir(), "device-credentials.json")
+	credentialsPath := filepath.Join(newPairingStateDir(t), "device-credentials.json")
 	request, signer, _ := validStartRequest(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

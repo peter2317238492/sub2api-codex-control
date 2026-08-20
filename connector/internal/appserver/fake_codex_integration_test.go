@@ -14,15 +14,8 @@ func TestE2EFakeCodexMatchesContractsAndPersistsThreadsAcrossRestart(t *testing.
 		t.Skip("skipping subprocess test in short mode")
 	}
 	source := filepath.Join("..", "..", "..", "tests", "e2e", "fake_codex.py")
-	contents, err := os.ReadFile(source)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dir := t.TempDir()
-	binary := filepath.Join(dir, "codex")
-	if err := os.WriteFile(binary, contents, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	binary := fakeCodexE2E(t, dir, source)
 	providerKey := filepath.Join(dir, "provider-key")
 	if err := os.WriteFile(providerKey, []byte("provider-key-schema-canary\n"), 0o600); err != nil {
 		t.Fatal(err)

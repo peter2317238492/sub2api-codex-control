@@ -11,9 +11,41 @@ import (
 
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/localstate"
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/policy"
+	"github.com/peter2317238492/sub2api-codex-control/connector/internal/securefile"
+	"github.com/peter2317238492/sub2api-codex-control/connector/internal/wspath"
 )
 
 const testDeviceID = "11111111-1111-4111-8111-111111111111"
+
+// privateThreadState returns a managed-thread state path inside a directory
+// securefile created, so the state written there carries the protected access
+// control list the connector requires. A directory that already exists —
+// t.TempDir() included — inherits foreign access control entries on Windows.
+func privateThreadState(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := securefile.EnsureDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, "threads.json")
+}
+
+// workspaceCWD returns the POSIX form the control plane sends for a local
+// workspace directory together with the canonical local path the guard maps it
+// back to. Only params crossing the guard carry the remote form; results,
+// Thread.CWD, and every router comparison stay local.
+func workspaceCWD(t *testing.T, guard *policy.Guard, local string) (remote, canonical string) {
+	t.Helper()
+	remote, err := wspath.NewMapper().Remote(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err = guard.CanonicalCWD(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return remote, canonical
+}
 
 type fakeCaller struct {
 	calls  int
@@ -45,17 +77,14 @@ func TestRouterOnlyControlsManagedThreads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonicalProject, err := guard.CanonicalCWD(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	threads, err := localstate.OpenThreads(filepath.Join(t.TempDir(), "threads.json"), testDeviceID)
+	remoteProject, canonicalProject := workspaceCWD(t, guard, project)
+	threads, err := localstate.OpenThreads(privateThreadState(t), testDeviceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	caller := &fakeCaller{result: json.RawMessage(`{"thread":{"id":"managed-1","cwd":` + quoted(canonicalProject) + `}}`)}
 	router := &Router{App: caller, Guard: guard, Threads: threads}
-	if _, err := router.Call(t.Context(), "thread/start", json.RawMessage(`{"cwd":`+quoted(project)+`}`)); err != nil {
+	if _, err := router.Call(t.Context(), "thread/start", json.RawMessage(`{"cwd":`+quoted(remoteProject)+`}`)); err != nil {
 		t.Fatal(err)
 	}
 	if !threads.Contains("managed-1") {
@@ -84,11 +113,8 @@ func TestRouterRejectsThreadStartAtCapacityBeforeAppServerDispatch(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonicalRoot, err := guard.CanonicalCWD(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	statePath := filepath.Join(t.TempDir(), "threads.json")
+	remoteRoot, canonicalRoot := workspaceCWD(t, guard, root)
+	statePath := privateThreadState(t)
 	disk := struct {
 		Version  int                          `json:"version"`
 		DeviceID string                       `json:"device_id"`
@@ -98,11 +124,7 @@ func TestRouterRejectsThreadStartAtCapacityBeforeAppServerDispatch(t *testing.T)
 		id := fmt.Sprintf("managed-%d", index)
 		disk.Threads[id] = localstate.Thread{ID: id, CWD: canonicalRoot}
 	}
-	encoded, err := json.Marshal(disk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(statePath, append(encoded, '\n'), 0o600); err != nil {
+	if err := securefile.WriteJSON(statePath, disk); err != nil {
 		t.Fatal(err)
 	}
 	threads, err := localstate.OpenThreads(statePath, testDeviceID)
@@ -111,7 +133,7 @@ func TestRouterRejectsThreadStartAtCapacityBeforeAppServerDispatch(t *testing.T)
 	}
 	caller := &fakeCaller{result: json.RawMessage(`{"thread":{"id":"orphan","cwd":` + quoted(canonicalRoot) + `}}`)}
 	router := &Router{App: caller, Guard: guard, Threads: threads}
-	_, err = router.Call(t.Context(), "thread/start", json.RawMessage(`{"cwd":`+quoted(root)+`}`))
+	_, err = router.Call(t.Context(), "thread/start", json.RawMessage(`{"cwd":`+quoted(remoteRoot)+`}`))
 	if !errors.Is(err, localstate.ErrManagedThreadStoreFull) {
 		t.Fatalf("thread/start error = %v, want managed store full", err)
 	}
@@ -123,7 +145,7 @@ func TestRouterRejectsThreadStartAtCapacityBeforeAppServerDispatch(t *testing.T)
 func TestRouterRejectsStaleTurnIdentifiers(t *testing.T) {
 	root := t.TempDir()
 	guard, _ := policy.NewGuard([]string{root}, "workspace-write")
-	threads, _ := localstate.OpenThreads(filepath.Join(t.TempDir(), "threads.json"), testDeviceID)
+	threads, _ := localstate.OpenThreads(privateThreadState(t), testDeviceID)
 	if err := threads.Add(localstate.Thread{ID: "managed", CWD: root, ActiveTurnID: "current"}); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +162,7 @@ func TestRouterRejectsStaleTurnIdentifiers(t *testing.T) {
 func TestRouterFiltersThreadList(t *testing.T) {
 	root := t.TempDir()
 	guard, _ := policy.NewGuard([]string{root}, "workspace-write")
-	threads, _ := localstate.OpenThreads(filepath.Join(t.TempDir(), "threads.json"), testDeviceID)
+	threads, _ := localstate.OpenThreads(privateThreadState(t), testDeviceID)
 	if err := threads.Add(localstate.Thread{ID: "managed", CWD: root}); err != nil {
 		t.Fatal(err)
 	}
@@ -161,11 +183,8 @@ func TestRouterRejectsMismatchedResultIdentityAndEventTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonicalRoot, err := guard.CanonicalCWD(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	threads, _ := localstate.OpenThreads(filepath.Join(t.TempDir(), "threads.json"), testDeviceID)
+	_, canonicalRoot := workspaceCWD(t, guard, root)
+	threads, _ := localstate.OpenThreads(privateThreadState(t), testDeviceID)
 	if err := threads.Add(localstate.Thread{ID: "managed", CWD: canonicalRoot, ActiveTurnID: "turn-current"}); err != nil {
 		t.Fatal(err)
 	}
@@ -188,8 +207,8 @@ func TestRouterRejectsMismatchedResultIdentityAndEventTurns(t *testing.T) {
 func TestRouterRejectsUnsolicitedTurnStarted(t *testing.T) {
 	root := t.TempDir()
 	guard, _ := policy.NewGuard([]string{root}, "workspace-write")
-	canonicalRoot, _ := guard.CanonicalCWD(root)
-	threads, _ := localstate.OpenThreads(filepath.Join(t.TempDir(), "threads.json"), testDeviceID)
+	_, canonicalRoot := workspaceCWD(t, guard, root)
+	threads, _ := localstate.OpenThreads(privateThreadState(t), testDeviceID)
 	if err := threads.Add(localstate.Thread{ID: "managed", CWD: canonicalRoot}); err != nil {
 		t.Fatal(err)
 	}
@@ -216,8 +235,8 @@ func TestRouterCorrelatesEarlyTurnStartedWithPendingRemoteStart(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			guard, _ := policy.NewGuard([]string{root}, "workspace-write")
-			canonicalRoot, _ := guard.CanonicalCWD(root)
-			threads, _ := localstate.OpenThreads(filepath.Join(t.TempDir(), "threads.json"), testDeviceID)
+			_, canonicalRoot := workspaceCWD(t, guard, root)
+			threads, _ := localstate.OpenThreads(privateThreadState(t), testDeviceID)
 			if err := threads.Add(localstate.Thread{ID: "managed", CWD: canonicalRoot}); err != nil {
 				t.Fatal(err)
 			}

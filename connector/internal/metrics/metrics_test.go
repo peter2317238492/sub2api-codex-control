@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +21,39 @@ import (
 )
 
 const metricsCrashHelperEnvironment = "SUB2API_CONNECTOR_METRICS_CRASH_HELPER"
+
+const validCounterStateJSON = `{"version":3,"reconnects":[0,0,0,0],"app_server_restarts":[0,0,0],"contract_failures":[0,0],"contract_failure_timestamps":[0,0],"policy_denials":[0],"policy_denial_receipts":[]}`
+
+// privateStateDir returns a state directory that securefile created, so it
+// carries the protected access control list the connector requires. A directory
+// that already exists - t.TempDir() included - inherits foreign access control
+// entries from the user profile on Windows.
+func privateStateDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := securefile.EnsureDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// writePrivateStateFile plants a state file the way the connector creates one,
+// so a test exercises rejection of the document rather than rejection of its
+// access control list.
+func writePrivateStateFile(t *testing.T, path, body string) {
+	t.Helper()
+	file, err := securefile.CreatePrivateFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(body); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestExporterWritesPrivateBoundedTextfileAndPersistsCounters(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state-TOKEN-SENTINEL")
@@ -62,13 +94,7 @@ func TestExporterWritesPrivateBoundedTextfileAndPersistsCounters(t *testing.T) {
 	}
 
 	textPath := filepath.Join(stateDir, TextfileName)
-	dirInfo, err := os.Stat(stateDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !dirInfo.IsDir() || dirInfo.Mode().Perm() != 0o700 {
-		t.Fatalf("metrics state directory mode = %s, want 0700", dirInfo.Mode())
-	}
+	assertPrivateStateDirectory(t, stateDir)
 	assertPrivateRegularFile(t, textPath)
 	assertPrivateRegularFile(t, filepath.Join(stateDir, stateName))
 	data, err := os.ReadFile(textPath)
@@ -149,7 +175,7 @@ func TestExporterWritesPrivateBoundedTextfileAndPersistsCounters(t *testing.T) {
 }
 
 func TestTextfileReplacementIsAtomicUnderConcurrentReads(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := privateStateDir(t)
 	exporter, err := Open(stateDir, func(time.Time) (SpoolSnapshot, error) {
 		return SpoolSnapshot{CapacityBytes: 64 << 20}, nil
 	})
@@ -174,7 +200,7 @@ func TestTextfileReplacementIsAtomicUnderConcurrentReads(t *testing.T) {
 				return
 			default:
 			}
-			data, readErr := os.ReadFile(path)
+			data, readErr := readReplaceable(path)
 			if readErr != nil {
 				select {
 				case errChannel <- readErr:
@@ -189,7 +215,7 @@ func TestTextfileReplacementIsAtomicUnderConcurrentReads(t *testing.T) {
 				}
 				return
 			}
-			stateData, readErr := os.ReadFile(filepath.Join(stateDir, stateName))
+			stateData, readErr := readReplaceable(filepath.Join(stateDir, stateName))
 			if readErr != nil {
 				select {
 				case errChannel <- readErr:
@@ -239,7 +265,7 @@ func TestRefreshLoopPublishesIndependentProcessHeartbeat(t *testing.T) {
 	var snapshots atomic.Int32
 	var clock atomic.Int64
 	clock.Store(2_000_000_000)
-	exporter, err := Open(t.TempDir(), func(time.Time) (SpoolSnapshot, error) {
+	exporter, err := Open(privateStateDir(t), func(time.Time) (SpoolSnapshot, error) {
 		snapshots.Add(1)
 		return SpoolSnapshot{CapacityBytes: 64 << 20}, nil
 	})
@@ -276,15 +302,13 @@ func TestRefreshLoopPublishesIndependentProcessHeartbeat(t *testing.T) {
 }
 
 func TestOpenRemovesOrphanedMetricsTemporaryFiles(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := privateStateDir(t)
 	stale := []string{
 		filepath.Join(stateDir, temporaryPrefix+"crash-one"+temporarySuffix),
 		filepath.Join(stateDir, temporaryPrefix+"crash-two"+temporarySuffix),
 	}
 	for _, path := range stale {
-		if err := os.WriteFile(path, []byte("partial metrics"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writePrivateStateFile(t, path, "partial metrics")
 	}
 	if _, err := Open(stateDir, func(time.Time) (SpoolSnapshot, error) {
 		return SpoolSnapshot{CapacityBytes: 1}, nil
@@ -300,7 +324,7 @@ func TestOpenRemovesOrphanedMetricsTemporaryFiles(t *testing.T) {
 
 func TestRefreshLoopCoalescesHighFrequencyNotifications(t *testing.T) {
 	var snapshots atomic.Int32
-	exporter, err := Open(t.TempDir(), func(time.Time) (SpoolSnapshot, error) {
+	exporter, err := Open(privateStateDir(t), func(time.Time) (SpoolSnapshot, error) {
 		snapshots.Add(1)
 		return SpoolSnapshot{CapacityBytes: 64 << 20}, nil
 	})
@@ -337,7 +361,7 @@ func TestRefreshLoopCoalescesHighFrequencyNotifications(t *testing.T) {
 }
 
 func TestCounterRecordIsDurableBeforeTextfileRefresh(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := privateStateDir(t)
 	exporter, err := Open(stateDir, func(time.Time) (SpoolSnapshot, error) {
 		return SpoolSnapshot{CapacityBytes: 64 << 20}, nil
 	})
@@ -369,9 +393,9 @@ func TestCounterRecordIsDurableBeforeTextfileRefresh(t *testing.T) {
 }
 
 func TestOpenRejectsOversizedCounterStateBeforeDecode(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := privateStateDir(t)
 	path := filepath.Join(stateDir, stateName)
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := securefile.CreatePrivateFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +414,7 @@ func TestOpenRejectsOversizedCounterStateBeforeDecode(t *testing.T) {
 }
 
 func TestPolicyDenialReceiptIsDurableAndIdempotentAcrossRestart(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := privateStateDir(t)
 	fixedNow := time.Unix(2_200_000_000, 0).UTC()
 	open := func() *Exporter {
 		exporter, err := Open(stateDir, func(time.Time) (SpoolSnapshot, error) {
@@ -447,7 +471,7 @@ func TestPolicyDenialReceiptIsDurableAndIdempotentAcrossRestart(t *testing.T) {
 }
 
 func TestReconcileRetainsOldMatchingReceiptAndPrunesOnlyAbsentReceipts(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := privateStateDir(t)
 	state := newCounterState()
 	state.PolicyDenials[int(PolicyCommand)-1] = 2
 	firstKey := strings.Repeat("a", receiptKeyHexLength)
@@ -486,7 +510,7 @@ func TestReconcileRetainsOldMatchingReceiptAndPrunesOnlyAbsentReceipts(t *testin
 }
 
 func TestTextfileReplacementNeverFollowsExistingSymlink(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := privateStateDir(t)
 	outside := filepath.Join(t.TempDir(), "outside")
 	if err := os.WriteFile(outside, []byte("DO-NOT-REPLACE"), 0o600); err != nil {
 		t.Fatal(err)
@@ -515,7 +539,7 @@ func TestTextfileReplacementNeverFollowsExistingSymlink(t *testing.T) {
 }
 
 func TestCountersSurviveAbruptProcessTermination(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := privateStateDir(t)
 	command := exec.Command(os.Args[0], "-test.run=^TestMetricsCrashHelper$")
 	command.Env = append(os.Environ(), metricsCrashHelperEnvironment+"="+stateDir)
 	stdout, err := command.StdoutPipe()
@@ -627,7 +651,7 @@ func TestMetricsCrashHelper(t *testing.T) {
 }
 
 func TestUncertainCounterCommitPoisonsExporterAndStopsFreshness(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := privateStateDir(t)
 	exporter, err := Open(stateDir, func(time.Time) (SpoolSnapshot, error) {
 		return SpoolSnapshot{CapacityBytes: 64 << 20}, nil
 	})
@@ -687,10 +711,8 @@ func TestOpenRejectsMalformedOrUnexpectedCounterState(t *testing.T) {
 		"duplicate receipt":      `{"version":3,"reconnects":[0,0,0,0],"app_server_restarts":[0,0,0],"contract_failures":[0,0],"contract_failure_timestamps":[0,0],"policy_denials":[2],"policy_denial_receipts":[{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","recorded_at":1},{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","recorded_at":2}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			stateDir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(stateDir, stateName), []byte(body), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			stateDir := privateStateDir(t)
+			writePrivateStateFile(t, filepath.Join(stateDir, stateName), body)
 			if _, err := Open(stateDir, func(time.Time) (SpoolSnapshot, error) {
 				return SpoolSnapshot{CapacityBytes: 1}, nil
 			}); err == nil {
@@ -700,66 +722,22 @@ func TestOpenRejectsMalformedOrUnexpectedCounterState(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsSymlinkAndUnsafeCounterStateAccess(t *testing.T) {
-	valid := `{"version":3,"reconnects":[0,0,0,0],"app_server_restarts":[0,0,0],"contract_failures":[0,0],"contract_failure_timestamps":[0,0],"policy_denials":[0],"policy_denial_receipts":[]}`
-	t.Run("symlink", func(t *testing.T) {
-		stateDir := t.TempDir()
-		target := filepath.Join(t.TempDir(), "outside.json")
-		if err := os.WriteFile(target, []byte(valid), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(target, filepath.Join(stateDir, stateName)); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := Open(stateDir, func(time.Time) (SpoolSnapshot, error) {
-			return SpoolSnapshot{CapacityBytes: 1}, nil
-		}); err == nil {
-			t.Fatal("symlinked counter state was accepted")
-		}
-	})
-	t.Run("mode", func(t *testing.T) {
-		stateDir := t.TempDir()
-		path := filepath.Join(stateDir, stateName)
-		if err := os.WriteFile(path, []byte(valid), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(path, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := Open(stateDir, func(time.Time) (SpoolSnapshot, error) {
-			return SpoolSnapshot{CapacityBytes: 1}, nil
-		}); err == nil {
-			t.Fatal("world-readable counter state was accepted")
-		}
-	})
-	t.Run("darwin ACL", func(t *testing.T) {
-		if runtime.GOOS != "darwin" {
-			t.Skip("macOS ACL regression")
-		}
-		stateDir := t.TempDir()
-		path := filepath.Join(stateDir, stateName)
-		if err := os.WriteFile(path, []byte(valid), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if output, err := exec.Command("chmod", "+a", "everyone allow read", path).CombinedOutput(); err != nil {
-			t.Fatalf("add test ACL: %v: %s", err, output)
-		}
-		if _, err := Open(stateDir, func(time.Time) (SpoolSnapshot, error) {
-			return SpoolSnapshot{CapacityBytes: 1}, nil
-		}); err == nil {
-			t.Fatal("counter state with a non-owner allow ACL was accepted")
-		}
-	})
-}
-
-func assertPrivateRegularFile(t *testing.T, path string) {
-	t.Helper()
-	info, err := os.Lstat(path)
-	if err != nil {
+// The platform halves of unsafe-access rejection live in metrics_unix_test.go
+// and metrics_windows_test.go, because owner-only means mode bits on POSIX and
+// an access control list on Windows.
+func TestOpenRejectsSymlinkedCounterState(t *testing.T) {
+	stateDir := privateStateDir(t)
+	target := filepath.Join(t.TempDir(), "outside.json")
+	if err := os.WriteFile(target, []byte(validCounterStateJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		t.Fatalf("%s mode = %s, want private regular 0600", path, info.Mode())
+	if err := os.Symlink(target, filepath.Join(stateDir, stateName)); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+	if _, err := Open(stateDir, func(time.Time) (SpoolSnapshot, error) {
+		return SpoolSnapshot{CapacityBytes: 1}, nil
+	}); err == nil {
+		t.Fatal("symlinked counter state was accepted")
 	}
 }
 

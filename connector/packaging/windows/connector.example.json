@@ -1,0 +1,19 @@
+{
+  "control_url": "wss://sub2api.wyswd.top/codex-ws/device",
+  "pairing_url": "https://sub2api.wyswd.top/codex-api/v1/device-pairings/start",
+  "token_url": "https://sub2api.wyswd.top/codex-api/v1/device/connect-token",
+  "display_name": "My workstation",
+  "state_dir": "D:\\sub2api-codex-connector\\state",
+  "workspace_roots": [
+    "D:\\code"
+  ],
+  "sandbox_cap": "workspace-write",
+  "codex_binary": "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
+  "codex_version": "0.147.0",
+  "schema_digest": "511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b",
+  "heartbeat_interval": "20s",
+  "approval_timeout": "120s",
+  "pairing_poll_interval": "2s",
+  "reconnect_min": "1s",
+  "reconnect_max": "30s"
+}

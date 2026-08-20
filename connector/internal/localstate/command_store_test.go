@@ -14,8 +14,17 @@ import (
 
 const testEpoch = "epoch-0123456789abcdef"
 
+// privateCommandDir returns a journal directory the store creates itself
+// through securefile, so it carries the protected access control list the
+// connector requires. A directory that already exists — t.TempDir()
+// included — inherits foreign access control entries on Windows.
+func privateCommandDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "commands")
+}
+
 func TestCommandStorePersistsExecutingAndTerminalStates(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateCommandDir(t)
 	store, err := OpenCommands(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +51,7 @@ func TestCommandStorePersistsExecutingAndTerminalStates(t *testing.T) {
 }
 
 func TestRecoveredExecutingRecordDoesNotReplayAcrossEpochs(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateCommandDir(t)
 	store, err := OpenCommands(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +77,7 @@ func TestRecoveredExecutingRecordDoesNotReplayAcrossEpochs(t *testing.T) {
 }
 
 func TestTerminalResultReplaysAcrossEpochs(t *testing.T) {
-	store, err := OpenCommands(t.TempDir())
+	store, err := OpenCommands(privateCommandDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +108,7 @@ func TestTerminalResultReplaysAcrossEpochs(t *testing.T) {
 }
 
 func TestCommandStoreRejectsNoncanonicalJournalFilename(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateCommandDir(t)
 	store, err := OpenCommands(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +132,7 @@ func TestCommandStoreRejectsNoncanonicalJournalFilename(t *testing.T) {
 func TestCommandStorePrunesExpiredTerminalRecordsButNeverExecutingRecords(t *testing.T) {
 	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
 	limits := CommandStoreLimits{MaxRecords: 1, MaxBytes: 4096, MaxRecordBytes: 2048, Retention: time.Hour}
-	store, err := OpenCommandsWithLimits(t.TempDir(), limits)
+	store, err := OpenCommandsWithLimits(privateCommandDir(t), limits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +161,7 @@ func TestCommandStorePrunesExpiredTerminalRecordsButNeverExecutingRecords(t *tes
 }
 
 func TestCommandStoreDefersPolicyDenialPruningUntilReceiptReconciliation(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "commands")
+	dir := privateCommandDir(t)
 	limits := CommandStoreLimits{MaxRecords: 4, MaxBytes: 16 << 10, MaxRecordBytes: 4 << 10, Retention: time.Hour}
 	store, err := OpenCommandsWithLimits(dir, limits)
 	if err != nil {
@@ -208,7 +217,7 @@ func TestCommandStoreDefersPolicyDenialPruningUntilReceiptReconciliation(t *test
 }
 
 func TestCommandStorePruneFailsClosedWhenDirectorySyncIsUncertain(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "commands")
+	dir := privateCommandDir(t)
 	limits := CommandStoreLimits{MaxRecords: 4, MaxBytes: 16 << 10, MaxRecordBytes: 4 << 10, Retention: time.Hour}
 	store, err := OpenCommandsWithLimits(dir, limits)
 	if err != nil {

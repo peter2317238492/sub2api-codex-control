@@ -1,0 +1,7 @@
+# This repository pins SHA-256 digests of exact file bytes: the embedded Codex
+# app-server schemas (connector/internal/appserver/contracts), the generated
+# schema package, the third-party license texts recorded in
+# third_party/components.json, and the release manifests. Git's end-of-line
+# conversion rewrites those bytes on checkout, which silently breaks every
+# digest gate on Windows. Never let Git rewrite line endings here.
+* -text

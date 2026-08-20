@@ -10,7 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/peter2317238492/sub2api-codex-control/connector/internal/wspath"
 )
+
+var pathMapper = wspath.NewMapper()
 
 const (
 	MaxPageSize          = 100
@@ -306,11 +310,27 @@ func (g *Guard) threadListCWDs(value any) ([]string, error) {
 	return projected, nil
 }
 
-func (g *Guard) CanonicalCWD(path string) (string, error) {
-	if !filepath.IsAbs(path) {
+// CanonicalCWD is the only inbound path converter. It accepts the POSIX form
+// the control plane sends and returns the local path app-server is given.
+func (g *Guard) CanonicalCWD(remote string) (string, error) {
+	local, err := pathMapper.Local(remote)
+	if err != nil {
+		return "", fmt.Errorf("cwd %q is not an accepted workspace path: %w", remote, err)
+	}
+	return g.canonicalLocalCWD(local)
+}
+
+// ContainsCWD takes the local path recorded for a thread, not the remote form.
+func (g *Guard) ContainsCWD(local string) bool {
+	_, err := g.canonicalLocalCWD(local)
+	return err == nil
+}
+
+func (g *Guard) canonicalLocalCWD(local string) (string, error) {
+	if !filepath.IsAbs(local) {
 		return "", errors.New("cwd must be absolute")
 	}
-	resolved, err := filepath.EvalSymlinks(filepath.Clean(path))
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(local))
 	if err != nil {
 		return "", fmt.Errorf("resolve cwd: %w", err)
 	}
@@ -319,17 +339,11 @@ func (g *Guard) CanonicalCWD(path string) (string, error) {
 		return "", errors.New("cwd is not a directory")
 	}
 	for _, root := range g.roots {
-		relative, err := filepath.Rel(root, resolved)
-		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		if pathMapper.Contains(root, resolved) {
 			return resolved, nil
 		}
 	}
-	return "", fmt.Errorf("cwd %q is outside the configured workspace roots", path)
-}
-
-func (g *Guard) ContainsCWD(path string) bool {
-	_, err := g.CanonicalCWD(path)
-	return err == nil
+	return "", fmt.Errorf("cwd %q is outside the configured workspace roots", local)
 }
 
 // ValidatePermissions permits only additional filesystem access already inside
@@ -538,9 +552,14 @@ func (g *Guard) canonicalGlobRoot(pattern string, requireExisting bool) (string,
 		return "", errors.New("filesystem glob pattern must be absolute")
 	}
 	separator := string(filepath.Separator)
-	parts := strings.Split(filepath.Clean(pattern), separator)
-	literal := separator
-	for _, part := range parts {
+	cleaned := filepath.Clean(pattern)
+	// The literal prefix has to be rebuilt from the volume, not from a bare
+	// separator: on Windows a bare separator drops "C:" and yields a path that
+	// is no longer absolute.
+	volume := filepath.VolumeName(cleaned)
+	root := volume + separator
+	literal := root
+	for _, part := range strings.Split(cleaned[len(volume):], separator) {
 		if part == "" {
 			continue
 		}
@@ -549,7 +568,7 @@ func (g *Guard) canonicalGlobRoot(pattern string, requireExisting bool) (string,
 		}
 		literal = filepath.Join(literal, part)
 	}
-	if literal == separator {
+	if literal == root {
 		return "", errors.New("filesystem glob pattern has no workspace-rooted literal prefix")
 	}
 	if requireExisting {
@@ -564,7 +583,7 @@ func (g *Guard) ValidateApprovalDetails(kind string, details map[string]any) err
 		if !ok {
 			return errors.New("approval cwd is invalid")
 		}
-		if _, err := g.CanonicalCWD(path); err != nil {
+		if _, err := g.canonicalLocalCWD(path); err != nil {
 			return err
 		}
 	}
@@ -597,7 +616,7 @@ func (g *Guard) ValidateApprovalDetails(kind string, details map[string]any) err
 			if !ok {
 				return errors.New("file approval grantRoot is invalid")
 			}
-			if _, err := g.CanonicalCWD(path); err != nil {
+			if _, err := g.canonicalLocalCWD(path); err != nil {
 				return err
 			}
 		}
@@ -642,8 +661,11 @@ func (g *Guard) canonicalExistingPath(path string) (string, error) {
 		return "", fmt.Errorf("stat permission path: %w", err)
 	}
 	for _, root := range g.roots {
-		relative, err := filepath.Rel(root, resolved)
-		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		// filepath.Rel compares Windows components with strings.EqualFold, which
+		// folds U+017F and U+212A onto s and k while NTFS keeps them distinct, so
+		// a fold-equal sibling of a root would pass containment. pathMapper
+		// compares the way the filesystem does.
+		if pathMapper.Contains(root, resolved) {
 			return resolved, nil
 		}
 	}
@@ -663,8 +685,7 @@ func (g *Guard) canonicalProspectivePath(path string) (string, error) {
 				resolved = filepath.Join(resolved, suffix[index])
 			}
 			for _, root := range g.roots {
-				relative, relErr := filepath.Rel(root, resolved)
-				if relErr == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				if pathMapper.Contains(root, resolved) {
 					return resolved, nil
 				}
 			}
