@@ -190,10 +190,13 @@ jobs:
           RPM_SIGNING_PUBLIC_KEY_BASE64: ${{ vars.RPM_SIGNING_PUBLIC_KEY_BASE64 }}
         run: connector/release/linux-sign-rpm.sh "$RELEASE_DIR"
 
-      - name: Transfer the RPM-signed release state
+      - name: Finalize the release manifest, SBOMs, and provenance
+        run: python3 connector/release/release.py finalize --output "$RELEASE_DIR"
+
+      - name: Transfer the finalized release state
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: connector-linux-signed-${{ github.run_attempt }}
+          name: connector-finalized-${{ github.run_attempt }}
           path: dist/connector
           include-hidden-files: true
           if-no-files-found: error

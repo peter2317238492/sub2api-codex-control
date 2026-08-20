@@ -69,7 +69,7 @@ async def seed_device(
         refresh_credential_hash=digester.digest("device-refresh", refresh_credential),
         credential_version=1,
         status=DeviceStatus.ACTIVE,
-        device_metadata={"connector_version": "0.1.4", "codex_version": "0.147.0"},
+        device_metadata={"connector_version": "0.1.5", "codex_version": "0.147.0"},
         workspace_roots=["/workspace"],
         active_epoch=EPOCH if online else None,
         active_connection_nonce=connection_nonce,

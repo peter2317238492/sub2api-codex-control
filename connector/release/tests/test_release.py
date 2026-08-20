@@ -728,14 +728,24 @@ class ReleasePipelineTests(unittest.TestCase):
             output, "not a regular non-symlink file", "--allow-local-unsigned"
         )
 
-    def test_non_executable_artifact_is_rejected(self) -> None:
+    def test_non_executable_artifact_mode_is_restored_after_verification(self) -> None:
+        # Artifact transfers between release jobs strip file modes, so the
+        # verifier restores the executable bit once the content has matched
+        # the trusted digest; tampered content is still rejected by hash.
         output = self.fixture()
         manifest = json.loads((output / "manifest.json").read_text())
         artifact = output / manifest["targets"][0]["artifact"]["filename"]
         artifact.chmod(0o644)
-        self.assert_rejected(
-            output, "artifact is not executable", "--allow-local-unsigned"
+        result = self.run_tool(
+            "verify",
+            "--output",
+            str(output),
+            "--allow-local-unsigned",
+            "--target",
+            "linux-amd64",
         )
+        self.assertIn("verified local-unsigned", result.stdout)
+        self.assertTrue(artifact.stat().st_mode & 0o100)
 
     def test_finalization_rejects_candidate_mutated_after_reproducibility_check(
         self,

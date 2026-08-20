@@ -1998,6 +1998,16 @@ def safe_file(
     return path
 
 
+def restore_verified_artifact_mode(path: Path) -> None:
+    """Restore the executable bit on a content-verified Connector artifact.
+
+    GitHub artifact transfers strip file modes, so executability cannot
+    survive a job boundary; it is restored only immediately after the
+    artifact's bytes matched the trusted digest that vouches for them.
+    """
+    path.chmod(0o755)
+
+
 def work_state_file(output: Path) -> Path:
     """Locate the internal release work state.
 
@@ -2129,16 +2139,18 @@ def validate_work_state(
             )
         if not isinstance(record["unsigned_size"], int) or record["unsigned_size"] <= 0:
             raise ReleaseError(f"release work unsigned size is invalid for {target_id}")
-        artifact = safe_file(
-            output, record["filename"], "release work artifact", executable=True
-        )
-        if require_unsigned_artifacts and (
-            artifact.stat().st_size != record["unsigned_size"]
-            or sha256_file(artifact) != record["unsigned_sha256"]
-        ):
-            raise ReleaseError(
-                f"unsigned artifact changed after reproducibility check: {target_id}"
-            )
+        artifact = safe_file(output, record["filename"], "release work artifact")
+        if require_unsigned_artifacts:
+            if (
+                artifact.stat().st_size != record["unsigned_size"]
+                or sha256_file(artifact) != record["unsigned_sha256"]
+            ):
+                raise ReleaseError(
+                    f"unsigned artifact changed after reproducibility check: {target_id}"
+                )
+            restore_verified_artifact_mode(artifact)
+        elif not artifact.stat().st_mode & stat.S_IXUSR:
+            raise ReleaseError(f"artifact is not executable: {artifact.name}")
         packages = record["packages"]
         if not isinstance(packages, list):
             raise ReleaseError(f"release work packages are invalid for {target_id}")
@@ -2597,7 +2609,13 @@ def finalize(args: argparse.Namespace) -> None:
     validate_pre_finalize_inventory(output, state)
     mode = state.get("release_mode")
     if mode == "release":
-        if platform.system() != "Darwin":
+        # Only Apple signature verification is host-bound; a matrix without
+        # Apple targets finalizes on the Linux release runners.
+        needs_darwin = any(
+            target["native_signature"] == "apple-developer-id-and-notarization"
+            for target in config["targets"]
+        )
+        if needs_darwin and platform.system() != "Darwin":
             raise ReleaseError(
                 "release finalization must run on macOS to verify native signatures"
             )
@@ -4746,9 +4764,7 @@ def validate_finalized_release_for_signing(
     )
     for target in manifest["targets"]:
         artifact = target["artifact"]
-        artifact_path = safe_file(
-            output, artifact["filename"], "artifact", executable=True
-        )
+        artifact_path = safe_file(output, artifact["filename"], "artifact")
         if (
             artifact_path.stat().st_size != artifact["size"]
             or sha256_file(artifact_path) != artifact["sha256"]
@@ -4756,6 +4772,7 @@ def validate_finalized_release_for_signing(
             raise ReleaseError(
                 f"artifact size or SHA-256 mismatch: {artifact_path.name}"
             )
+        restore_verified_artifact_mode(artifact_path)
         if target["native_signature"]["policy"] == "none" and (
             artifact["sha256"] != artifact["reproducible_candidate_sha256"]
             or artifact["size"] != artifact["reproducible_candidate_size"]
@@ -5086,9 +5103,7 @@ def verify(args: argparse.Namespace) -> None:
         )
     for target in manifest["targets"]:
         artifact = target["artifact"]
-        artifact_path = safe_file(
-            output, artifact["filename"], "artifact", executable=True
-        )
+        artifact_path = safe_file(output, artifact["filename"], "artifact")
         if (
             artifact_path.stat().st_size != artifact["size"]
             or sha256_file(artifact_path) != artifact["sha256"]
@@ -5096,6 +5111,7 @@ def verify(args: argparse.Namespace) -> None:
             raise ReleaseError(
                 f"artifact size or SHA-256 mismatch: {artifact_path.name}"
             )
+        restore_verified_artifact_mode(artifact_path)
         if (not release_mode or target["native_signature"]["policy"] == "none") and (
             artifact["sha256"] != artifact["reproducible_candidate_sha256"]
             or artifact["size"] != artifact["reproducible_candidate_size"]
@@ -5180,9 +5196,7 @@ def verify(args: argparse.Namespace) -> None:
             or artifact_entry["reproducible_candidate_size"] <= 0
         ):
             raise ReleaseError("artifact reproducible candidate metadata is invalid")
-        artifact_path = safe_file(
-            output, artifact_entry["filename"], "artifact", executable=True
-        )
+        artifact_path = safe_file(output, artifact_entry["filename"], "artifact")
         if (
             artifact_path.stat().st_size != artifact_entry["size"]
             or sha256_file(artifact_path) != artifact_entry["sha256"]
@@ -5190,6 +5204,7 @@ def verify(args: argparse.Namespace) -> None:
             raise ReleaseError(
                 f"artifact size or SHA-256 mismatch: {artifact_path.name}"
             )
+        restore_verified_artifact_mode(artifact_path)
         if (not release_mode or target["native_signature"]["policy"] == "none") and (
             artifact_entry["sha256"] != artifact_entry["reproducible_candidate_sha256"]
             or artifact_entry["size"] != artifact_entry["reproducible_candidate_size"]
