@@ -150,7 +150,15 @@ EOF
     printf '%s\n' /bin/sh systemd | LC_ALL=C sort > "$temporary/expected-rpm-requires"
     cmp -s "$temporary/expected-rpm-requires" "$temporary/rpm-requires" || \
       fail "RPM dependency header is not the exact admitted set"
-    if rpm -qp --qf '[%{FILEFLAGS}\n]' "$package" | awk 'NF > 0 && $0 != "0" { exit 1 }'; then
+    # rpm marks %_docdir payloads as documentation (flag 2) on its own; that
+    # marking is accepted only there, while ghost/config/missingok and every
+    # other flag stay rejected everywhere.
+    if rpm -qp --qf '[%{FILEFLAGS}\t%{FILENAMES}\n]' "$package" | awk -F '\t' '
+      NF == 0 { next }
+      $1 == "0" { next }
+      $1 == "2" && index($2, "/usr/share/doc/") == 1 { next }
+      { exit 1 }
+    '; then
       :
     else
       fail "RPM contains ghost/config/missingok or other flagged file entries"
