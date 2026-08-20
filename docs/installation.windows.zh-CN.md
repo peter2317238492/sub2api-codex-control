@@ -27,7 +27,7 @@ Windows 不在 `connector/release/release-config.json` 的发布目标矩阵内�
 - `ScheduledTasks` 模块，系统默认自带。
 - **`codex-cli` 必须正好是 `0.147.0`。** Connector 在每次启动 app-server 前都会用
   `--version` 运行所配置的二进制，并要求横幅精确等于 `codex-cli 0.147.0`；固定的
-  app-server schema 摘要也绑定到该版本。本机当前是 `0.145.0`，必须先升级：
+  app-server schema 摘要也绑定到该版本。用 `codex --version` 确认，不一致就先升级：
 
   ```powershell
   npm install -g @openai/codex@0.147.0
@@ -74,9 +74,12 @@ C:\Users\peter heosdee\CodexSandboxUsers:(OI)(CI)(M,DC)
 
 `CodexSandboxUsers` 和第二个非本地 SID 都在配置文件目录上持有 `DC`
 （`FILE_DELETE_CHILD`）。这两个组中的任何主体都能删除并替换 `C:\Users\peter` 的任意直接
-子项，包括放在那里的状态目录。Connector 的祖先目录校验会在启动时拒绝它，并在错误信息中
-指出违规的祖先。目录上的 `DC` 正是 POSIX 中“父目录对组可写且没有 sticky 位”的等价物，
-上游同样拒绝该情形。
+子项，包括放在那里的状态目录。Connector 的祖先目录校验会在启动时拒绝它，报
+`connector: state_dir or a directory above it is reachable by another principal`。
+它**不会**点名是哪一级：终端错误的细节一律被抑制，因为错误信息可能携带工作区路径、
+token 或配对码。要知道是哪一级，运行 `install.ps1`（它会点名），或用
+`sub2api-codex-connector-ctl.ps1 pair` 在控制台里启动。目录上的 `DC` 正是 POSIX 中
+“父目录对组可写且没有 sticky 位”的等价物，上游同样拒绝该情形。
 
 安装脚本在创建任何内容之前就拒绝 `C:\Users`。**本机上不要把 `state_dir` 移到
 `%LOCALAPPDATA%` 或 `%USERPROFILE%` 下。**
@@ -100,9 +103,13 @@ D:\ BUILTIN\Administrators:(OI)(CI)(F)
 子目录上的继承，并只授予三个受信主体：
 
 ```powershell
+$sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
 icacls <path> /inheritance:r `
-  /grant:r "$user:(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"
+  /grant:r "*${sid}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
 ```
+
+这里的受托者用的是 SID 而不是名称：`SYSTEM` 和 `Administrators` 在本地化的 Windows 上
+会被翻译，按名称写会解析失败。
 
 它会**先**加固安装根目录，**再**在其中创建 `state`，这样状态目录从不会哪怕短暂地带着卷根
 可继承的 `Authenticated Users` 授权存在。随后它重新读取生成的安全描述符，并在下列任一情况
@@ -289,9 +296,11 @@ D:\sub2api-codex-connector\state\connector.log
 
 安装脚本会替换可执行文件和计划任务，并保持已有配置不变。
 
-升级 Codex 时，先停止 Connector，运行 `npm install -g @openai/codex@<version>`，
-再重新运行 `install.ps1`，让 `connector.json` 中解析出的 `codex.exe` 路径被重新核对。
-偏离固定版本 `0.147.0` 的 Codex 升级会让 Connector 在 app-server 启动前失败关闭。
+升级 Codex 时，先停止 Connector，再运行 `npm install -g @openai/codex@<version>`。
+重新运行 `install.ps1` **不会**更新 `connector.json`：它绝不覆盖已存在的配置，而且它校验的是
+自己刚解析出的二进制，不是配置里已记录的 `codex_binary`。如果升级后 vendor 目录下的
+`codex.exe` 换了位置，需要你自己改 `codex_binary`。Codex 升级到偏离固定的 `0.147.0` 时，
+Connector 会在启动 app-server 之前失败关闭。
 
 ## 卸载
 

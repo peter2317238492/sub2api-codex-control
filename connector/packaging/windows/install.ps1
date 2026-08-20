@@ -17,6 +17,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $PinnedCodexVersion = '0.147.0'
+$LogName = 'connector.log'
 $FilePersistentAcls = 0x8
 
 function Fail {
@@ -100,6 +101,70 @@ function Assert-NotReparsePoint {
   $item = Get-Item -LiteralPath $Path -Force
   if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     Fail "refusing a symlink, junction, or mount point: $Path"
+  }
+}
+
+# The Connector walks every ancestor of state_dir at startup and refuses one that
+# lets a principal outside {owner, SYSTEM, Administrators, TrustedInstaller}
+# delete or re-permission what sits beneath it. A directory created with default
+# inheritance under a volume root picks up Authenticated Users:(I)(M), and
+# Modify carries DELETE, so an unhardened intermediate level makes the install
+# look successful while the Connector refuses to start.
+#
+# Levels this script creates are hardened. A level that already existed is never
+# silently re-permissioned -- it may be shared with something else -- so it is
+# reported instead, naming the offender and the two ways out.
+function Get-MissingAncestors {
+  param([string]$Path)
+  $missing = @()
+  $current = [System.IO.Path]::GetFullPath($Path)
+  while ($true) {
+    $parent = Split-Path -Parent $current
+    if ([string]::IsNullOrEmpty($parent) -or $parent -eq $current) { break }
+    if (-not (Test-Path -LiteralPath $parent -PathType Container)) { $missing = @($parent) + $missing }
+    $current = $parent
+  }
+  return $missing
+}
+
+function Assert-TrustedAncestors {
+  param([string]$Path, [string]$UserSid)
+  $trusted = @(
+    $UserSid,
+    'S-1-5-18',
+    'S-1-5-32-544',
+    'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+  )
+  # Delete | ChangePermissions | TakeOwnership | DeleteSubdirectoriesAndFiles,
+  # plus the raw generic bits, which are what let a foreign principal replace a
+  # directory beneath this one.
+  $forbidden = 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40 -bor 0xF0000000
+  $ancestors = @()
+  $current = [System.IO.Path]::GetFullPath($Path)
+  while ($true) {
+    $parent = Split-Path -Parent $current
+    if ([string]::IsNullOrEmpty($parent) -or $parent -eq $current) { break }
+    $ancestors = @($parent) + $ancestors
+    $current = $parent
+  }
+  foreach ($ancestor in $ancestors) {
+    if (-not (Test-Path -LiteralPath $ancestor -PathType Container)) { continue }
+    Assert-NotReparsePoint $ancestor
+    $acl = Get-Acl -LiteralPath $ancestor
+    foreach ($rule in @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
+      if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+      if (($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+      $trustee = $rule.IdentityReference.Value
+      if ($trusted -contains $trustee) { continue }
+      if ((([int]$rule.FileSystemRights) -band $forbidden) -eq 0) { continue }
+      Fail (
+        "$ancestor grants $trustee the right to replace what sits beneath it, so the Connector " +
+        "will refuse to start with a state directory under it. Either choose an install root " +
+        "whose parents are private -- D:\sub2api-codex-connector directly under the volume root " +
+        "is the documented layout -- or harden that directory with " +
+        "'icacls `"$ancestor`" /inheritance:r /grant:r `"*$UserSid`:(OI)(CI)F`" `"*S-1-5-18:(OI)(CI)F`" `"*S-1-5-32-544:(OI)(CI)F`"' " +
+        "after establishing that nothing else depends on its current permissions.")
+    }
   }
 }
 
@@ -264,7 +329,7 @@ if ((Test-PathUnder $StateDir $profilesRoot) -or (Test-PathUnder $InstallRoot $p
     "refusing to install under $profilesRoot. The user profile grants FILE_DELETE_CHILD to " +
     'CodexSandboxUsers and to a second non-local SID, so a principal in either group can delete ' +
     'and replace any direct child of the profile. The Connector rejects that ancestor at startup ' +
-    'and names it in the error. Choose a path such as D:\sub2api-codex-connector.')
+    'at startup, and this installer names it. Choose a path such as D:\sub2api-codex-connector.')
 }
 
 $stateVolume = $StateDir.Substring(0, 3)
@@ -330,6 +395,13 @@ if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
 # The install root is hardened before the state directory is created inside it, so the
 # new directory never exists, even briefly, with the volume root's inheritable
 # Authenticated Users grant applied to it.
+foreach ($ancestor in (Get-MissingAncestors $InstallRoot)) {
+  [void](New-Item -ItemType Directory -Path $ancestor)
+  Protect-Directory $ancestor $userSid
+  Assert-ProtectedDirectory $ancestor $userSid
+  Report "Created and hardened the intermediate directory $ancestor"
+}
+Assert-TrustedAncestors $InstallRoot $userSid
 if (-not (Test-Path -LiteralPath $InstallRoot -PathType Container)) {
   [void](New-Item -ItemType Directory -Path $InstallRoot)
 }
@@ -341,6 +413,13 @@ if (-not (Test-Path -LiteralPath $binRoot -PathType Container)) {
   [void](New-Item -ItemType Directory -Path $binRoot)
 }
 
+foreach ($ancestor in (Get-MissingAncestors $StateDir)) {
+  [void](New-Item -ItemType Directory -Path $ancestor)
+  Protect-Directory $ancestor $userSid
+  Assert-ProtectedDirectory $ancestor $userSid
+  Report "Created and hardened the intermediate directory $ancestor"
+}
+Assert-TrustedAncestors $StateDir $userSid
 if (-not (Test-Path -LiteralPath $StateDir -PathType Container)) {
   [void](New-Item -ItemType Directory -Path $StateDir)
 }
@@ -372,8 +451,13 @@ if (-not $SkipTask) {
   if ($null -eq (Get-Command 'Register-ScheduledTask' -ErrorAction SilentlyContinue)) {
     Fail 'the ScheduledTasks module is unavailable, so the Connector cannot be supervised at logon'
   }
+  # -log-file is what creates state\connector.log. Without it the Connector
+  # under a scheduled task has no console and no log, so every diagnostic --
+  # including the pairing-code path -- is discarded, and ctl.ps1 logs has
+  # nothing to show. The relative name resolves against state_dir.
+  $taskArguments = "-config `"$configPath`" -log-file `"$LogName`""
   $action = New-ScheduledTaskAction -Execute $installedConnector `
-    -Argument "-config `"$configPath`"" -WorkingDirectory $InstallRoot
+    -Argument $taskArguments -WorkingDirectory $InstallRoot
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userName
   $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
@@ -386,6 +470,9 @@ if (-not $SkipTask) {
   $registered = Get-ScheduledTask -TaskName $TaskName -TaskPath '\'
   if ($registered.Actions[0].Execute -ine $installedConnector) {
     Fail "the registered task runs $($registered.Actions[0].Execute) instead of $installedConnector"
+  }
+  if ($registered.Actions[0].Arguments -notlike '*-log-file*') {
+    Fail "the registered task does not pass -log-file, so $LogName would never be written"
   }
   Report "Registered scheduled task \$TaskName for $userName at logon, restarting 3 times at 1 minute."
 }
