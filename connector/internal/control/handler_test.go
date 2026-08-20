@@ -17,6 +17,7 @@ import (
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/metrics"
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/policy"
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/protocol"
+	"github.com/peter2317238492/sub2api-codex-control/connector/internal/securefile"
 )
 
 const testCommandID = "33333333-3333-4333-8333-333333333333"
@@ -88,7 +89,10 @@ func (r crashAfterMutationRouter) Call(ctx context.Context, _ string, _ json.Raw
 	if err != nil {
 		return nil, err
 	}
-	if err := directory.Sync(); err != nil {
+	// Windows refuses FlushFileBuffers on a directory handle, so the marker's
+	// directory entry is made durable through the helper that knows which
+	// single errno that is.
+	if err := securefile.SyncDirectoryHandle(directory); err != nil {
 		_ = directory.Close()
 		return nil, err
 	}
@@ -102,8 +106,16 @@ func (r crashAfterMutationRouter) Call(ctx context.Context, _ string, _ json.Raw
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	return json.RawMessage(`{"thread":{"id":"thread-created"},"model":"gpt-5","cwd":"/work"}`), nil
+	return json.RawMessage(`{"thread":{"id":"thread-created"},"model":"gpt-5","cwd":` + quoted(localFixture("/work")) + `}`), nil
 
+}
+
+// localFixture builds an absolute local path on the volume that holds the
+// temporary directory, so a POSIX-shaped fixture names a real Windows volume.
+// app-server hands the connector local paths; only the outbound projection
+// turns them back into the POSIX form the control plane accepts.
+func localFixture(posix string) string {
+	return filepath.VolumeName(os.TempDir()) + filepath.FromSlash(posix)
 }
 
 type crashBeforeAckEmitter struct{}

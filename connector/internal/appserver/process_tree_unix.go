@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 )
 
 type appServerProcessTree struct {
@@ -15,11 +16,11 @@ type appServerProcessTree struct {
 	pgid int
 }
 
-func prepareAppServerProcess(command *exec.Cmd) (*appServerProcessTree, error) {
+func prepareAppServerProcess(command *exec.Cmd, gracePeriod time.Duration) (*appServerProcessTree, error) {
 	tree := &appServerProcessTree{}
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.Cancel = tree.kill
-	command.WaitDelay = forcedShutdownWait
+	command.WaitDelay = waitDelayFor(gracePeriod)
 	return tree, nil
 }
 

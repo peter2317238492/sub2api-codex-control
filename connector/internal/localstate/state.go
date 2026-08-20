@@ -304,7 +304,9 @@ func OpenCommandsWithLimits(dir string, limits CommandStoreLimits) (*CommandStor
 		if err != nil {
 			return err
 		}
-		syncErr := directory.Sync()
+		// Sync through securefile: Windows refuses FlushFileBuffers on a
+		// directory handle, and only that one errno is safe to ignore.
+		syncErr := securefile.SyncDirectoryHandle(directory)
 		closeErr := directory.Close()
 		return errors.Join(syncErr, closeErr)
 	}

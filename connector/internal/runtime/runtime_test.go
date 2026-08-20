@@ -47,13 +47,11 @@ func (child *quiescentSessionChild) Close() {
 
 func TestVersionMismatchPublishesPersistentContractFailure(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
-	binary := filepath.Join(t.TempDir(), "fake-codex")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'codex-cli 9.9.9\\n'\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	binary := fakeCodexBinary(t, "codex-cli 9.9.9\n")
 	err := Run(t.Context(), Options{Config: config.Config{
 		StateDir: stateDir, WorkspaceRoots: []string{t.TempDir()}, SandboxCap: "read-only",
 		CodexBinary: binary, CodexVersion: config.DefaultCodexVersion,
+		ReconnectMin: config.Duration(time.Second), ReconnectMax: config.Duration(30 * time.Second),
 	}, Credentials: pairing.Credentials{
 		Version: 1, DeviceID: "11111111-1111-4111-8111-111111111111", RefreshCredential: "test",
 	}})

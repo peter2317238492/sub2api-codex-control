@@ -12,8 +12,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/appserver"
+	"github.com/peter2317238492/sub2api-codex-control/connector/internal/policy"
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/protocol"
+	"github.com/peter2317238492/sub2api-codex-control/connector/internal/wspath"
 )
+
+var pathMapper = wspath.NewMapper()
 
 const (
 	maxApprovalRequestBytes = 256 << 10
@@ -399,7 +403,11 @@ func projectApprovalDetails(kind string, details, permissions map[string]any) (m
 			if !ok || text == "" || utf8.RuneCountInString(text) > 4_096 {
 				return nil, fmt.Errorf("approval path field %s is invalid", field)
 			}
-			projected[field] = text
+			remote, err := pathMapper.Remote(text)
+			if err != nil {
+				return nil, fmt.Errorf("project approval path field %s: %w", field, err)
+			}
+			projected[field] = remote
 		}
 	}
 	if reason := extractString(details, "reason"); reason != "" {
@@ -459,9 +467,20 @@ func projectApprovalDetails(kind string, details, permissions map[string]any) (m
 					if !ok || target == "" || utf8.RuneCountInString(target) > 4_096 {
 						return nil, errors.New("file change move path is invalid")
 					}
-					projectedChange["move_path"] = target
+					remoteTarget, err := pathMapper.Remote(target)
+					if err != nil {
+						return nil, fmt.Errorf("project file change move path: %w", err)
+					}
+					projectedChange["move_path"] = remoteTarget
 				}
-				projectedChanges[path] = projectedChange
+				// The map is keyed by the changed file, so the key is a path and
+				// projects like every other one. projectedChanges is a fresh map,
+				// so rewriting the key cannot disturb what app-server receives.
+				remotePath, err := pathMapper.Remote(path)
+				if err != nil {
+					return nil, fmt.Errorf("project file change path: %w", err)
+				}
+				projectedChanges[remotePath] = projectedChange
 			}
 			// Raw contents and unified diffs stay local. Paths and operation kinds
 			// are the minimum context required for an informed remote decision.
@@ -471,7 +490,13 @@ func projectApprovalDetails(kind string, details, permissions map[string]any) (m
 		if permissions == nil {
 			return nil, errors.New("validated permissions are unavailable")
 		}
-		projected["permissions"] = permissions
+		// The validated profile is the instance handed back to app-server, so it
+		// is projected into a deep copy rather than in place.
+		remotePermissions, err := policy.RemotePermissions(permissions)
+		if err != nil {
+			return nil, err
+		}
+		projected["permissions"] = remotePermissions
 	default:
 		return nil, errors.New("unknown approval kind")
 	}
