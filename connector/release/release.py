@@ -722,6 +722,18 @@ def go_version(go_binary: str) -> str:
     return match.group(1)
 
 
+def remove_work_tree(work: Path) -> None:
+    # The release-mode module cache is written read-only by the Go toolchain,
+    # so owner write permission must be restored on the way down; symlinks are
+    # left untouched because chmod would follow them out of the work tree.
+    for parent, directories, files in os.walk(work, topdown=True):
+        for name in directories + files:
+            path = os.path.join(parent, name)
+            if not os.path.islink(path):
+                os.chmod(path, 0o700)
+    shutil.rmtree(work)
+
+
 def build_environment(
     *,
     goos: str | None,
@@ -1018,7 +1030,7 @@ def prepare(args: argparse.Namespace) -> None:
         "targets": records,
     }
     write_json(output / WORK_STATE, state)
-    shutil.rmtree(work)
+    remove_work_tree(work)
     print(
         f"prepared {len(records)} reproducible {mode} Connector artifacts in {output}"
     )
