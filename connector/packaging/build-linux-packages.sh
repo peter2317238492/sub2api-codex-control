@@ -107,12 +107,12 @@ spec="$rpm_top/SPECS/sub2api-codex-connector.spec"
 cat >"$spec" <<EOF
 %global debug_package %{nil}
 %global _build_id_links none
+%global __os_install_post %{nil}
 Name: sub2api-codex-connector
 Version: $version
 Release: 1
 Summary: Outbound-only user Connector for Sub2API Codex Control
 License: Apache-2.0
-BuildArch: $rpm_arch
 Requires: systemd
 
 %description

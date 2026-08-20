@@ -274,7 +274,7 @@ def test_device_websocket_replay_ack_and_gap_close(
                 0,
                 "hello",
                 {
-                    "connector_version": "0.1.1",
+                    "connector_version": "0.1.3",
                     "codex_version": "0.147.0",
                     "schema_digest": SCHEMA_DIGEST,
                     "public_key": public_key,
@@ -404,7 +404,7 @@ def test_device_websocket_replay_ack_and_gap_close(
                 3,
                 "hello",
                 {
-                    "connector_version": "0.1.1",
+                    "connector_version": "0.1.3",
                     "codex_version": "0.147.0",
                     "schema_digest": SCHEMA_DIGEST,
                     "public_key": public_key,
@@ -502,7 +502,7 @@ def test_device_websocket_rejects_hello_contract_drift(
         headers={"Authorization": f"Bearer {token.json()['access_token']}"},
     ) as socket:
         hello_payload: dict[str, object] = {
-            "connector_version": "0.1.1",
+            "connector_version": "0.1.3",
             "codex_version": "0.147.0",
             "schema_digest": SCHEMA_DIGEST,
             "public_key": public_key,

@@ -16,7 +16,7 @@ case "$format" in deb|rpm|pkg) ;; *) fail "unsupported package format" ;; esac
 case "$arch" in amd64|arm64) ;; *) fail "unsupported architecture" ;; esac
 printf '%s\n' "$version" | awk -F. '
   NF != 3 { exit 1 }
-  { for (index = 1; index <= NF; index++) if ($index !~ /^[0-9]+$/) exit 1 }
+  { for (i = 1; i <= NF; i++) if ($i !~ /^[0-9]+$/) exit 1 }
 ' || fail "version must be an exact three-component semantic version"
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -133,11 +133,11 @@ EOF
       fail "RPM postinstall script differs from release policy"
     [ "$(rpm -qp --qf '%{PREUN}' "$package")" = "$(cat "$temporary/expected-rpm-preun")" ] || \
       fail "RPM preuninstall script differs from release policy"
+    # The aggregate *SCRIPTS tags cover every trigger type and, unlike the
+    # per-type aliases, are understood by rpm 4.18 on the release runners.
     for tag in \
-      POSTUN PRETRANS POSTTRANS VERIFYSCRIPT TRIGGERPREIN TRIGGERSCRIPTS \
-      FILETRIGGERSCRIPTS TRANSFILETRIGGERSCRIPTS \
-      FILETRIGGERIN FILETRIGGERUN FILETRIGGERPOSTUN \
-      TRANSFILETRIGGERIN TRANSFILETRIGGERUN TRANSFILETRIGGERPOSTUN
+      POSTUN PRETRANS POSTTRANS VERIFYSCRIPT TRIGGERSCRIPTS \
+      FILETRIGGERSCRIPTS TRANSFILETRIGGERSCRIPTS
     do
       value=$(rpm -qp --qf "%{$tag}" "$package")
       [ -z "$value" ] || [ "$value" = '(none)' ] || fail "RPM contains an unapproved $tag script"
@@ -150,7 +150,15 @@ EOF
     printf '%s\n' /bin/sh systemd | LC_ALL=C sort > "$temporary/expected-rpm-requires"
     cmp -s "$temporary/expected-rpm-requires" "$temporary/rpm-requires" || \
       fail "RPM dependency header is not the exact admitted set"
-    if rpm -qp --qf '[%{FILEFLAGS}\n]' "$package" | awk 'NF > 0 && $0 != "0" { exit 1 }'; then
+    # rpm marks %_docdir payloads as documentation (flag 2) on its own; that
+    # marking is accepted only there, while ghost/config/missingok and every
+    # other flag stay rejected everywhere.
+    if rpm -qp --qf '[%{FILEFLAGS}\t%{FILENAMES}\n]' "$package" | awk -F '\t' '
+      NF == 0 { next }
+      $1 == "0" { next }
+      $1 == "2" && index($2, "/usr/share/doc/") == 1 { next }
+      { exit 1 }
+    '; then
       :
     else
       fail "RPM contains ghost/config/missingok or other flagged file entries"
@@ -375,8 +383,8 @@ fi
 
 awk -F/ '{
   path = ""
-  for (index = 1; index < NF; index++) {
-    path = (path == "" ? $index : path "/" $index)
+  for (i = 1; i < NF; i++) {
+    path = (path == "" ? $i : path "/" $i)
     print path
   }
 }' "$expected_payload" | LC_ALL=C sort -u > "$temporary/expected-payload-directories"
