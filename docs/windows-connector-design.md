@@ -111,7 +111,7 @@ SID, resolved at run time — never hard-coded.
 The npm install exposes `codex` and `codex.cmd` shims, but the real executable is
 
 ```
-C:\Users\peter\AppData\Roaming\npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe
+C:\Users\example\AppData\Roaming\npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe
 ```
 
 `codex_binary` must point at that `.exe`. A `.cmd`/`.bat` shim is rejected: it
@@ -209,7 +209,7 @@ at exactly two boundaries.
 ### 4.1 Mapping (Git-Bash form)
 
 ```
-C:\Users\peter\code\app   <->  /c/Users/peter/code/app
+C:\Users\example\code\app   <->  /c/Users/example/code/app
 \\nas\share\proj          <->  /unc/nas/share/proj
 ```
 
@@ -285,7 +285,7 @@ Outbound (app-server → server), local becomes remote POSIX:
 ### 4.4 One upstream validation must be generalised
 
 `pairing.Client.initialize` validates roots with `filepath.IsAbs` and
-`filepath.Clean`. On Windows `filepath.IsAbs("/c/Users/peter")` is **false**, so
+`filepath.Clean`. On Windows `filepath.IsAbs("/c/Users/example")` is **false**, so
 projected roots would be rejected locally before ever reaching the network.
 Replace that check with the POSIX rules already used by
 `internal/protocol/protocol.go` for Hello — `strings.HasPrefix(root, "/")`, not
