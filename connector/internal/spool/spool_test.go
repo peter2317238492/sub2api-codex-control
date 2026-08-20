@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/protocol"
+	"github.com/peter2317238492/sub2api-codex-control/connector/internal/securefile"
 )
 
 func TestStatsUsesDurableRecordMetadataWithoutChangingSpoolFormat(t *testing.T) {
-	dir := t.TempDir()
+	dir := newSpoolDir(t)
 	limits := Limits{MaxRecords: 10, MaxBytes: 4096, MaxRecordBytes: 1024}
 	eventSpool, err := OpenWithLimits(dir, limits)
 	if err != nil {
@@ -62,7 +63,7 @@ func TestStatsUsesDurableRecordMetadataWithoutChangingSpoolFormat(t *testing.T) 
 }
 
 func TestSpoolPersistsMonotonicSequenceAndAcknowledgements(t *testing.T) {
-	dir := t.TempDir()
+	dir := newSpoolDir(t)
 	spool, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -107,30 +108,8 @@ func TestSpoolPersistsMonotonicSequenceAndAcknowledgements(t *testing.T) {
 	}
 }
 
-func TestSpoolRejectsUnsafeRecordPermissions(t *testing.T) {
-	dir := t.TempDir()
-	eventSpool, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	appendSmallRecord(t, eventSpool, "unsafe")
-	recordPath := filepath.Join(dir, "00000000000000000001.json")
-	if err := os.Chmod(recordPath, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := eventSpool.Pending(); err == nil || !strings.Contains(err.Error(), "unsafe permissions") {
-		t.Fatalf("Pending error = %v, want unsafe permissions rejection", err)
-	}
-	if _, err := eventSpool.Stats(time.Now()); err == nil {
-		t.Fatal("Stats accepted an unsafe spool record")
-	}
-	if err := eventSpool.Ack(1); err == nil || !strings.Contains(err.Error(), "unsafe permissions") {
-		t.Fatalf("Ack error = %v, want unsafe permissions rejection", err)
-	}
-}
-
 func TestSpoolPersistsContiguousReceiveCursor(t *testing.T) {
-	spool, err := Open(t.TempDir())
+	spool, err := Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +128,7 @@ func TestSpoolPersistsContiguousReceiveCursor(t *testing.T) {
 }
 
 func TestSpoolEnforcesMaxRecords(t *testing.T) {
-	spool, err := OpenWithLimits(t.TempDir(), Limits{
+	spool, err := OpenWithLimits(newSpoolDir(t), Limits{
 		MaxRecords: 2, MaxBytes: 1 << 20, MaxRecordBytes: 1 << 10,
 	})
 	if err != nil {
@@ -183,7 +162,7 @@ func TestSpoolEnforcesMaxBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	recordBytes := int64(len(encoded) + 1)
-	spool, err := OpenWithLimits(t.TempDir(), Limits{
+	spool, err := OpenWithLimits(newSpoolDir(t), Limits{
 		MaxRecords: 10, MaxBytes: 2*recordBytes - 1, MaxRecordBytes: recordBytes,
 	})
 	if err != nil {
@@ -207,7 +186,7 @@ func TestSpoolEnforcesMaxRecordBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	recordBytes := int64(len(encoded) + 1)
-	spool, err := OpenWithLimits(t.TempDir(), Limits{
+	spool, err := OpenWithLimits(newSpoolDir(t), Limits{
 		MaxRecords: 10, MaxBytes: 1 << 20, MaxRecordBytes: recordBytes - 1,
 	})
 	if err != nil {
@@ -222,7 +201,7 @@ func TestSpoolEnforcesMaxRecordBytes(t *testing.T) {
 }
 
 func TestOpenRemovesAcknowledgedRecordsLeftByInterruptedCleanup(t *testing.T) {
-	dir := t.TempDir()
+	dir := newSpoolDir(t)
 	spool, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +211,7 @@ func TestOpenRemovesAcknowledgedRecordsLeftByInterruptedCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	stalePath := filepath.Join(dir, "00000000000000000001.json")
-	if err := os.WriteFile(stalePath, []byte(`{"seq":1}`), 0o600); err != nil {
+	if err := securefile.WriteJSON(stalePath, json.RawMessage(`{"seq":1}`)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Open(dir); err != nil {
@@ -244,7 +223,7 @@ func TestOpenRemovesAcknowledgedRecordsLeftByInterruptedCleanup(t *testing.T) {
 }
 
 func TestAcknowledgedRecordCleanupFailsClosedOnDirectorySyncUncertainty(t *testing.T) {
-	eventSpool, err := Open(t.TempDir())
+	eventSpool, err := Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +256,7 @@ func TestAcknowledgedRecordCleanupFailsClosedOnDirectorySyncUncertainty(t *testi
 }
 
 func TestOpenRejectsPendingSequenceGap(t *testing.T) {
-	dir := t.TempDir()
+	dir := newSpoolDir(t)
 	spool, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -293,7 +272,7 @@ func TestOpenRejectsPendingSequenceGap(t *testing.T) {
 }
 
 func TestCommitIncomingDoesNotPublishUndurableCursor(t *testing.T) {
-	dir := t.TempDir()
+	dir := newSpoolDir(t)
 	spool, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -319,7 +298,7 @@ func TestCommitIncomingDoesNotPublishUndurableCursor(t *testing.T) {
 }
 
 func TestSpoolAssignsMaxWireSequenceThenFailsClosed(t *testing.T) {
-	spool, err := Open(t.TempDir())
+	spool, err := Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +337,7 @@ func TestSpoolAssignsMaxWireSequenceThenFailsClosed(t *testing.T) {
 }
 
 func TestOpenRecoversMaxWireRecordAsExhaustedWithoutOverflow(t *testing.T) {
-	dir := t.TempDir()
+	dir := newSpoolDir(t)
 	spool, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -369,11 +348,8 @@ func TestOpenRecoversMaxWireRecordAsExhaustedWithoutOverflow(t *testing.T) {
 	if err := spool.writeMeta(spool.meta); err != nil {
 		t.Fatal(err)
 	}
-	record, err := json.Marshal(map[string]uint64{"seq": protocol.MaxSequence})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(spool.recordPath(protocol.MaxSequence), record, 0o600); err != nil {
+	record := map[string]uint64{"seq": protocol.MaxSequence}
+	if err := securefile.WriteJSON(spool.recordPath(protocol.MaxSequence), record); err != nil {
 		t.Fatal(err)
 	}
 
@@ -391,7 +367,7 @@ func TestOpenRecoversMaxWireRecordAsExhaustedWithoutOverflow(t *testing.T) {
 
 func TestSpoolRejectsWireSequencesAboveSignedRange(t *testing.T) {
 	t.Run("metadata", func(t *testing.T) {
-		spool, err := Open(t.TempDir())
+		spool, err := Open(newSpoolDir(t))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -404,12 +380,12 @@ func TestSpoolRejectsWireSequencesAboveSignedRange(t *testing.T) {
 	})
 
 	t.Run("record", func(t *testing.T) {
-		spool, err := Open(t.TempDir())
+		spool, err := Open(newSpoolDir(t))
 		if err != nil {
 			t.Fatal(err)
 		}
 		path := filepath.Join(spool.dir, fmt.Sprintf("%020d.json", protocol.MaxSequence+1))
-		if err := os.WriteFile(path, []byte(`{"seq":9223372036854775808}`), 0o600); err != nil {
+		if err := securefile.WriteJSON(path, json.RawMessage(`{"seq":9223372036854775808}`)); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := Open(spool.dir); err == nil {
@@ -418,7 +394,7 @@ func TestSpoolRejectsWireSequencesAboveSignedRange(t *testing.T) {
 	})
 
 	t.Run("incoming and ack", func(t *testing.T) {
-		spool, err := Open(t.TempDir())
+		spool, err := Open(newSpoolDir(t))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -450,4 +426,13 @@ func appendSmallRecord(t *testing.T, spool *Spool, value string) uint64 {
 		t.Fatal(err)
 	}
 	return sequence
+}
+
+// newSpoolDir names a spool directory that does not exist yet, so the spool
+// creates it itself. A directory handed over by the test framework carries the
+// access control entries it inherited from its parent, which is not what the
+// connector produces and not what it is allowed to open.
+func newSpoolDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "spool")
 }

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/peter2317238492/sub2api-codex-control/connector/internal/securefile"
 )
 
 const (
@@ -16,8 +18,21 @@ const (
 	managedDeviceB = "22222222-2222-4222-8222-222222222222"
 )
 
+// privateStateFile returns a path inside a directory that securefile created,
+// so state written there carries the protected access control list the
+// connector requires. A directory that already exists — t.TempDir() included
+// — inherits foreign access control entries on Windows.
+func privateStateFile(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := securefile.EnsureDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, name)
+}
+
 func TestManagedThreadsAreBoundToOneDeviceIdentity(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "managed-threads.json")
+	path := privateStateFile(t, "managed-threads.json")
 	threads, err := OpenThreads(path, managedDeviceA)
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +71,7 @@ func TestManagedThreadsAreBoundToOneDeviceIdentity(t *testing.T) {
 }
 
 func TestUnscopedManagedThreadsFailClosedDuringUpgrade(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "managed-threads.json")
+	path := privateStateFile(t, "managed-threads.json")
 	legacy := threadDisk{
 		Version: 1,
 		Threads: map[string]Thread{
@@ -65,11 +80,7 @@ func TestUnscopedManagedThreadsFailClosedDuringUpgrade(t *testing.T) {
 			},
 		},
 	}
-	data, err := json.Marshal(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	if err := securefile.WriteJSON(path, legacy); err != nil {
 		t.Fatal(err)
 	}
 
@@ -96,8 +107,8 @@ func TestManagedThreadsRequireValidDeviceIdentity(t *testing.T) {
 }
 
 func TestOpenThreadsRejectsOversizedStateBeforeDecode(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "managed-threads.json")
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	path := privateStateFile(t, "managed-threads.json")
+	file, err := securefile.CreatePrivateFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +147,7 @@ func TestManagedThreadReservationsProtectCapacityBeforeDispatch(t *testing.T) {
 }
 
 func TestAddReservedConsumesReservation(t *testing.T) {
-	threads, err := OpenThreads(filepath.Join(t.TempDir(), "threads.json"), managedDeviceA)
+	threads, err := OpenThreads(privateStateFile(t, "threads.json"), managedDeviceA)
 	if err != nil {
 		t.Fatal(err)
 	}

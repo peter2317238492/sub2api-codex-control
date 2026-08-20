@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -74,25 +72,15 @@ func TestChildStderrCaptureIsSafeForConcurrentWrites(t *testing.T) {
 	}
 }
 
+// childStderrDiagnostic stands in for a Codex diagnostic that carries a
+// provider credential, which must never reach the Connector log.
+const childStderrDiagnostic = "Authorization: Bearer sk-provider-secret\n"
+
 func TestStartDoesNotForwardAppServerStderrContents(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping subprocess test in short mode")
 	}
-	script := filepath.Join(t.TempDir(), "fake-codex")
-	contents := `#!/bin/sh
-if test "$1" = "--version"; then
-  printf '%s\n' 'codex-cli 0.147.0'
-  exit 0
-fi
-IFS= read -r initialize || exit 40
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"codexHome":"/tmp/fake-codex-home","platformFamily":"unix","platformOs":"linux","userAgent":"fake"}}'
-IFS= read -r initialized || exit 41
-printf '%s\n' 'Authorization: Bearer sk-provider-secret' >&2
-exit 23
-`
-	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	script := fakeCodexStderrLeak(t, childStderrDiagnostic)
 	var output bytes.Buffer
 	ctx, cancel := context.WithCancel(t.Context())
 	client, err := Start(ctx, StartOptions{
@@ -110,7 +98,7 @@ exit 23
 	if strings.Contains(report, "provider-secret") || strings.Contains(report, "Authorization") {
 		t.Fatalf("child stderr leaked through Start: %q", report)
 	}
-	want := fmt.Sprintf("codex app-server stderr suppressed (bytes=%d)\n", len("Authorization: Bearer sk-provider-secret\n"))
+	want := fmt.Sprintf("codex app-server stderr suppressed (bytes=%d)\n", len(childStderrDiagnostic))
 	if report != want {
 		t.Fatalf("stderr report = %q, want %q", report, want)
 	}

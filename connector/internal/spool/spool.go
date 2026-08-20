@@ -70,15 +70,7 @@ func OpenWithLimits(dir string, limits Limits) (*Spool, error) {
 	}
 	s := &Spool{dir: dir, metaPath: filepath.Join(dir, "meta.json"), limits: limits}
 	s.writeMeta = func(value meta) error { return securefile.WriteJSON(s.metaPath, value) }
-	s.syncDirectory = func() error {
-		directory, err := os.Open(dir)
-		if err != nil {
-			return err
-		}
-		syncErr := directory.Sync()
-		closeErr := directory.Close()
-		return errors.Join(syncErr, closeErr)
-	}
+	s.syncDirectory = func() error { return securefile.SyncDirectory(dir) }
 	err := securefile.ReadJSON(s.metaPath, &s.meta)
 	if errors.Is(err, os.ErrNotExist) {
 		s.meta = meta{Version: 1, NextSequence: 1}

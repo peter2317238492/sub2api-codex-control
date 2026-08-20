@@ -253,7 +253,8 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 			Hello: protocol.HelloPayload{
 				ConnectorVersion: config.DefaultConnectorVersion, CodexVersion: options.Config.CodexVersion,
 				SchemaDigest: options.Config.SchemaDigest, PublicKey: options.Identity.PublicKeyString(),
-				Capabilities: policy.AllowedMethods(), WorkspaceRoots: append([]string(nil), options.Config.WorkspaceRoots...),
+				Capabilities:   policy.AllowedMethods(),
+				WorkspaceRoots: append([]string(nil), options.Config.RemoteWorkspaceRoots...),
 			},
 			Handler:             handleEnvelope,
 			StaleCommandHandler: handleEnvelope,

@@ -57,7 +57,7 @@ func (source fixedTokenSource) Token(context.Context) (auth.DeviceToken, error) 
 func (fixedTokenSource) Invalidate() {}
 
 func TestEmitDurablyAssignsEnvelopeSequenceAndAck(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestEmitDurablyAssignsEnvelopeSequenceAndAck(t *testing.T) {
 }
 
 func TestEmitForEpochDurablyPreservesRecoveredCommandEpoch(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestEmitForEpochDurablyPreservesRecoveredCommandEpoch(t *testing.T) {
 }
 
 func TestTerminalAckSpoolSurvivesProcessCrashWithOriginalEpoch(t *testing.T) {
-	dir := t.TempDir()
+	dir := newSpoolDir(t)
 	command := exec.Command(os.Args[0], "-test.run=^TestTerminalAckSpoolCrashHelper$")
 	command.Env = append(
 		os.Environ(),
@@ -164,7 +164,12 @@ func TestTerminalAckSpoolSurvivesProcessCrashWithOriginalEpoch(t *testing.T) {
 	go func() {
 		line, readErr := bufio.NewReader(stdout).ReadString('\n')
 		if readErr == nil && line != "ack-spooled\n" {
-			readErr = errors.New("terminal acknowledgement helper returned an invalid readiness message")
+			// The helper is a test binary, so its own failure report shares this
+			// stream. Quote the line or the real cause stays invisible.
+			readErr = fmt.Errorf(
+				"terminal acknowledgement helper returned an invalid readiness message %q",
+				strings.TrimRight(line, "\r\n"),
+			)
 		}
 		ready <- readErr
 	}()
@@ -248,7 +253,7 @@ func TestTerminalAckSpoolCrashHelper(t *testing.T) {
 }
 
 func TestEmitRejectsOversizedPayloadBeforeSpooling(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +273,7 @@ func TestEmitRejectsOversizedPayloadBeforeSpooling(t *testing.T) {
 }
 
 func TestEmitRejectsInvalidDiscriminatorPayloadBeforeSpooling(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +313,7 @@ func TestReconnectPolicyBacksOffAndResetsAfterStableConnection(t *testing.T) {
 }
 
 func TestRunOpensCircuitAfterBoundedRapidNetworkFailures(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +338,7 @@ func TestRunOpensCircuitAfterBoundedRapidNetworkFailures(t *testing.T) {
 }
 
 func TestRunReturnsFatalHandlerFailureWithoutReconnect(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +388,7 @@ func TestRunReturnsFatalHandlerFailureWithoutReconnect(t *testing.T) {
 }
 
 func TestInboundPayloadIsValidatedBeforeHandler(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +435,7 @@ func TestInboundPayloadIsValidatedBeforeHandler(t *testing.T) {
 }
 
 func TestHandshakeHelloIsFirstFrameWithSequenceZero(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +528,7 @@ func TestHandshakeRejectsMismatchedHelloAcknowledgement(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			eventSpool, err := spool.Open(t.TempDir())
+			eventSpool, err := spool.Open(newSpoolDir(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -571,7 +576,7 @@ func TestHandshakeRejectsMismatchedHelloAcknowledgement(t *testing.T) {
 }
 
 func TestRunReportsFixedReconnectReasonWithoutRawError(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +622,7 @@ func TestInboundCursorCommitsOnlyAfterHandlerSuccess(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := newSpoolDir(t)
 			eventSpool, err := spool.Open(dir)
 			if err != nil {
 				t.Fatal(err)
@@ -692,7 +697,7 @@ func TestInboundCursorCommitsOnlyAfterHandlerSuccess(t *testing.T) {
 }
 
 func TestCrossEpochReplaySkipsStaleCommandAndContinuesInSequence(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,7 +744,7 @@ func TestCrossEpochReplaySkipsStaleCommandAndContinuesInSequence(t *testing.T) {
 }
 
 func TestCrossEpochCommandCanReachOnlyTheRecoveryHandler(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -786,7 +791,7 @@ func TestCrossEpochCommandCanReachOnlyTheRecoveryHandler(t *testing.T) {
 }
 
 func TestConnectionExitWaitsForInFlightHandler(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -847,7 +852,7 @@ func TestConnectionExitWaitsForInFlightHandler(t *testing.T) {
 }
 
 func TestSocketFailureCancelsHandlerBeforeJoiningIt(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -894,7 +899,7 @@ func TestSocketFailureCancelsHandlerBeforeJoiningIt(t *testing.T) {
 }
 
 func TestScheduledTokenExpiryIsRetryableWhenWriteLoopWins(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -918,7 +923,7 @@ func TestScheduledTokenExpiryIsRetryableWhenWriteLoopWins(t *testing.T) {
 }
 
 func TestTokenInsideRefreshWindowIsRejectedBeforeDial(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -975,7 +980,7 @@ func (r *approvalBlockingRouter) Call(ctx context.Context, method string, _ json
 }
 
 func TestApprovalDecisionBypassesInterleavedHeartbeatAckWithoutAdvancingCursorOutOfOrder(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1090,7 +1095,7 @@ func TestApprovalDecisionBypassesInterleavedHeartbeatAckWithoutAdvancingCursorOu
 }
 
 func TestApprovalBypassIsSerialAndCommitsInSequenceOrder(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1157,7 +1162,7 @@ func TestApprovalBypassIsSerialAndCommitsInSequenceOrder(t *testing.T) {
 }
 
 func TestApprovalDoesNotCrossTokenRefreshBarrier(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1222,7 +1227,7 @@ func TestApprovalDoesNotCrossTokenRefreshBarrier(t *testing.T) {
 }
 
 func TestApprovalBypassBackpressuresAtIncomingFrameLimit(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1283,7 +1288,7 @@ func TestApprovalBypassBackpressuresAtIncomingFrameLimit(t *testing.T) {
 }
 
 func TestFailedBypassClosesConnectionWithoutStartingLaterApproval(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1330,7 +1335,7 @@ func TestFailedBypassClosesConnectionWithoutStartingLaterApproval(t *testing.T) 
 }
 
 func TestUncommittedBypassIsReplayedAfterReconnect(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1401,7 +1406,7 @@ func TestUncommittedBypassIsReplayedAfterReconnect(t *testing.T) {
 }
 
 func TestBackloggedApprovalBecomesSameSequenceErrorTombstone(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1441,7 +1446,7 @@ func TestBackloggedApprovalBecomesSameSequenceErrorTombstone(t *testing.T) {
 }
 
 func TestBackloggedHeartbeatsBecomeSameSequenceTombstones(t *testing.T) {
-	eventSpool, err := spool.Open(t.TempDir())
+	eventSpool, err := spool.Open(newSpoolDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1470,6 +1475,14 @@ func TestBackloggedHeartbeatsBecomeSameSequenceTombstones(t *testing.T) {
 			t.Fatalf("%s backlog was not tombstoned: %#v", envelopeType, tombstone)
 		}
 	}
+}
+
+// newSpoolDir returns a spool path that does not exist yet, so the spool creates
+// it with a protected access control list instead of adopting the ancestor
+// entries a temporary directory inherits.
+func newSpoolDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "spool")
 }
 
 func newTestClient(t *testing.T, url string, eventSpool *spool.Spool, handler HandlerFunc) *Client {

@@ -16,6 +16,7 @@ import (
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/identity"
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/pairing"
 	connectorRuntime "github.com/peter2317238492/sub2api-codex-control/connector/internal/runtime"
+	"github.com/peter2317238492/sub2api-codex-control/connector/internal/securefile"
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/statelock"
 )
 
@@ -24,14 +25,21 @@ var errStateLockRelease = errors.New("connector state lock release failed")
 func main() {
 	configPath := flag.String("config", "connector.json", "path to the connector JSON config")
 	pairOnly := flag.Bool("pair-only", false, "pair this device and exit")
+	logFile := flag.String("log-file", "", "also write connector diagnostics to this rotating log file inside state_dir")
 	showVersion := flag.Bool("version", false, "print connector version and exit")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(connectorBinaryVersion())
 		return
 	}
-	if err := run(*configPath, *pairOnly); shouldReportTerminalError(err) {
-		reportTerminalError(os.Stderr, err)
+	stderr := newStderrSink(os.Stderr)
+	if err := run(*configPath, *pairOnly, *logFile, stderr); shouldReportTerminalError(err) {
+		reportTerminalError(stderr, err)
+		_ = stderr.Close()
+		os.Exit(1)
+	}
+	if err := stderr.Close(); err != nil {
+		reportTerminalError(stderr, err)
 		os.Exit(1)
 	}
 }
@@ -47,15 +55,34 @@ func joinStateLockReleaseError(runErr, releaseErr error) error {
 	return errors.Join(runErr, fmt.Errorf("%w: %w", errStateLockRelease, releaseErr))
 }
 
+// reportPairingCodePath names only the private file that holds the pairing
+// code, so neither the console nor the log file ever carries the code itself.
+func reportPairingCodePath(destination io.Writer, path string) {
+	_, _ = fmt.Fprintf(destination, "Pairing code written to %s\n", path)
+}
+
 func reportTerminalError(destination io.Writer, err error) {
 	if errors.Is(err, statelock.ErrInUse) {
 		_, _ = fmt.Fprintln(destination, "connector: state directory is already in use")
 		return
 	}
+	// A misconfigured state volume is an install mistake, not a runtime fault,
+	// and under a scheduled task there is no console to investigate it from.
+	// This fixed string names the cause without describing the environment.
+	if errors.Is(err, securefile.ErrUnsupportedVolume) {
+		_, _ = fmt.Fprintln(destination,
+			"connector: state_dir is on a volume that cannot record access control lists; choose an NTFS volume")
+		return
+	}
+	if errors.Is(err, securefile.ErrUntrustedLocation) {
+		_, _ = fmt.Fprintln(destination,
+			"connector: state_dir or a directory above it is reachable by another principal; choose a private location")
+		return
+	}
 	_, _ = fmt.Fprintln(destination, "connector: terminated with an error (details suppressed)")
 }
 
-func run(configPath string, pairOnly bool) (resultErr error) {
+func run(configPath string, pairOnly bool, logPath string, stderr *stderrSink) (resultErr error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -67,6 +94,13 @@ func run(configPath string, pairOnly bool) (resultErr error) {
 	defer func() {
 		resultErr = joinStateLockReleaseError(resultErr, stateLock.Release())
 	}()
+	if logPath != "" {
+		logFile, logErr := connectorRuntime.OpenLogFile(cfg.StateDir, logPath)
+		if logErr != nil {
+			return logErr
+		}
+		stderr.Attach(logFile)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	pairingClient := &pairing.Client{
@@ -90,16 +124,16 @@ func run(configPath string, pairOnly bool) (resultErr error) {
 			return pairing.StartRequest{
 				PublicKey: preparedIdentity.PublicKeyString(), DisplayName: cfg.DisplayName,
 				ConnectorVersion: config.DefaultConnectorVersion, CodexVersion: cfg.CodexVersion,
-				WorkspaceRoots: append([]string(nil), cfg.WorkspaceRoots...),
+				WorkspaceRoots: append([]string(nil), cfg.RemoteWorkspaceRoots...),
 			}, nil
 		}, func(path string) {
-			fmt.Fprintf(os.Stderr, "Pairing code written to %s\n", path)
+			reportPairingCodePath(stderr, path)
 		})
 	if err != nil {
 		return err
 	}
 	if pairOnly {
-		fmt.Fprintf(os.Stderr, "Device paired: %s\n", credentials.DeviceID)
+		_, _ = fmt.Fprintf(stderr, "Device paired: %s\n", credentials.DeviceID)
 		return nil
 	}
 	if deviceIdentity == nil {
@@ -110,6 +144,6 @@ func run(configPath string, pairOnly bool) (resultErr error) {
 	}
 	return connectorRuntime.Run(ctx, connectorRuntime.Options{
 		Config: cfg, Identity: deviceIdentity, Credentials: credentials,
-		TokenSource: tokenSource, Stderr: os.Stderr,
+		TokenSource: tokenSource, Stderr: stderr,
 	})
 }

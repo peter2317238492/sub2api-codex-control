@@ -107,6 +107,14 @@ type response struct {
 
 var ErrVersionMismatch = errors.New("Codex version mismatch")
 
+// verifyBinaryImage rejects a configured binary that the platform would launch
+// through a script shim instead of as an executable image. Only Windows has
+// such shims, so the default is a no-op and process_tree_windows.go installs
+// the platform check. It runs before --version so no shim is ever executed,
+// and it accepts every other shape so the version comparison below stays the
+// reason a mismatched binary is rejected.
+var verifyBinaryImage = func(string) error { return nil }
+
 type pendingCall struct {
 	method string
 	result chan response
@@ -115,6 +123,9 @@ type pendingCall struct {
 func VerifyVersion(ctx context.Context, binary, expected string) error {
 	if binary == "" {
 		binary = "codex"
+	}
+	if err := verifyBinaryImage(binary); err != nil {
+		return err
 	}
 	command := exec.CommandContext(ctx, binary, "--version")
 	command.Stderr = io.Discard
@@ -156,7 +167,7 @@ func Start(parent context.Context, options StartOptions) (*Client, error) {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	command := exec.CommandContext(ctx, options.Binary, "app-server", "--listen", "stdio://")
-	processTree, err := prepareAppServerProcess(command)
+	processTree, err := prepareAppServerProcess(command, options.ShutdownGracePeriod)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("prepare Codex app-server process tree: %w", err)
@@ -204,6 +215,11 @@ func Start(parent context.Context, options StartOptions) (*Client, error) {
 	}
 	go func() {
 		defer close(client.readDone)
+		// Closing the read end once the loop is done releases Wait immediately.
+		// Wait bounds an unclosed I/O pipe by WaitDelay and then reports
+		// ErrWaitDelay, so leaving it open turns every clean shutdown into a
+		// two-second stall and a spurious error.
+		defer stdout.Close()
 		client.readLoop(stdout, validator)
 	}()
 	go func() {
@@ -499,4 +515,17 @@ func marshalResult(value any) (json.RawMessage, *RPCError) {
 		return nil, &RPCError{Code: -32603, Message: "handler returned a non-JSON result"}
 	}
 	return data, nil
+}
+
+// waitDelayFor bounds how long Wait tolerates a child that has exited while a
+// descendant still holds its I/O pipes. It has to outlast the Connector's own
+// graceful window: the delay starts when the child exits, but the Connector
+// only escalates to terminating the process tree once the grace period expires,
+// so an equal delay lets Wait abandon the pipes before the descendants holding
+// them have been killed.
+func waitDelayFor(gracePeriod time.Duration) time.Duration {
+	if gracePeriod <= 0 {
+		gracePeriod = defaultShutdownGracePeriod
+	}
+	return gracePeriod + forcedShutdownWait
 }

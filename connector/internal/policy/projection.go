@@ -291,10 +291,25 @@ func projectThreadIdentityEnvelope(value any) (any, error) {
 	if cwd == "" {
 		cwd = firstString(thread, "cwd")
 	}
-	if cwd != "" {
-		result["cwd"] = truncateRunes(cwd, MaxPathLength)
+	if err := projectCWD(result, cwd); err != nil {
+		return nil, err
 	}
 	return result, nil
+}
+
+// projectCWD replaces a local app-server path with the POSIX form the control
+// plane accepts. A path with no remote form fails the projection instead of
+// travelling to the control plane unchanged.
+func projectCWD(result map[string]any, cwd string) error {
+	if cwd == "" {
+		return nil
+	}
+	remote, err := pathMapper.Remote(cwd)
+	if err != nil {
+		return fmt.Errorf("project thread cwd: %w", err)
+	}
+	result["cwd"] = truncateRunes(remote, MaxPathLength)
+	return nil
 }
 
 func projectThreadRead(value any) (any, error) {
@@ -342,7 +357,9 @@ func projectThreadSummary(thread map[string]any) (map[string]any, error) {
 	result := map[string]any{"id": id}
 	copyBoundedString(result, thread, "name", MaxOpaqueLength, "name", "title")
 	copyBoundedString(result, thread, "preview", maxDisplayText, "preview")
-	copyBoundedString(result, thread, "cwd", MaxPathLength, "cwd")
+	if err := projectCWD(result, firstString(thread, "cwd")); err != nil {
+		return nil, err
+	}
 	if status := normalizeStatus(thread["status"]); status != "" {
 		result["status"] = status
 	}

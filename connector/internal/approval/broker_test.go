@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,7 +57,8 @@ func TestApprovalTimeoutDefaultsToDecline(t *testing.T) {
 	broker := New(5*time.Millisecond, func(context.Context, string, any) error { return nil })
 	broker.SetEpoch("epoch-0123456789abcdef")
 	broker.SetConnected(true)
-	result, rpcErr := broker.Request(t.Context(), "item/fileChange/requestApproval", json.RawMessage(`{"path":"x"}`))
+	request := json.RawMessage(`{"path":` + string(mustJSON(localFixture("/work/x"))) + `}`)
+	result, rpcErr := broker.Request(t.Context(), "item/fileChange/requestApproval", request)
 	if rpcErr != nil {
 		t.Fatal(rpcErr)
 	}
@@ -201,7 +204,9 @@ func TestPermissionApprovalReturnsValidatedTurnGrant(t *testing.T) {
 	resultChannel := make(chan any, 1)
 	errorChannel := make(chan *appserver.RPCError, 1)
 	go func() {
-		result, rpcErr := broker.Request(t.Context(), "item/permissions/requestApproval", json.RawMessage(`{"permissions":{"fileSystem":{"write":["/tmp/project"]}}}`))
+		result, rpcErr := broker.Request(t.Context(), "item/permissions/requestApproval", mustJSON(map[string]any{
+			"permissions": map[string]any{"fileSystem": map[string]any{"write": []any{localFixture("/tmp/project")}}},
+		}))
 		resultChannel <- result
 		errorChannel <- rpcErr
 	}()
@@ -215,6 +220,17 @@ func TestPermissionApprovalReturnsValidatedTurnGrant(t *testing.T) {
 	}
 	if result["scope"] != "turn" || result["strictAutoReview"] != true {
 		t.Fatalf("permission result = %#v", result)
+	}
+	// app-server must receive the local grant, while the spooled request the
+	// browser sees carries the projected one.
+	granted := result["permissions"].(map[string]any)["fileSystem"].(map[string]any)["write"]
+	if fmt.Sprint(granted) != fmt.Sprint([]any{localFixture("/tmp/project")}) {
+		t.Fatalf("app-server grant = %#v, want the local path %q", granted, localFixture("/tmp/project"))
+	}
+	spooled := request.Details["permissions"].(map[string]any)["fileSystem"].(map[string]any)["write"]
+	wantRemote := remoteFixture(t, "/tmp/project")
+	if fmt.Sprint(spooled) != fmt.Sprint([]string{wantRemote}) {
+		t.Fatalf("spooled grant = %#v, want %q", spooled, wantRemote)
 	}
 }
 
@@ -279,14 +295,18 @@ func TestFileChangeApprovalProjectsOperationsWithoutContentsOrDiffs(t *testing.T
 	broker.SetConnected(true)
 	resultChannel := make(chan any, 1)
 	go func() {
-		result, _ := broker.Request(t.Context(), "applyPatchApproval", json.RawMessage(`{
-			"conversationId":"thread-1",
-			"fileChanges":{
-				"/work/add.txt":{"type":"add","content":"ADD SECRET"},
-				"/work/delete.txt":{"type":"delete","content":"DELETE SECRET"},
-				"/work/update.txt":{"type":"update","unified_diff":"DIFF SECRET","move_path":"/work/moved.txt"}
-			}
-		}`))
+		result, _ := broker.Request(t.Context(), "applyPatchApproval", mustJSON(map[string]any{
+			"conversationId": "thread-1",
+			"fileChanges": map[string]any{
+				localFixture("/work/add.txt"):    map[string]any{"type": "add", "content": "ADD SECRET"},
+				localFixture("/work/delete.txt"): map[string]any{"type": "delete", "content": "DELETE SECRET"},
+				localFixture("/work/update.txt"): map[string]any{
+					"type":         "update",
+					"unified_diff": "DIFF SECRET",
+					"move_path":    localFixture("/work/moved.txt"),
+				},
+			},
+		}))
 		resultChannel <- result
 	}()
 	request := <-emitted
@@ -294,9 +314,9 @@ func TestFileChangeApprovalProjectsOperationsWithoutContentsOrDiffs(t *testing.T
 	if !ok || len(changes) != 3 {
 		t.Fatalf("projected file changes = %#v", request.Details["fileChanges"])
 	}
-	update, ok := changes["/work/update.txt"].(map[string]any)
-	if !ok || update["type"] != "update" || update["move_path"] != "/work/moved.txt" {
-		t.Fatalf("projected update = %#v", changes["/work/update.txt"])
+	update, ok := changes[remoteFixture(t, "/work/update.txt")].(map[string]any)
+	if !ok || update["type"] != "update" || update["move_path"] != remoteFixture(t, "/work/moved.txt") {
+		t.Fatalf("projected update = %#v", changes[remoteFixture(t, "/work/update.txt")])
 	}
 	encoded, err := json.Marshal(request.Details)
 	if err != nil {
@@ -335,12 +355,12 @@ func TestFileChangeApprovalRejectsMalformedOperationBeforeEmission(t *testing.T)
 func TestApprovalPayloadBudgetIncludesEnvelope(t *testing.T) {
 	changes := make(map[string]any, 100)
 	for index := range 99 {
-		path := fmt.Sprintf("/work/%02d-%s", index, strings.Repeat("x", 560))
+		path := localFixture(fmt.Sprintf("/work/%02d-%s", index, strings.Repeat("x", 560)))
 		changes[path] = map[string]any{"type": "update", "unified_diff": "local-only"}
 	}
 
 	build := func(padding int) (json.RawMessage, int, int) {
-		finalPath := "/work/final-" + strings.Repeat("y", padding)
+		finalPath := localFixture("/work/final-" + strings.Repeat("y", padding))
 		changes[finalPath] = map[string]any{"type": "update", "content": "local-only"}
 		defer delete(changes, finalPath)
 		details := map[string]any{"conversationId": "thread-1", "fileChanges": changes}
@@ -409,6 +429,73 @@ func assertLegacyDenial(t *testing.T, result any, wantReason string) {
 	if !ok || len(denied) != 1 || denied["rejection"] != wantReason {
 		t.Fatalf("legacy denial details = %#v, want rejection %q", decision["denied"], wantReason)
 	}
+}
+
+func TestApprovalDetailPathsAreSentInTheRemoteForm(t *testing.T) {
+	emitted := make(chan protocol.ApprovalRequestPayload, 1)
+	broker := New(time.Second, func(_ context.Context, _ string, value any) error {
+		emitted <- value.(protocol.ApprovalRequestPayload)
+		return nil
+	})
+	broker.SetEpoch("epoch-0123456789abcdef")
+	broker.SetConnected(true)
+	paths := map[string]string{
+		"cwd":       "/work/project",
+		"grantRoot": "/work",
+		"path":      "/work/project/file.txt",
+	}
+	details := map[string]any{"command": "git status"}
+	for field, posix := range paths {
+		details[field] = localFixture(posix)
+	}
+	go func() {
+		_, _ = broker.Request(t.Context(), "item/commandExecution/requestApproval", mustJSON(details))
+	}()
+	request := <-emitted
+	for field, posix := range paths {
+		want := remoteFixture(t, posix)
+		if got := request.Details[field]; got != want {
+			t.Fatalf("approval %s = %#v, want %q", field, got, want)
+		}
+	}
+}
+
+func TestApprovalPathWithoutARemoteFormIsDeniedBeforeEmission(t *testing.T) {
+	var emitted int
+	broker := New(time.Second, func(context.Context, string, any) error {
+		emitted++
+		return nil
+	})
+	broker.SetEpoch("epoch-0123456789abcdef")
+	broker.SetConnected(true)
+	result, rpcErr := broker.Request(
+		t.Context(),
+		"item/fileChange/requestApproval",
+		mustJSON(map[string]any{"path": "not-a-root"}),
+	)
+	if rpcErr != nil || emitted != 0 {
+		t.Fatalf("unprojectable approval path = %#v, %v, emitted=%d", result, rpcErr, emitted)
+	}
+	if result.(map[string]string)["decision"] != "decline" {
+		t.Fatalf("unprojectable approval path result = %#v", result)
+	}
+}
+
+// localFixture builds an absolute local path on the volume that holds the
+// temporary directory, so a POSIX-shaped fixture names a real Windows volume.
+func localFixture(posix string) string {
+	return filepath.VolumeName(os.TempDir()) + filepath.FromSlash(posix)
+}
+
+// remoteFixture is the projection of localFixture, which is the form the
+// control plane and the PWA are allowed to see.
+func remoteFixture(t *testing.T, posix string) string {
+	t.Helper()
+	remote, err := pathMapper.Remote(localFixture(posix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return remote
 }
 
 func mustJSON(value any) []byte {

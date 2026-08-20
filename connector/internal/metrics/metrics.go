@@ -3,6 +3,7 @@ package metrics
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -28,6 +29,14 @@ const (
 	maxCounterStateBytes    = 1 << 20
 	temporaryPrefix         = ".connector-metrics-"
 	temporarySuffix         = ".tmp"
+	temporaryNameAttempts   = 10_000
+
+	// Windows refuses to replace a file while another process holds it open,
+	// and a collector reads connector.prom for only microseconds at a time.
+	// Waiting out that collision is always better than the alternative, which
+	// is poisoning the exporter for the lifetime of the process.
+	replaceBudget   = 2 * time.Second
+	replaceInterval = 2 * time.Millisecond
 )
 
 type ReconnectReason uint8
@@ -295,7 +304,7 @@ func (e *Exporter) ReconcilePolicyDenials(reason PolicyDenialReason, receiptKeys
 		}
 		next.PolicyDenialReceipts = append(next.PolicyDenialReceipts, receipt)
 	}
-	if err := e.writeState(next); err != nil {
+	if err := e.persistLocked(next); err != nil {
 		e.state = next
 		err = e.poisonLocked(fmt.Errorf("persist connector metrics counters: %w", err))
 		e.mu.Unlock()
@@ -344,7 +353,7 @@ func (e *Exporter) increment(kind counterKind, index, labelCount int, contractFa
 		}
 		next.ContractFailureTimestamps[index] = contractFailureTimestamp
 	}
-	if err := e.writeState(next); err != nil {
+	if err := e.persistLocked(next); err != nil {
 		e.state = next
 		err = e.poisonLocked(fmt.Errorf("persist connector metrics counters: %w", err))
 		e.mu.Unlock()
@@ -354,6 +363,23 @@ func (e *Exporter) increment(kind counterKind, index, labelCount int, contractFa
 	e.mu.Unlock()
 	e.Notify()
 	return nil
+}
+
+// persistLocked commits the counter state before the recording call returns.
+//
+// securefile installs the new counter state with os.Rename, which Windows
+// refuses while any process holds the destination open. The collision is
+// transient and the failed attempt leaves the previous state intact, so it is
+// waited out rather than treated as an uncertain commit.
+func (e *Exporter) persistLocked(state counterState) error {
+	deadline := time.Now().Add(replaceBudget)
+	for {
+		err := e.writeState(state)
+		if err == nil || !replaceCollision(err) || !time.Now().Before(deadline) {
+			return err
+		}
+		time.Sleep(replaceInterval)
+	}
 }
 
 func counterSlice(state *counterState, kind counterKind) []uint64 {
@@ -525,7 +551,7 @@ func writeAtomic(path string, data []byte) error {
 	if err := securefile.EnsureDir(dir); err != nil {
 		return err
 	}
-	temporary, err := os.CreateTemp(dir, temporaryPrefix+"*"+temporarySuffix)
+	temporary, err := createTemporaryFile(dir)
 	if err != nil {
 		return err
 	}
@@ -537,14 +563,14 @@ func writeAtomic(path string, data []byte) error {
 			_ = os.Remove(temporaryPath)
 		}
 	}()
-	if err := temporary.Chmod(0o600); err != nil {
+	if err := restrictTemporaryFile(temporary); err != nil {
 		return err
 	}
 	info, err := securefile.ValidateOwnerAndACL(temporary, false)
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+	if !privateRegularMode(info.Mode()) {
 		return errors.New("temporary metrics file is not private and regular")
 	}
 	if _, err := temporary.Write(data); err != nil {
@@ -556,7 +582,7 @@ func writeAtomic(path string, data []byte) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := replaceFile(temporaryPath, path); err != nil {
 		return err
 	}
 	pathInfo, err := os.Lstat(path)
@@ -564,12 +590,29 @@ func writeAtomic(path string, data []byte) error {
 		return errors.New("metrics textfile path changed during replacement")
 	}
 	committed = true
-	directory, err := os.Open(dir)
-	if err != nil {
-		return err
+	return securefile.SyncDirectory(dir)
+}
+
+// createTemporaryFile replaces os.CreateTemp because a state object must be
+// private from the moment it exists. A Windows file created with a default
+// descriptor inherits whatever its parent volume grants, and the exporter would
+// then correctly refuse the file it had just written.
+func createTemporaryFile(dir string) (*os.File, error) {
+	var suffix [8]byte
+	for range temporaryNameAttempts {
+		if _, err := rand.Read(suffix[:]); err != nil {
+			return nil, fmt.Errorf("name temporary metrics file: %w", err)
+		}
+		path := filepath.Join(dir, temporaryPrefix+hex.EncodeToString(suffix[:])+temporarySuffix)
+		file, err := securefile.CreatePrivateFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+		if err == nil {
+			return file, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
 	}
-	defer directory.Close()
-	return directory.Sync()
+	return nil, errors.New("create temporary metrics file")
 }
 
 func cleanupTemporaryFiles(dir string) error {
@@ -589,7 +632,7 @@ func cleanupTemporaryFiles(dir string) error {
 		if err != nil {
 			return fmt.Errorf("inspect stale metrics temporary file: %w", err)
 		}
-		if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		if !privateRegularMode(info.Mode()) {
 			return errors.New("stale metrics temporary file is not private and regular")
 		}
 		if err := os.Remove(path); err != nil {
@@ -600,11 +643,5 @@ func cleanupTemporaryFiles(dir string) error {
 	if !removed {
 		return nil
 	}
-	directory, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	syncErr := directory.Sync()
-	closeErr := directory.Close()
-	return errors.Join(syncErr, closeErr)
+	return securefile.SyncDirectory(dir)
 }

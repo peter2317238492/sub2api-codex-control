@@ -155,7 +155,12 @@ class FakeAppServer:
             return
         if not stat.S_ISREG(state_stat.st_mode):
             raise RuntimeError("fake state path is not a regular file")
-        if state_stat.st_mode & 0o077:
+        # Windows reports a fixed 0o666/0o444 for every file, so the mode bits
+        # carry no access-control meaning there and this check would always
+        # fail. Access on that platform is governed by the DACL, which the
+        # Connector enforces on its own state; this fixture's file is not
+        # Connector state.
+        if os.name != "nt" and state_stat.st_mode & 0o077:
             raise RuntimeError("fake state file must be owner-only")
         if state_stat.st_size > MAX_STATE_BYTES:
             raise RuntimeError("fake state file exceeds size limit")
@@ -220,12 +225,17 @@ class FakeAppServer:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.state_file)
-            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-            directory = os.open(self.state_file.parent, directory_flags)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            if os.name != "nt":
+                # Windows cannot open a directory as a file descriptor at all,
+                # and NTFS journals directory metadata rather than buffering it,
+                # so the rename above is already durable there. Every other
+                # platform still needs the explicit directory fsync.
+                directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                directory = os.open(self.state_file.parent, directory_flags)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
         finally:
             temporary.unlink(missing_ok=True)
 
