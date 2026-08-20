@@ -295,17 +295,12 @@ func RequirePersistentACLs(path string) error {
 }
 
 // SyncDirectory makes a directory entry durable. Callers outside this package
-// must use it instead of opening the directory and calling Sync, because
-// Windows refuses FlushFileBuffers on a directory handle and the platform
-// implementation knows which single errno that is safe to ignore.
+// must use it instead of opening the directory themselves, because a directory
+// flush on Windows fails unless the handle carries a write right, which
+// os.Open does not request. Only the handle-taking form inside this package
+// may assume the directory was opened correctly.
 func SyncDirectory(path string) error {
 	return syncDirectory(path)
-}
-
-// SyncDirectoryHandle is SyncDirectory for a directory the caller already holds
-// open.
-func SyncDirectoryHandle(dir *os.File) error {
-	return syncDirectoryHandle(dir)
 }
 
 func openPrivateFile(path string) (*os.File, os.FileInfo, error) {

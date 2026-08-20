@@ -45,14 +45,19 @@ const (
 	containerInheritACE = 0x02
 	inheritOnlyACE      = 0x08
 
-	fileAllAccess   = 0x001F01FF
-	fileAppendData  = 0x00000004
-	fileDeleteChild = 0x00000040
-	standardDelete  = 0x00010000
-	readControl     = 0x00020000
-	writeDAC        = 0x00040000
-	writeOwner      = 0x00080000
-	genericRights   = 0xF0000000
+	fileAllAccess = 0x001F01FF
+	// FlushFileBuffers fails with ERROR_ACCESS_DENIED on a read-only directory
+	// handle and succeeds once the handle carries a write right, so a directory
+	// flush has to ask for one. FILE_APPEND_DATA is FILE_ADD_SUBDIRECTORY for a
+	// directory, which is the smallest right that works.
+	directoryFlushAccess = syscall.FILE_LIST_DIRECTORY | readControl | syscall.FILE_APPEND_DATA
+	fileAppendData       = 0x00000004
+	fileDeleteChild      = 0x00000040
+	standardDelete       = 0x00010000
+	readControl          = 0x00020000
+	writeDAC             = 0x00040000
+	writeOwner           = 0x00080000
+	genericRights        = 0xF0000000
 
 	// A trustee holding any of these on an ancestor can delete, rename, or take
 	// control of what sits beneath it. Creating entries is not enough, which is
@@ -532,7 +537,7 @@ func openObjectHandle(path string, access, flags, disposition uint32) (syscall.H
 func openStateDirectory(path string) (*os.File, error) {
 	handle, err := openObjectHandle(
 		path,
-		syscall.FILE_LIST_DIRECTORY|readControl|writeDAC,
+		syscall.FILE_LIST_DIRECTORY|readControl|writeDAC|syscall.FILE_APPEND_DATA,
 		syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT,
 		syscall.OPEN_EXISTING,
 	)
@@ -751,7 +756,7 @@ func verifyPrivateFile(file *os.File, info os.FileInfo) error {
 func syncDirectory(path string) error {
 	handle, err := openObjectHandle(
 		path,
-		syscall.FILE_LIST_DIRECTORY|readControl,
+		directoryFlushAccess,
 		syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT,
 		syscall.OPEN_EXISTING,
 	)
@@ -766,18 +771,13 @@ func syncDirectoryHandle(dir *os.File) error {
 	if dir == nil {
 		return errors.New("state object is not open")
 	}
+	// openStateDirectory asks for the write right this needs; a handle opened
+	// without one fails with ERROR_ACCESS_DENIED rather than flushing.
 	return flushDirectory(syscall.Handle(dir.Fd()))
 }
 
 func flushDirectory(handle syscall.Handle) error {
-	// NTFS refuses FlushFileBuffers on a directory handle with
-	// ERROR_ACCESS_DENIED even for the owner, because it journals directory
-	// metadata instead of buffering it. That errno alone is safe to ignore;
-	// every other failure still means the entry may not be durable.
-	if err := syscall.FlushFileBuffers(handle); err != nil && !errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
-		return err
-	}
-	return nil
+	return syscall.FlushFileBuffers(handle)
 }
 
 func securityCallError(err error) error {

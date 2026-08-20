@@ -102,3 +102,27 @@ func TestFileChangeApprovalProjectsEveryPathItCarries(t *testing.T) {
 		t.Fatalf("file change approval leaked a Windows path: %s", encoded)
 	}
 }
+
+func TestApprovalSummaryNeverCarriesAWindowsPath(t *testing.T) {
+	emitted := make(chan protocol.ApprovalRequestPayload, 1)
+	broker := New(time.Second, func(_ context.Context, _ string, value any) error {
+		emitted <- value.(protocol.ApprovalRequestPayload)
+		return nil
+	})
+	broker.SetEpoch("epoch-0123456789abcdef")
+	broker.SetConnected(true)
+	go func() {
+		// A path-only file-change approval is the shape whose summary falls back
+		// to the path field.
+		_, _ = broker.Request(t.Context(), "item/fileChange/requestApproval", mustJSON(map[string]any{
+			"path": `C:\work\project\file.txt`,
+		}))
+	}()
+	request := <-emitted
+	if strings.ContainsRune(request.Summary, '\\') || strings.Contains(request.Summary, "C:") {
+		t.Fatalf("approval summary leaked a Windows path: %q", request.Summary)
+	}
+	if !strings.Contains(request.Summary, "/c/work/project/file.txt") {
+		t.Fatalf("approval summary = %q, want the projected path", request.Summary)
+	}
+}

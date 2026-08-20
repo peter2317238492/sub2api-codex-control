@@ -238,7 +238,12 @@ func TestValidateStatePathRejectsStreamsAndWildcards(t *testing.T) {
 	}
 }
 
-func TestSyncDirectoryToleratesDirectoryFlushDenial(t *testing.T) {
+// FlushFileBuffers fails with ERROR_ACCESS_DENIED on a directory handle that
+// carries no write right and succeeds on one that does, so a directory flush
+// that "tolerates" that errno is not a flush at all. Both halves are asserted
+// here: the read-only handle must be refused, and the handle this package
+// actually opens must flush.
+func TestDirectoryFlushRequiresAWriteRightAndIsNotSilentlySkipped(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state")
 	if err := EnsureDir(path); err != nil {
 		t.Fatalf("EnsureDir: %v", err)
@@ -253,6 +258,20 @@ func TestSyncDirectoryToleratesDirectoryFlushDenial(t *testing.T) {
 	defer directory.Close()
 	if err := syncDirectoryHandle(directory); err != nil {
 		t.Fatalf("syncDirectoryHandle: %v", err)
+	}
+
+	readOnly, err := openObjectHandle(
+		path,
+		syscall.FILE_LIST_DIRECTORY|readControl,
+		syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT,
+		syscall.OPEN_EXISTING,
+	)
+	if err != nil {
+		t.Fatalf("open read-only directory handle: %v", err)
+	}
+	defer syscall.CloseHandle(readOnly)
+	if err := flushDirectory(readOnly); !errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+		t.Fatalf("flush of a read-only directory handle = %v, want ERROR_ACCESS_DENIED", err)
 	}
 }
 
