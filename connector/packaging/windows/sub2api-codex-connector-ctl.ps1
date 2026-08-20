@@ -197,7 +197,10 @@ function Invoke-Pair {
   if (Test-Path -LiteralPath $codePath) {
     Remove-Item -LiteralPath $codePath -Force
   }
-  $arguments = @('-config', $configuration.Path, '-pair-only')
+  # Start-Process joins ArgumentList with spaces without quoting, so a config
+  # path containing a space would arrive as two arguments. install.ps1 quotes
+  # the same path for the scheduled task; this has to match.
+  $arguments = @("-config", "`"$($configuration.Path)`"", '-pair-only')
   $process = Start-Process -FilePath $configuration.Executable -ArgumentList $arguments -NoNewWindow -PassThru
   try {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)

@@ -33,7 +33,7 @@ release boundary that does apply.
 - **`codex-cli` exactly `0.147.0`.** The Connector runs the configured binary
   with `--version` before every app-server start and requires the exact banner
   `codex-cli 0.147.0`; the pinned app-server schema digest is bound to that
-  release. This host currently has `0.145.0`, so upgrade first:
+  release. Check with `codex --version` and upgrade if it differs:
 
   ```powershell
   npm install -g @openai/codex@0.147.0
@@ -86,10 +86,14 @@ C:\Users\peter heosdee\CodexSandboxUsers:(OI)(CI)(M,DC)
 `CodexSandboxUsers` and a second non-local SID both hold `DC`
 (`FILE_DELETE_CHILD`) on the profile. Any principal in either group can delete
 and replace a direct child of `C:\Users\peter`, including a state directory
-placed there. The Connector's ancestor validation rejects that at startup and
-names the offending ancestor. `DC` on a directory is the exact Windows analogue
-of a POSIX parent that is group-writable without the sticky bit, which upstream
-also rejects.
+placed there. The Connector's ancestor validation rejects that at startup with
+`connector: state_dir or a directory above it is reachable by another
+principal`. It does not name the ancestor: terminal error detail is suppressed
+because an error can carry a workspace path, a token, or a pairing code. Run
+`install.ps1`, which does name the offending directory, or start the Connector
+in a console with `sub2api-codex-connector-ctl.ps1 pair`. `DC` on a directory
+is the exact Windows analogue of a POSIX parent that is group-writable without
+the sticky bit, which upstream also rejects.
 
 The installer refuses `C:\Users` before creating anything. **Do not move
 `state_dir` under `%LOCALAPPDATA%` or `%USERPROFILE%` on this host.**
@@ -117,9 +121,13 @@ authenticated user. The installer therefore severs inheritance on both
 trustees:
 
 ```powershell
+$sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
 icacls <path> /inheritance:r `
-  /grant:r "$user:(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"
+  /grant:r "*${sid}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
 ```
+
+The trustees are SIDs, not names: `SYSTEM` and `Administrators` are translated
+on a localized Windows and would not resolve.
 
 It hardens the install root **before** creating `state` inside it, so the state
 directory never exists, even briefly, with the volume root's inheritable
@@ -337,9 +345,12 @@ device stays paired.
 The installer replaces the executable and the scheduled task and leaves the
 existing configuration untouched.
 
-To upgrade Codex, stop the Connector first, run
-`npm install -g @openai/codex@<version>`, and re-run `install.ps1` so the
-resolved `codex.exe` path in `connector.json` is re-checked. A Codex upgrade
+To upgrade Codex, stop the Connector first and run
+`npm install -g @openai/codex@<version>`. Re-running `install.ps1` does **not**
+update `connector.json`: it never overwrites an existing configuration, and it
+validates the binary it resolves rather than the `codex_binary` already
+recorded. If the upgrade moved the vendored `codex.exe`, edit `codex_binary`
+yourself. A Codex upgrade
 that moves away from the pinned `0.147.0` will make the Connector fail closed
 before app-server starts.
 
