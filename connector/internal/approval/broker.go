@@ -183,9 +183,11 @@ func (b *Broker) Request(ctx context.Context, method string, params json.RawMess
 		ApprovalID: id,
 		CommandID:  extractString(details, "command_id", "commandId", "turnId", "turn_id"),
 		Kind:       kind,
-		Summary:    approvalSummary(kind, details),
-		Details:    projectedDetails,
-		ExpiresAt:  expiresAt,
+		// Built from the projected details, not the raw ones: the summary falls
+		// back to the path field, which is a local path before projection.
+		Summary:   approvalSummary(kind, projectedDetails),
+		Details:   projectedDetails,
+		ExpiresAt: expiresAt,
 	}
 	if request.CommandID == "" || utf8.RuneCountInString(request.CommandID) > 255 {
 		request.CommandID = "appserver:" + id

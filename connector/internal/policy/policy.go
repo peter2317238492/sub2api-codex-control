@@ -661,8 +661,11 @@ func (g *Guard) canonicalExistingPath(path string) (string, error) {
 		return "", fmt.Errorf("stat permission path: %w", err)
 	}
 	for _, root := range g.roots {
-		relative, err := filepath.Rel(root, resolved)
-		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		// filepath.Rel compares Windows components with strings.EqualFold, which
+		// folds U+017F and U+212A onto s and k while NTFS keeps them distinct, so
+		// a fold-equal sibling of a root would pass containment. pathMapper
+		// compares the way the filesystem does.
+		if pathMapper.Contains(root, resolved) {
 			return resolved, nil
 		}
 	}
@@ -682,8 +685,7 @@ func (g *Guard) canonicalProspectivePath(path string) (string, error) {
 				resolved = filepath.Join(resolved, suffix[index])
 			}
 			for _, root := range g.roots {
-				relative, relErr := filepath.Rel(root, resolved)
-				if relErr == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				if pathMapper.Contains(root, resolved) {
 					return resolved, nil
 				}
 			}

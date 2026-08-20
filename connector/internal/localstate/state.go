@@ -299,17 +299,9 @@ func OpenCommandsWithLimits(dir string, limits CommandStoreLimits) (*CommandStor
 		return nil, errors.New("command store limits are invalid")
 	}
 	store := &CommandStore{dir: dir, limits: limits, now: time.Now}
-	store.syncDirectory = func() error {
-		directory, err := os.Open(dir)
-		if err != nil {
-			return err
-		}
-		// Sync through securefile: Windows refuses FlushFileBuffers on a
-		// directory handle, and only that one errno is safe to ignore.
-		syncErr := securefile.SyncDirectoryHandle(directory)
-		closeErr := directory.Close()
-		return errors.Join(syncErr, closeErr)
-	}
+	// securefile opens the directory itself, because a directory flush needs a
+	// write right that os.Open does not ask for.
+	store.syncDirectory = func() error { return securefile.SyncDirectory(dir) }
 	store.mu.Lock()
 	now := store.now().UTC()
 	err := store.recoverExecutingLocked(now)

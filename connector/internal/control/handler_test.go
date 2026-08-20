@@ -85,18 +85,9 @@ func (r crashAfterMutationRouter) Call(ctx context.Context, _ string, _ json.Raw
 	if err := marker.Close(); err != nil {
 		return nil, err
 	}
-	directory, err := os.Open(filepath.Dir(r.markerPath))
-	if err != nil {
-		return nil, err
-	}
-	// Windows refuses FlushFileBuffers on a directory handle, so the marker's
-	// directory entry is made durable through the helper that knows which
-	// single errno that is.
-	if err := securefile.SyncDirectoryHandle(directory); err != nil {
-		_ = directory.Close()
-		return nil, err
-	}
-	if err := directory.Close(); err != nil {
+	// securefile opens the directory itself: a directory flush on Windows needs
+	// a write right that os.Open does not request.
+	if err := securefile.SyncDirectory(filepath.Dir(r.markerPath)); err != nil {
 		return nil, err
 	}
 	if r.block {
