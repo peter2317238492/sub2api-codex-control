@@ -7,14 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,9 +76,15 @@ func TestLivePinnedCodexAppServerAndOrdinaryCLIStayIndependent(t *testing.T) {
 	}
 
 	client.Close()
-	if err := client.Wait(); err != nil {
+	// The job object on Windows and the process group on POSIX are what
+	// guarantee the tree is gone. ErrWaitDelay reports only that the child's
+	// I/O pipes outlived it, which a console-subsystem process outside the job
+	// can cause on Windows, so the guarantee itself is asserted below instead
+	// of the incidental pipe timing.
+	if err := client.Wait(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		t.Fatalf("pinned Codex app-server did not stop cleanly: %v", err)
 	}
+	assertProcessTreeTerminated(t, client.ProcessID())
 	closed = true
 	stopListenerMonitor()
 	if err := <-listenerMonitorDone; err != nil {
@@ -94,22 +97,20 @@ func TestLivePinnedCodexAppServerAndOrdinaryCLIStayIndependent(t *testing.T) {
 	}
 }
 
+// monitorProcessGroupListeners polls the Connector-owned app-server process
+// tree for inbound sockets. The Connector never listens on a local port, and
+// this is the live proof of it; the platform probe that enumerates the tree is
+// supplied by listener_probe_unix_test.go and listener_probe_windows_test.go.
 func monitorProcessGroupListeners(t *testing.T, processGroupID int) (context.CancelFunc, <-chan error) {
 	t.Helper()
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		t.Fatalf("live listener admission is unsupported on %s", runtime.GOOS)
-	}
-	lsof, err := exec.LookPath("lsof")
-	if err != nil {
-		t.Fatal("lsof is required for live app-server listener admission")
-	}
+	probe := newListenerProbe(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			if err := assertNoProcessGroupListeners(ctx, lsof, processGroupID); err != nil {
+			if err := probe(ctx, processGroupID); err != nil {
 				done <- err
 				return
 			}
@@ -122,29 +123,6 @@ func monitorProcessGroupListeners(t *testing.T, processGroupID int) (context.Can
 		}
 	}()
 	return cancel, done
-}
-
-func assertNoProcessGroupListeners(ctx context.Context, lsof string, processGroupID int) error {
-	for _, selector := range [][]string{
-		{"-iTCP", "-sTCP:LISTEN"},
-		{"-iUDP"},
-	} {
-		arguments := []string{"-nP", "-a", "-g", strconv.Itoa(processGroupID)}
-		arguments = append(arguments, selector...)
-		command := exec.CommandContext(ctx, lsof, arguments...)
-		output, err := command.CombinedOutput()
-		if ctx.Err() != nil {
-			return nil
-		}
-		if err == nil {
-			return fmt.Errorf("Connector-owned app-server process group opened an inbound socket")
-		}
-		var exitError *exec.ExitError
-		if !errors.As(err, &exitError) || exitError.ExitCode() != 1 || len(bytes.TrimSpace(output)) != 0 {
-			return fmt.Errorf("cannot verify app-server process-group listeners")
-		}
-	}
-	return nil
 }
 
 func runOrdinaryCLI(t *testing.T, binary string) []byte {
@@ -203,7 +181,9 @@ func TestProtectedCodexStateManifestDetectsRelevantChanges(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte("model = 'pinned'\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(configPath, 0o640); err != nil {
+	// Clearing owner write is the one permission change every platform records:
+	// Windows reports only the read-only attribute through fs.FileMode.
+	if err := os.Chmod(configPath, 0o400); err != nil {
 		t.Fatal(err)
 	}
 	assertProtectedManifestChanged(t, home, baseline, "config mode")

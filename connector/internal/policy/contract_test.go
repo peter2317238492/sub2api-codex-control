@@ -226,7 +226,7 @@ func TestThreadListAlwaysCarriesCanonicalRoots(t *testing.T) {
 		t.Fatalf("thread/list cwd = %#v", got)
 	}
 
-	encoded, err = guard.Enforce("thread/list", json.RawMessage(`{"cwd":`+quote(rootB)+`}`))
+	encoded, err = guard.Enforce("thread/list", json.RawMessage(`{"cwd":`+remoteQuote(t, rootB)+`}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestThreadListAlwaysCarriesCanonicalRoots(t *testing.T) {
 
 	encoded, err = guard.Enforce(
 		"thread/list",
-		json.RawMessage(`{"cwd":[`+quote(rootB)+`,`+quote(rootA)+`,`+quote(rootB)+`]}`),
+		json.RawMessage(`{"cwd":[`+remoteQuote(t, rootB)+`,`+remoteQuote(t, rootA)+`,`+remoteQuote(t, rootB)+`]}`),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestThreadListAlwaysCarriesCanonicalRoots(t *testing.T) {
 	if len(got) != 2 || got[0] != roots[1] || got[1] != roots[0] {
 		t.Fatalf("array thread/list cwd = %#v", got)
 	}
-	for _, raw := range []string{`{"cwd":[]}`, `{"cwd":[` + quote(rootA) + `,7]}`} {
+	for _, raw := range []string{`{"cwd":[]}`, `{"cwd":[` + remoteQuote(t, rootA) + `,7]}`} {
 		if _, err := guard.Enforce("thread/list", json.RawMessage(raw)); err == nil {
 			t.Fatalf("thread/list accepted invalid cwd filter: %s", raw)
 		}

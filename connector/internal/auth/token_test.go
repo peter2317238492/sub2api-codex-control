@@ -20,10 +20,7 @@ import (
 func TestHTTPTokenSourceSignsProofAndCachesToken(t *testing.T) {
 	const deviceID = "11111111-1111-4111-8111-111111111111"
 	const accessToken = "short-lived-token-value"
-	deviceIdentity, err := identity.LoadOrCreate(filepath.Join(t.TempDir(), "identity.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	deviceIdentity := newTestIdentity(t)
 	var requests atomic.Int32
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests.Add(1)
@@ -80,10 +77,7 @@ func TestHTTPTokenSourceErrorsNeverReflectBodyCredentialOrTransportDetails(t *te
 		credential = "refresh-credential-sentinel"
 		bodySecret = "REFLECTED-TOKEN-BODY-SENTINEL"
 	)
-	deviceIdentity, err := identity.LoadOrCreate(filepath.Join(t.TempDir(), "identity.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	deviceIdentity := newTestIdentity(t)
 	tests := []struct {
 		name      string
 		transport roundTripFunc
@@ -124,6 +118,20 @@ func TestHTTPTokenSourceErrorsNeverReflectBodyCredentialOrTransportDetails(t *te
 			}
 		})
 	}
+}
+
+// newTestIdentity creates the device identity through the state-directory
+// helpers rather than in a bare temporary directory. A directory that already
+// exists inherits whatever its parent grants, which on Windows is several
+// foreign principals holding Modify, and the identity file would then be
+// rejected as unsafe.
+func newTestIdentity(t *testing.T) *identity.Identity {
+	t.Helper()
+	deviceIdentity, err := identity.LoadOrCreate(filepath.Join(t.TempDir(), "state", "identity.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return deviceIdentity
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

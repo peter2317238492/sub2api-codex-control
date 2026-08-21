@@ -10,20 +10,53 @@ import (
 	"path/filepath"
 )
 
+// ErrUnsupportedVolume reports a state volume that cannot record access control
+// lists, such as exFAT or FAT32. The owner-only state model is unenforceable
+// there, so it is a terminal configuration error rather than a degraded mode.
+// It is declared for every platform so callers can match on it without a build
+// tag; only the Windows implementation returns it.
+var ErrUnsupportedVolume = errors.New("state volume does not record access control lists")
+
+// ErrUntrustedLocation reports a state object, or a directory above one, that
+// another principal can reach. Callers match on it to tell a fixable placement
+// mistake apart from a runtime fault; the wrapped error still carries the
+// detail, which the Connector deliberately does not print.
+var ErrUntrustedLocation = errors.New("state object is reachable by an untrusted principal")
+
+// untrustedLocation keeps an existing diagnostic byte-for-byte while making the
+// condition matchable with errors.Is. The message is what the Linux and macOS
+// builds already produce, so adopting the sentinel changes nothing an operator
+// or a test observes.
+func untrustedLocation(message string) error {
+	return &untrustedLocationError{message: message}
+}
+
+type untrustedLocationError struct{ message string }
+
+func (e *untrustedLocationError) Error() string { return e.message }
+
+func (e *untrustedLocationError) Unwrap() error { return ErrUntrustedLocation }
+
 // EnsureDir creates a connector state directory that is inaccessible to other users.
 func EnsureDir(path string) error {
 	if path == "" {
 		return errors.New("secure state directory is empty")
+	}
+	if err := validateStatePath(path); err != nil {
+		return err
+	}
+	if err := requirePersistentACLs(path); err != nil {
+		return err
 	}
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("secure state directory must not be a symbolic link")
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return errors.New("inspect secure state directory")
 	}
-	if err := mkdirAllDurable(filepath.Clean(path), 0o700); err != nil {
+	if err := mkdirAllDurable(filepath.Clean(path)); err != nil {
 		return fmt.Errorf("create secure state directory: %w", err)
 	}
-	directory, err := os.Open(path)
+	directory, err := openStateDirectory(path)
 	if err != nil {
 		return fmt.Errorf("open secure state directory: %w", err)
 	}
@@ -39,23 +72,23 @@ func EnsureDir(path string) error {
 	if !info.IsDir() {
 		return errors.New("secure state path is not a directory")
 	}
-	if err := directory.Chmod(0o700); err != nil {
+	if err := restrictDirectory(directory); err != nil {
 		return fmt.Errorf("restrict secure state directory: %w", err)
 	}
 	info, err = ValidateOwnerAndACL(directory, false)
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() || info.Mode().Perm() != 0o700 {
-		return errors.New("state directory is not private")
+	if err := verifyPrivateDirectory(directory, info); err != nil {
+		return err
 	}
-	if err := directory.Sync(); err != nil {
+	if err := syncDirectoryHandle(directory); err != nil {
 		return fmt.Errorf("sync secure state directory: %w", err)
 	}
 	return nil
 }
 
-func mkdirAllDurable(path string, mode os.FileMode) error {
+func mkdirAllDurable(path string) error {
 	info, err := os.Stat(path)
 	if err == nil {
 		if !info.IsDir() {
@@ -71,10 +104,10 @@ func mkdirAllDurable(path string, mode os.FileMode) error {
 	if parent == path {
 		return err
 	}
-	if err := mkdirAllDurable(parent, mode); err != nil {
+	if err := mkdirAllDurable(parent); err != nil {
 		return err
 	}
-	if err := os.Mkdir(path, mode); err != nil {
+	if err := mkdirPrivate(path); err != nil {
 		if !errors.Is(err, os.ErrExist) {
 			return err
 		}
@@ -86,7 +119,7 @@ func mkdirAllDurable(path string, mode os.FileMode) error {
 			return fmt.Errorf("%s is not a directory", path)
 		}
 	}
-	if err := syncDir(parent); err != nil {
+	if err := syncDirectory(parent); err != nil {
 		return fmt.Errorf("sync parent directory %s: %w", parent, err)
 	}
 	return nil
@@ -94,6 +127,9 @@ func mkdirAllDurable(path string, mode os.FileMode) error {
 
 // WriteJSON atomically writes a JSON file with owner-only permissions.
 func WriteJSON(path string, value any) error {
+	if err := validateStatePath(path); err != nil {
+		return err
+	}
 	if err := EnsureDir(filepath.Dir(path)); err != nil {
 		return err
 	}
@@ -102,12 +138,12 @@ func WriteJSON(path string, value any) error {
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
 	data = append(data, '\n')
-	tmp, err := os.OpenFile(path+".tmp", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	tmp, err := createPrivateFile(path+".tmp", os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 	if errors.Is(err, os.ErrExist) {
 		if removeErr := os.Remove(path + ".tmp"); removeErr != nil {
 			return fmt.Errorf("remove stale temporary state file: %w", removeErr)
 		}
-		tmp, err = os.OpenFile(path+".tmp", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		tmp, err = createPrivateFile(path+".tmp", os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 	}
 	if err != nil {
 		return fmt.Errorf("create temporary state file: %w", err)
@@ -127,7 +163,7 @@ func WriteJSON(path string, value any) error {
 	if !info.Mode().IsRegular() {
 		return errors.New("temporary state file is not a regular file")
 	}
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := restrictFile(tmp); err != nil {
 		return fmt.Errorf("restrict temporary state file: %w", err)
 	}
 	if _, err := ValidateOwnerAndACL(tmp, false); err != nil {
@@ -150,7 +186,7 @@ func WriteJSON(path string, value any) error {
 		return errors.New("state file path changed during replacement")
 	}
 	ok = true
-	return syncDir(filepath.Dir(path))
+	return syncDirectory(filepath.Dir(path))
 }
 
 // ReadJSON reads one JSON document and rejects trailing or unknown data through decode.
@@ -237,7 +273,43 @@ func StatPrivateFile(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
+// CreatePrivateFile opens a state file that is private from the moment it
+// exists. Callers outside this package must create state files through it
+// rather than through os.OpenFile, because a Windows object created with a
+// default descriptor inherits whatever its parent volume grants.
+func CreatePrivateFile(path string, flag int) (*os.File, error) {
+	if err := validateStatePath(path); err != nil {
+		return nil, err
+	}
+	if err := requirePersistentACLs(path); err != nil {
+		return nil, err
+	}
+	return createPrivateFile(path, flag)
+}
+
+// RequirePersistentACLs rejects a state path on a volume that cannot record
+// access control lists. The owner-only state model is unenforceable there, and
+// degrading to no checks is not an option.
+func RequirePersistentACLs(path string) error {
+	return requirePersistentACLs(path)
+}
+
+// SyncDirectory makes a directory entry durable. Callers outside this package
+// must use it instead of opening the directory themselves, because a directory
+// flush on Windows fails unless the handle carries a write right, which
+// os.Open does not request. Only the handle-taking form inside this package
+// may assume the directory was opened correctly.
+func SyncDirectory(path string) error {
+	return syncDirectory(path)
+}
+
 func openPrivateFile(path string) (*os.File, os.FileInfo, error) {
+	if err := validateStatePath(path); err != nil {
+		return nil, nil, err
+	}
+	if err := requirePersistentACLs(path); err != nil {
+		return nil, nil, err
+	}
 	pathInfo, err := os.Lstat(path)
 	if err != nil {
 		return nil, nil, err
@@ -245,7 +317,7 @@ func openPrivateFile(path string) (*os.File, os.FileInfo, error) {
 	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() {
 		return nil, nil, errors.New("state path is not a private regular file")
 	}
-	file, err := os.Open(path)
+	file, err := openStateFile(path)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -265,8 +337,8 @@ func openPrivateFile(path string) (*os.File, os.FileInfo, error) {
 	if !info.Mode().IsRegular() {
 		return closeOnError(errors.New("state path is not a private regular file"))
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return closeOnError(fmt.Errorf("state file has unsafe permissions %04o", info.Mode().Perm()))
+	if err := verifyPrivateFile(file, info); err != nil {
+		return closeOnError(err)
 	}
 	return file, info, nil
 }
@@ -281,29 +353,8 @@ func ValidateOwnerAndACL(file *os.File, allowRoot bool) (os.FileInfo, error) {
 	if err != nil {
 		return nil, errors.New("stat state object")
 	}
-	owner, err := ownerID(info)
-	if err != nil {
-		return nil, err
-	}
-	effectiveUID := uint32(os.Geteuid())
-	if !trustedOwner(owner, effectiveUID, allowRoot) {
-		return nil, errors.New("state object has an untrusted owner")
-	}
-	if err := validateACL(file); err != nil {
+	if err := validateAccess(file, info, allowRoot); err != nil {
 		return nil, err
 	}
 	return info, nil
-}
-
-func trustedOwner(owner, effectiveUID uint32, allowRoot bool) bool {
-	return owner == effectiveUID || allowRoot && owner == 0
-}
-
-func syncDir(path string) error {
-	dir, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
 }

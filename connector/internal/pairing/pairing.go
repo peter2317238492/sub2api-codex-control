@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -214,9 +215,13 @@ func (c *Client) initialize(request StartRequest) error {
 		len(request.WorkspaceRoots) == 0 || len(request.WorkspaceRoots) > 32 {
 		return errors.New("pairing request is incomplete")
 	}
+	// Roots are already projected into the POSIX form the control plane
+	// requires, so they are validated with the same rules protocol.go applies
+	// to Hello rather than with the local filepath rules.
 	for _, root := range request.WorkspaceRoots {
-		if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == string(filepath.Separator) ||
-			len([]byte(root)) > 4096 || strings.IndexFunc(root, func(character rune) bool { return character < 0x20 }) >= 0 {
+		if root == "" || len([]byte(root)) > 4096 || !strings.HasPrefix(root, "/") ||
+			strings.HasPrefix(root, "//") || root == "/" || path.Clean(root) != root ||
+			strings.IndexFunc(root, func(character rune) bool { return character < 0x20 }) >= 0 {
 			return errors.New("pairing workspace roots must be canonical absolute paths")
 		}
 	}
@@ -707,10 +712,7 @@ func removeStateFile(path string) error {
 	if !removed {
 		return nil
 	}
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+	// Windows refuses FlushFileBuffers on a directory handle, so the removal is
+	// made durable through securefile rather than through a direct Sync.
+	return securefile.SyncDirectory(filepath.Dir(path))
 }

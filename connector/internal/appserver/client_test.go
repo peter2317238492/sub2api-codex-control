@@ -26,26 +26,7 @@ func TestClientBootstrapsAndRoutesJSONRPC(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping subprocess test in short mode")
 	}
-	script := filepath.Join(t.TempDir(), "fake-codex")
-	contents := `#!/bin/sh
-if test "$1" = "--version"; then
-  printf '%s\n' 'codex-cli 0.147.0'
-  exit 0
-fi
-test "$1" = "app-server" || exit 41
-test "$2" = "--listen" || exit 42
-test "$3" = "stdio://" || exit 43
-IFS= read -r initialize || exit 44
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"codexHome":"/tmp/fake-codex-home","platformFamily":"unix","platformOs":"linux","userAgent":"fake"}}'
-IFS= read -r initialized || exit 45
-printf '%s\n' '{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"t","turn":{"id":"turn-1","items":[],"status":"inProgress"}},"emittedAtMs":1785945600000}'
-IFS= read -r request || exit 46
-printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"data":[{"id":"model","model":"model","displayName":"Model","description":"Test model","isDefault":true,"hidden":false,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}]}}'
-while :; do sleep 1; done
-`
-	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	script := fakeCodexBootstrap(t)
 	notifications := make(chan string, 1)
 	ctx, cancel := context.WithCancel(t.Context())
 	client, err := Start(ctx, StartOptions{
@@ -85,28 +66,9 @@ func TestStartRevalidatesVersionBeforeEveryChildStart(t *testing.T) {
 		t.Skip("skipping subprocess test in short mode")
 	}
 	dir := t.TempDir()
-	script := filepath.Join(dir, "fake-codex")
 	audit := filepath.Join(dir, "audit")
 	drifted := filepath.Join(dir, "drifted")
-	contents := fmt.Sprintf(`#!/bin/sh
-if test "$1" = "--version"; then
-  printf 'version\n' >> %q
-  if test -f %q; then
-    printf 'codex-cli 9.9.9\n'
-  else
-    printf 'codex-cli 0.147.0\n'
-  fi
-  exit 0
-fi
-printf 'app-server\n' >> %q
-IFS= read -r initialize || exit 40
-printf '%%s\n' '{"jsonrpc":"2.0","id":1,"result":{"codexHome":"/tmp/fake-codex-home","platformFamily":"unix","platformOs":"linux","userAgent":"fake"}}'
-IFS= read -r initialized || exit 41
-while :; do sleep 1; done
-`, audit, drifted, audit)
-	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	script := fakeCodexRevalidation(t, audit, drifted)
 
 	start := func() (*Client, error) {
 		return Start(t.Context(), StartOptions{
@@ -161,11 +123,7 @@ func TestVerifyVersionRequiresExactPinnedBanner(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			script := filepath.Join(t.TempDir(), "fake-codex")
-			contents := "#!/bin/sh\nprintf '%b' " + fmt.Sprintf("%q", test.banner) + "\n"
-			if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
-				t.Fatal(err)
-			}
+			script := fakeCodexVersion(t, test.banner, "")
 			err := VerifyVersion(t.Context(), script, "0.147.0")
 			if (err == nil) != test.valid {
 				t.Fatalf("valid = %v, want %v (err=%v)", err == nil, test.valid, err)
@@ -178,11 +136,7 @@ func TestVerifyVersionRequiresExactPinnedBanner(t *testing.T) {
 }
 
 func TestVerifyVersionIgnoresOfficialDiagnosticsOnStderr(t *testing.T) {
-	script := filepath.Join(t.TempDir(), "fake-codex")
-	contents := "#!/bin/sh\nprintf 'official diagnostic\\n' >&2\nprintf 'codex-cli 0.147.0\\n'\n"
-	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	script := fakeCodexVersion(t, "codex-cli 0.147.0\n", "official diagnostic\n")
 	if err := VerifyVersion(t.Context(), script, "0.147.0"); err != nil {
 		t.Fatalf("official stderr diagnostic invalidated the exact stdout banner: %v", err)
 	}

@@ -20,7 +20,7 @@ func TestGuardInjectsSecurityCaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	guarded, err := guard.Enforce("thread/start", json.RawMessage(`{"cwd":`+quote(child)+`}`))
+	guarded, err := guard.Enforce("thread/start", json.RawMessage(`{"cwd":`+remoteQuote(t, child)+`}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,10 +41,10 @@ func TestGuardRejectsEscapesAndDangerousSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []string{
-		`{"cwd":` + quote(outside) + `}`,
-		`{"cwd":` + quote(root) + `,"sandbox":"danger-full-access"}`,
-		`{"cwd":` + quote(root) + `,"sandboxPolicy":{"type":"workspaceWrite","writableRoots":[` + quote(outside) + `]}}`,
-		`{"cwd":` + quote(root) + `,"approvalPolicy":"never"}`,
+		`{"cwd":` + remoteQuote(t, outside) + `}`,
+		`{"cwd":` + remoteQuote(t, root) + `,"sandbox":"danger-full-access"}`,
+		`{"cwd":` + remoteQuote(t, root) + `,"sandboxPolicy":{"type":"workspaceWrite","writableRoots":[` + quote(outside) + `]}}`,
+		`{"cwd":` + remoteQuote(t, root) + `,"approvalPolicy":"never"}`,
 	}
 	for _, raw := range tests {
 		if _, err := guard.Enforce("thread/start", json.RawMessage(raw)); err == nil {
@@ -75,7 +75,7 @@ func TestGuardRejectsSymlinkEscape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := guard.Enforce("thread/start", json.RawMessage(`{"cwd":`+quote(link)+`}`)); err == nil {
+	if _, err := guard.Enforce("thread/start", json.RawMessage(`{"cwd":`+remoteQuote(t, link)+`}`)); err == nil {
 		t.Fatal("expected symlink escape to be rejected")
 	}
 }
@@ -108,7 +108,7 @@ func TestProjectorRejectsHiddenOverridesAndNonTextInput(t *testing.T) {
 		method string
 		params string
 	}{
-		{"thread/start", `{"cwd":` + quote(root) + `,"config":{"network_access":true}}`},
+		{"thread/start", `{"cwd":` + remoteQuote(t, root) + `,"config":{"network_access":true}}`},
 		{"thread/resume", `{"threadId":"t","path":"/tmp/rollout.jsonl"}`},
 		{"turn/start", `{"threadId":"t","input":[{"type":"localImage","path":"/etc/passwd"}]}`},
 		{"turn/start", `{"threadId":"t","input":[{"type":"text","text":"x"}],"sandboxPolicy":{"type":"dangerFullAccess"}}`},
@@ -336,7 +336,111 @@ func TestCommandApprovalCannotAmendExecutionPolicy(t *testing.T) {
 	}
 }
 
+func TestGuardConvertsRemoteCWDIntoTheLocalPathAppServerReceives(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "project")
+	if err := os.Mkdir(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolvedChild, err := filepath.EvalSymlinks(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := NewGuard([]string{root}, "workspace-write")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := pathMapper.Remote(resolvedChild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := guard.CanonicalCWD(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical != resolvedChild {
+		t.Fatalf("canonical cwd = %q, want the local path %q", canonical, resolvedChild)
+	}
+	if !guard.ContainsCWD(canonical) {
+		t.Fatalf("guard rejected the local path %q it just returned", canonical)
+	}
+	guarded, err := guard.Enforce("thread/start", json.RawMessage(`{"cwd":`+quote(remote)+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(guarded, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params["cwd"] != resolvedChild {
+		t.Fatalf("app-server cwd = %#v, want the local path %q", params["cwd"], resolvedChild)
+	}
+}
+
+func TestGuardRejectsCWDThatIsNotInTheRemoteForm(t *testing.T) {
+	root := t.TempDir()
+	guard, err := NewGuard([]string{root}, "workspace-write")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := pathMapper.Remote(guard.WorkspaceRoots()[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cwd := range []string{"", "relative/path", "/", "//" + strings.TrimPrefix(remote, "/"), remote + "/", remote + "/../.."} {
+		if _, err := guard.CanonicalCWD(cwd); err == nil {
+			t.Fatalf("guard accepted cwd %q", cwd)
+		}
+	}
+}
+
+func TestApprovalDetailsAreValidatedAgainstLocalPaths(t *testing.T) {
+	root := t.TempDir()
+	guard, err := NewGuard([]string{root}, "workspace-write")
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := guard.WorkspaceRoots()[0]
+	if err := guard.ValidateApprovalDetails("command", map[string]any{"cwd": local}); err != nil {
+		t.Fatalf("local approval cwd was rejected: %v", err)
+	}
+	if err := guard.ValidateApprovalDetails("file_change", map[string]any{"grantRoot": local}); err != nil {
+		t.Fatalf("local approval grantRoot was rejected: %v", err)
+	}
+	if err := guard.ValidateApprovalDetails("command", map[string]any{"cwd": filepath.Join(t.TempDir(), "elsewhere")}); err == nil {
+		t.Fatal("approval cwd outside the workspace roots was accepted")
+	}
+}
+
 func quote(value string) string {
 	data, _ := json.Marshal(value)
 	return string(data)
+}
+
+// remoteQuote renders a local path as the JSON string the control plane would
+// send for it. The mapper is the identity on POSIX.
+func remoteQuote(t *testing.T, local string) string {
+	t.Helper()
+	remote, err := pathMapper.Remote(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return quote(remote)
+}
+
+// localFixture builds an absolute local path on the volume that holds the
+// temporary directory, so a POSIX-shaped fixture names a real Windows volume.
+func localFixture(posix string) string {
+	return filepath.VolumeName(os.TempDir()) + filepath.FromSlash(posix)
+}
+
+// remoteFixture is the projection of localFixture, which is what the control
+// plane sees once an app-server result has been projected.
+func remoteFixture(t *testing.T, posix string) string {
+	t.Helper()
+	remote, err := pathMapper.Remote(localFixture(posix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return remote
 }

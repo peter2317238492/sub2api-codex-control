@@ -13,7 +13,7 @@ func TestProjectThreadReadDropsSensitiveItemsAndMetadata(t *testing.T) {
 	raw := json.RawMessage(`{
 		"thread": {
 			"id":"thread-1",
-			"cwd":"/workspace/project",
+			"cwd":` + quote(localFixture("/workspace/project")) + `,
 			"name":"Safe title",
 			"path":"/private/rollout.jsonl",
 			"sessionId":"secret-session",
@@ -245,7 +245,7 @@ func TestProjectResultUsesSafeMethodSpecificShapes(t *testing.T) {
 		deny   []string
 	}{
 		{"model/list", `{"data":[{"id":"gpt-5","displayName":"GPT-5","description":"safe","hidden":"secret"}],"nextCursor":"next","provider":"secret"}`, []string{"gpt-5", "GPT-5", "next"}, []string{"hidden", "provider", "secret"}},
-		{"thread/start", `{"thread":{"id":"thread-1","path":"/secret"},"model":"gpt-5","cwd":"/work"}`, []string{"thread-1", "gpt-5", "/work"}, []string{"/secret"}},
+		{"thread/start", `{"thread":{"id":"thread-1","path":"/secret"},"model":"gpt-5","cwd":` + quote(localFixture("/work")) + `}`, []string{"thread-1", "gpt-5", remoteFixture(t, "/work")}, []string{"/secret"}},
 		{"turn/start", `{"turn":{"id":"turn-1","status":"inProgress","items":[{"type":"commandExecution","output":"secret"}],"error":null}}`, []string{"turn-1", "inProgress"}, []string{"items", "secret"}},
 		{"turn/steer", `{"turnId":"turn-1","extra":"secret"}`, []string{"turn-1"}, []string{"extra", "secret"}},
 		{"turn/interrupt", `{"raw":"secret"}`, nil, []string{"raw", "secret"}},
@@ -266,6 +266,84 @@ func TestProjectResultUsesSafeMethodSpecificShapes(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestProjectResultSendsThreadCWDInTheRemoteForm(t *testing.T) {
+	local := localFixture("/work/project")
+	want := remoteFixture(t, "/work/project")
+	for _, test := range []struct {
+		method string
+		raw    string
+	}{
+		{"thread/start", `{"thread":{"id":"thread-1"},"cwd":` + quote(local) + `}`},
+		{"thread/resume", `{"thread":{"id":"thread-1","cwd":` + quote(local) + `}}`},
+		{"thread/read", `{"thread":{"id":"thread-1","cwd":` + quote(local) + `,"turns":[]}}`},
+	} {
+		projected, err := ProjectResult(test.method, json.RawMessage(test.raw))
+		if err != nil {
+			t.Fatalf("%s: %v", test.method, err)
+		}
+		if got := projectedCWD(t, projected); got != want {
+			t.Fatalf("%s cwd = %q, want %q", test.method, got, want)
+		}
+	}
+	projected, err := ProjectResult(
+		"thread/list",
+		json.RawMessage(`{"data":[{"id":"thread-1","cwd":`+quote(local)+`}],"nextCursor":null}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Data []struct {
+			CWD string `json:"cwd"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(projected, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Data) != 1 || envelope.Data[0].CWD != want {
+		t.Fatalf("thread/list cwd = %#v, want %q", envelope.Data, want)
+	}
+}
+
+func TestProjectResultNeverLeaksAnUnprojectableCWD(t *testing.T) {
+	for _, method := range []string{"thread/start", "thread/read"} {
+		if _, err := ProjectResult(method, json.RawMessage(`{"thread":{"id":"thread-1","cwd":"not-a-root"},"turns":[]}`)); err == nil {
+			t.Fatalf("%s projected a cwd that has no remote form", method)
+		}
+	}
+	projected, err := ProjectResult(
+		"thread/list",
+		json.RawMessage(`{"data":[{"id":"unprojectable","cwd":"not-a-root"},{"id":"kept","cwd":`+quote(localFixture("/work"))+`}]}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(projected)
+	if strings.Contains(text, "not-a-root") || strings.Contains(text, "unprojectable") {
+		t.Fatalf("thread/list leaked a cwd with no remote form: %s", text)
+	}
+	if !strings.Contains(text, "kept") {
+		t.Fatalf("thread/list dropped a projectable thread: %s", text)
+	}
+}
+
+func projectedCWD(t *testing.T, projected json.RawMessage) string {
+	t.Helper()
+	var envelope struct {
+		CWD    string `json:"cwd"`
+		Thread struct {
+			CWD string `json:"cwd"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(projected, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.CWD != "" {
+		return envelope.CWD
+	}
+	return envelope.Thread.CWD
 }
 
 func TestProjectEventAllowsOnlyBoundedPublicContent(t *testing.T) {

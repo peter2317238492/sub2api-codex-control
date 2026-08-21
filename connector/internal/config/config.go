@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/peter2317238492/sub2api-codex-control/connector/internal/wspath"
 )
 
 const (
@@ -53,7 +55,14 @@ type Config struct {
 	PairingPollInterval Duration `json:"pairing_poll_interval"`
 	ReconnectMin        Duration `json:"reconnect_min"`
 	ReconnectMax        Duration `json:"reconnect_max"`
+
+	// RemoteWorkspaceRoots is the projection of WorkspaceRoots into the POSIX
+	// form the control plane accepts. Validate derives it once so the pairing
+	// request and the Hello payload cannot disagree.
+	RemoteWorkspaceRoots []string `json:"-"`
 }
+
+var pathMapper = wspath.NewMapper()
 
 func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
@@ -148,7 +157,7 @@ func (c *Config) Validate() error {
 		if err != nil || !info.IsDir() {
 			return fmt.Errorf("workspace_roots[%d] is not a directory", i)
 		}
-		if resolved == string(filepath.Separator) {
+		if isVolumeRoot(resolved) {
 			return errors.New("the filesystem root cannot be a workspace root")
 		}
 		if _, exists := seen[resolved]; exists {
@@ -177,6 +186,11 @@ func (c *Config) Validate() error {
 		}
 	}
 	c.StateDir = statePath
+	remoteRoots, err := pathMapper.RemoteRoots(c.WorkspaceRoots)
+	if err != nil {
+		return fmt.Errorf("project workspace_roots: %w", err)
+	}
+	c.RemoteWorkspaceRoots = remoteRoots
 	if c.SandboxCap != "read-only" && c.SandboxCap != "workspace-write" {
 		return errors.New("sandbox_cap must be read-only or workspace-write")
 	}
@@ -244,12 +258,16 @@ func canonicalProspectivePath(path string) (string, error) {
 	}
 }
 
+// isVolumeRoot reports whether path is the root of the volume holding it.
+// A bare separator only describes a POSIX root; a Windows root carries a
+// volume prefix such as "D:" or a UNC share name.
+func isVolumeRoot(path string) bool {
+	volume := filepath.VolumeName(path)
+	return path == volume || path == volume+string(filepath.Separator)
+}
+
 func pathsOverlap(first, second string) bool {
-	contains := func(parent, child string) bool {
-		relative, err := filepath.Rel(parent, child)
-		return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-	}
-	return contains(first, second) || contains(second, first)
+	return pathMapper.Contains(first, second) || pathMapper.Contains(second, first)
 }
 
 func requireURL(raw, scheme, field string) error {
