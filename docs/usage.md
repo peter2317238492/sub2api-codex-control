@@ -1,6 +1,6 @@
 # User Guide
 
-[简体中文](usage.zh-CN.md) | [Back to README](../README.md)
+[简体中文](usage.zh-CN.md) | [Visual guide](visual-guide.md) | [Back to README](../README.md)
 
 > [!IMPORTANT]
 > This guide describes the user flow after a signed Connector release exists.

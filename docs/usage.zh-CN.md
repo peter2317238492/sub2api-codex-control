@@ -1,6 +1,6 @@
 # 使用手册
 
-[English](usage.md) | [返回中文 README](../README.zh-CN.md)
+[English](usage.md) | [图形化指南](visual-guide.zh-CN.md) | [返回中文 README](../README.zh-CN.md)
 
 > [!IMPORTANT]
 > 本手册描述正式签名 Connector 发布后的用户流程。当前公开仓库仍是源码候选版；在 GitHub
