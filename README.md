@@ -14,6 +14,7 @@
   <a href="https://github.com/peter2317238492/sub2api-codex-control/releases">Releases</a> ·
   <a href="docs/installation.md">Installation</a> ·
   <a href="docs/usage.md">User guide</a> ·
+  <a href="docs/visual-guide.md">Visual guide</a> ·
   <a href="docs/operations.md">Operations</a> ·
   <a href="SECURITY.md">Security</a>
 </p>

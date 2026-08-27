@@ -14,6 +14,7 @@
   <a href="https://github.com/peter2317238492/sub2api-codex-control/releases">发布下载</a> ·
   <a href="docs/installation.zh-CN.md">安装指南</a> ·
   <a href="docs/usage.zh-CN.md">使用手册</a> ·
+  <a href="docs/visual-guide.zh-CN.md">图形化指南</a> ·
   <a href="docs/operations.zh-CN.md">运维指南</a> ·
   <a href="SECURITY.md">安全策略</a>
 </p>
