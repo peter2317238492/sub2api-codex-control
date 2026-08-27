@@ -77,7 +77,7 @@ def new_pairing_attempt(
         poll_token_commitment=poll_commitment,
         refresh_credential_commitment=refresh_commitment,
         display_name=display_name,
-        connector_version="0.1.5",
+        connector_version="0.1.6",
         codex_version="0.147.0",
         workspace_roots=roots,
     )
@@ -94,7 +94,7 @@ def new_pairing_attempt(
             "audience": audience,
             "public_key": public_key,
             "display_name": display_name,
-            "connector_version": "0.1.5",
+            "connector_version": "0.1.6",
             "codex_version": "0.147.0",
             "workspace_roots": roots,
             "code_commitment": code_commitment,

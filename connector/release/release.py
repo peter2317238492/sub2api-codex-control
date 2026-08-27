@@ -3348,10 +3348,17 @@ def sign(args: argparse.Namespace) -> None:
         raise ReleaseError("only finalized release-mode output can be signed")
     if (output / LOCAL_MARKER).exists():
         raise ReleaseError("local unsigned output can never be signed")
-    validate_apple_identity(args.apple_team_id, args.apple_signing_identity)
-    validate_apple_installer_identity(
-        args.apple_team_id, args.apple_installer_identity
+    # Apple identity inputs are meaningful only when the admitted matrix
+    # carries Apple-signed targets; the Linux pipeline provides none.
+    matrix_requires_apple = any(
+        target["native_signature"] == "apple-developer-id-and-notarization"
+        for target in config["targets"]
     )
+    if matrix_requires_apple:
+        validate_apple_identity(args.apple_team_id, args.apple_signing_identity)
+        validate_apple_installer_identity(
+            args.apple_team_id, args.apple_installer_identity
+        )
     validate_rpm_fingerprint(args.rpm_signing_fingerprint)
     validate_manifest_release_context(manifest, config)
     validate_finalized_release_for_signing(
