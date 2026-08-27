@@ -54,14 +54,22 @@ VULNERABILITY_PUBLIC_FIXED_ASSETS = {
     VULNERABILITY_RECEIPT,
     VULNERABILITY_RECEIPT_BUNDLE,
 }
-CONNECTOR_VULNERABILITY_TARGET_SPECS = {
-    "connector-linux-amd64-deb": ("linux", "amd64", "deb"),
-    "connector-linux-amd64-rpm": ("linux", "amd64", "rpm"),
-    "connector-linux-arm64-deb": ("linux", "arm64", "deb"),
-    "connector-linux-arm64-rpm": ("linux", "arm64", "rpm"),
-    "connector-darwin-amd64-pkg": ("darwin", "amd64", "pkg"),
-    "connector-darwin-arm64-pkg": ("darwin", "arm64", "pkg"),
-}
+def connector_vulnerability_target_specs() -> dict[str, tuple[str, str, str]]:
+    """Vulnerability scan matrix derived from the released target matrix.
+
+    Keyed by canonical scan target name, valued by (goos, goarch, package
+    format), so the receipt checks can never demand evidence for platforms
+    the release config does not publish.
+    """
+    specs: dict[str, tuple[str, str, str]] = {}
+    for target_id, package_format in released_package_pairs():
+        goos, goarch = target_id.split("-", 1)
+        specs[f"connector-{target_id}-{package_format}"] = (
+            goos,
+            goarch,
+            package_format,
+        )
+    return specs
 RELEASE_REPOSITORY = "https://github.com/peter2317238492/sub2api-codex-control"
 OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 SLSA_PREDICATE = "https://slsa.dev/provenance/v1"
@@ -6210,7 +6218,7 @@ def validate_vulnerability_inventory(
     }
     for database_target in ("vulnerability-database", "java-database"):
         expected_pairs.update((role, database_target) for role in database_roles)
-    for target_name in CONNECTOR_VULNERABILITY_TARGET_SPECS:
+    for target_name in connector_vulnerability_target_specs():
         expected_pairs.update(
             (role, target_name)
             for role in ("artifact", "sbom", "report", "raw-report", "scan-execution")
@@ -6307,7 +6315,7 @@ def validate_vulnerability_inventory(
         path = root_parent / filename
         return filename if root_parent == PurePosixPath(".") else path.as_posix()
 
-    for target_name, (os_name, arch, package_format) in CONNECTOR_VULNERABILITY_TARGET_SPECS.items():
+    for target_name, (os_name, arch, package_format) in connector_vulnerability_target_specs().items():
         artifact = by_role_target[("artifact", target_name)]
         sbom = by_role_target[("sbom", target_name)]
         report = by_role_target[("report", target_name)]
@@ -6393,7 +6401,7 @@ def validate_vulnerability_receipt(
     parse_rfc3339(receipt["verified_at"], "vulnerability receipt verified_at")
     validate_vulnerability_core_roots(receipt["core_roots"])
     validate_vulnerability_scanner(receipt["scanner"])
-    expected_targets = set(CONNECTOR_VULNERABILITY_TARGET_SPECS)
+    expected_targets = set(connector_vulnerability_target_specs())
     reports = receipt["report_sha256"]
     if (
         not isinstance(reports, dict)
@@ -7140,19 +7148,27 @@ def validate_aggregate_receipt(aggregate: Any) -> dict[str, Any]:
         "certificate_github_workflow_trigger": "push",
     }:
         raise ReleaseError("aggregate Connector Sigstore trust is invalid")
-    if not isinstance(trust["apple"], dict) or not isinstance(trust["rpm"], dict):
+    if not isinstance(trust["rpm"], dict):
         raise ReleaseError("aggregate native trust is incomplete")
-    require_exact_keys(
-        trust["apple"],
-        {"team_identifier", "application_identity", "installer_identity"},
-        "aggregate Apple trust",
+    # Apple trust is present exactly when the released matrix carries darwin
+    # targets; a Linux-only release aggregates with apple set to null.
+    matrix_requires_apple = any(
+        os_name == "darwin" for os_name, _arch in released_target_matrix()
     )
-    validate_apple_identity(
-        trust["apple"]["team_identifier"], trust["apple"]["application_identity"]
-    )
-    validate_apple_installer_identity(
-        trust["apple"]["team_identifier"], trust["apple"]["installer_identity"]
-    )
+    if matrix_requires_apple or trust["apple"] is not None:
+        if not isinstance(trust["apple"], dict):
+            raise ReleaseError("aggregate native trust is incomplete")
+        require_exact_keys(
+            trust["apple"],
+            {"team_identifier", "application_identity", "installer_identity"},
+            "aggregate Apple trust",
+        )
+        validate_apple_identity(
+            trust["apple"]["team_identifier"], trust["apple"]["application_identity"]
+        )
+        validate_apple_installer_identity(
+            trust["apple"]["team_identifier"], trust["apple"]["installer_identity"]
+        )
     require_exact_keys(trust["rpm"], {"signing_fingerprint"}, "aggregate RPM trust")
     validate_rpm_fingerprint(trust["rpm"]["signing_fingerprint"])
     verification_run = aggregate["verification_run"]
@@ -7781,12 +7797,7 @@ def aggregate_verification_receipts(args: argparse.Namespace) -> None:
             ],
             "evidence_inventory": vulnerability_inventory,
         },
-        "verified_targets": [
-            "linux-amd64",
-            "linux-arm64",
-            "darwin-amd64",
-            "darwin-arm64",
-        ],
+        "verified_targets": released_target_ids(),
         "verified_packages": platform_packages,
         "core_inventory": linux["core_inventory"],
         "vulnerability_inventory": public_assets_as_inventory(
