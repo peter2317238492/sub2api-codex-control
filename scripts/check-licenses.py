@@ -27,10 +27,10 @@ EXPECTED_COMPONENT_IDS = {
     "x-text",
 }
 EXPECTED_MANIFEST_SHA256 = (
-    "3515ad2cc9162a994da5e0354794a2094c96e4d21ae7428438f9475f8c51fc03"
+    "563cc447e30595c76121cddf7860942f7d0662e89b627e5dfe7d24adc841da17"
 )
 EXPECTED_THIRD_PARTY_NOTICES_SHA256 = (
-    "59a9c64e8ead0692bf16060698539cb130034c9841bf71991f74383ac0b19ce3"
+    "e3d5a0a07da87e6e20014e2dd0cffc8ae38664a15c8ddde1dbb327959a2d8f89"
 )
 EXPECTED_GO_MODULE = "github.com/peter2317238492/sub2api-codex-control/connector"
 EXPECTED_REPOSITORY = "https://github.com/peter2317238492/sub2api-codex-control"
@@ -243,7 +243,7 @@ def check_version_evidence(
         return
     baseline = component.get("language_baseline")
     expected_baseline = {
-        "version": "1.24.0",
+        "version": "1.25.0",
         "version_evidence": {
             "kind": "go-version",
             "path": "connector/go.mod",

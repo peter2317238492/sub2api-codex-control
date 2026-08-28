@@ -196,7 +196,7 @@
         ]
       },
       "language_baseline": {
-        "version": "1.24.0",
+        "version": "1.25.0",
         "version_evidence": {
           "kind": "go-version",
           "path": "connector/go.mod"
@@ -355,11 +355,11 @@
     {
       "id": "x-text",
       "name": "golang.org/x/text",
-      "version": "0.14.0",
+      "version": "0.39.0",
       "relationship": "transitive-runtime-dependency",
-      "package": "pkg:golang/golang.org/x/text@v0.14.0",
+      "package": "pkg:golang/golang.org/x/text@v0.39.0",
       "repository": "https://go.googlesource.com/text",
-      "source_ref": "v0.14.0",
+      "source_ref": "v0.39.0",
       "version_evidence": {
         "kind": "go-require",
         "path": "connector/go.mod",
@@ -370,7 +370,7 @@
         {
           "kind": "license",
           "path": "third_party/licenses/x-text-LICENSE.txt",
-          "source_url": "https://raw.githubusercontent.com/golang/text/v0.14.0/LICENSE",
+          "source_url": "https://raw.githubusercontent.com/golang/text/v0.39.0/LICENSE",
           "source_sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
           "file_sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
           "normalization": "none"
@@ -378,7 +378,7 @@
         {
           "kind": "patent-grant",
           "path": "third_party/licenses/x-text-PATENTS.txt",
-          "source_url": "https://raw.githubusercontent.com/golang/text/v0.14.0/PATENTS",
+          "source_url": "https://raw.githubusercontent.com/golang/text/v0.39.0/PATENTS",
           "source_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc",
           "file_sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc",
           "normalization": "none"
