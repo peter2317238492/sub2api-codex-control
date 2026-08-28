@@ -36,9 +36,11 @@ binary_evidence=$(jq -er '.scanner.binary_evidence_name' "$policy")
 case "$version:$archive_sha:$checksums_sha:$bundle_sha" in
   *[!0-9a-zA-Z._:-]*) fail "policy contains invalid scanner fields" ;;
 esac
-case "$archive:$checksums:$bundle:$binary_evidence" in
-  *[!0-9a-zA-Z._-]*|*/*) fail "policy contains an invalid asset name" ;;
-esac
+for asset_name in "$archive" "$checksums" "$bundle" "$binary_evidence"; do
+  case "$asset_name" in
+    ''|*[!0-9a-zA-Z._-]*) fail "policy contains an invalid asset name" ;;
+  esac
+done
 for digest in "$archive_sha" "$checksums_sha" "$bundle_sha"; do
   case "$digest" in
     *[!0-9a-f]*) fail "policy contains an invalid SHA-256" ;;
