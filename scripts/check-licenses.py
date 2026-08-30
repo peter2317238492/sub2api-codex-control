@@ -46,7 +46,7 @@ EXPECTED_WORKFLOW_SHA256 = {
         "3779e5824077c571cf2e042ed9b558ffebc7501d5aacca02114b8d055cbbb78b"
     ),
     Path(".github/workflows/connector-release.yml"): (
-        "3cdce13ba6afc6dfdfe0c799a6efe16e9734557b741c909b79cad4b9ba7bda54"
+        "1c871eaf957bce4333e8e524e38c9df91989fe8373ac2aa475ecdb3cb33ebbce"
     ),
     Path(".github/workflows/control-images-release.yml"): (
         "879f8224485ef68f42fc4b3f639d3622539852a5255451469937167a6a700c7f"

@@ -423,8 +423,10 @@ jobs:
           install -d -m 0700 "$cache"
           empty_config="$VULNERABILITY_DIR/trivy-empty.yaml"
           empty_ignore="$VULNERABILITY_DIR/trivy-empty.ignore"
-          : > "$empty_config"
-          : > "$empty_ignore"
+          # GitHub release assets reject zero-length uploads; these pinned
+          # comments keep the no-filtering guarantee with nonzero size.
+          printf '# pinned no-op Trivy configuration\n' > "$empty_config"
+          printf '# pinned no-op Trivy ignorefile\n' > "$empty_ignore"
           python3 -I deploy/server-package/oci_toolchain.py verify --crane "$CRANE"
           install -d -m 0700 "$RUNNER_TEMP/crane-home"
           timeout 900 env -i \
