@@ -46,10 +46,10 @@ EXPECTED_WORKFLOW_SHA256 = {
         "3779e5824077c571cf2e042ed9b558ffebc7501d5aacca02114b8d055cbbb78b"
     ),
     Path(".github/workflows/connector-release.yml"): (
-        "1c871eaf957bce4333e8e524e38c9df91989fe8373ac2aa475ecdb3cb33ebbce"
+        "6272badd5a2452804a47210a841dad7f22f3f2a9d0d5117b2d8e4292e05fc6c1"
     ),
     Path(".github/workflows/control-images-release.yml"): (
-        "879f8224485ef68f42fc4b3f639d3622539852a5255451469937167a6a700c7f"
+        "6eeaf9cabf1bcf7f47c7fd918dd569489fd75cc1d16bf1dd969bdc8f15cd5710"
     ),
 }
 # Formal release workflows may run only from their protected tag push, and
