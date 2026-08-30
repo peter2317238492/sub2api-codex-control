@@ -251,7 +251,7 @@ connector_release_metadata=$(python3 - <<'E2E_METADATA_PY'
 import json
 
 repository = "https://github.com/peter2317238492/sub2api-codex-control"
-version = "0.1.7"
+version = "0.1.8"
 tag = f"connector-v{version}"
 assets = []
 for index, (arch, package_format) in enumerate(
