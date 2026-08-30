@@ -2080,8 +2080,19 @@ jobs:
           release_attestation="$RUNNER_TEMP/control-release-attestation.json"
           gh release verify "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" \
             --format json > "$release_attestation"
+          # GitHub's immutable-release attestation binds the annotated tag
+          # OBJECT, not the commit; require both that binding and that the
+          # public tag object still peels to the protected release commit.
+          remote_tags=$(git ls-remote --tags \
+            "https://github.com/${RELEASE_REPOSITORY}.git" \
+            "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+          tag_object=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref {print $1}')
+          peeled=$(printf '%s\n' "$remote_tags" | awk -v ref="refs/tags/${RELEASE_TAG}^{}" '$2 == ref {print $1}')
+          test -n "$tag_object"
+          test "$peeled" = "$GITHUB_SHA"
+          test "$tag_object" != "$peeled"
           jq -e \
-            --arg commit "$GITHUB_SHA" \
+            --arg tagobject "$tag_object" \
             --arg repository "$RELEASE_REPOSITORY" \
             --arg tag "$RELEASE_TAG" '
               .verificationResult.statement
@@ -2089,7 +2100,7 @@ jobs:
                 and .predicate.tag == $tag
                 and any(.subject[];
                   .uri == ("pkg:github/" + $repository + "@" + $tag)
-                  and .digest.sha1 == $commit)
+                  and .digest.sha1 == $tagobject)
             ' "$release_attestation" >/dev/null
           for asset in "$DOWNLOAD_DIR"/*; do
             gh release verify-asset "$RELEASE_TAG" "$asset" --repo "$RELEASE_REPOSITORY"
