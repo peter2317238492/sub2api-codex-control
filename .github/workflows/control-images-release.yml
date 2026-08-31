@@ -796,7 +796,9 @@ jobs:
             '.assets[] | select(.name == $name) | .browser_download_url' "$response")
           test "$receipt_url" = \
             "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CONNECTOR_RELEASE_TAG}/${receipt_name}"
-          receipt="$RUNNER_TEMP/connector-public-vulnerability-receipt.json"
+          receipt_dir="$RUNNER_TEMP/connector-public-receipt"
+          install -d -m 0700 "$receipt_dir"
+          receipt="$receipt_dir/vulnerability-receipt.json"
           test ! -e "$receipt"
           curl --fail --silent --show-error --location --retry 3 \
             --proto '=https' --tlsv1.2 "$receipt_url" --output "$receipt"
@@ -804,7 +806,9 @@ jobs:
             "$(jq -er '.vulnerability_evidence.receipt.sha256' "$aggregate")"
           test "$(stat -c %s "$receipt")" = \
             "$(jq -er '.vulnerability_evidence.receipt.size' "$aggregate")"
-          current="$RUNNER_TEMP/connector-public-release-current.json"
+          current_dir="$RUNNER_TEMP/connector-public-current"
+          install -d -m 0700 "$current_dir"
+          current="$current_dir/connector-public-release-descriptor.json"
           python3 connector/release/release.py create-public-release-descriptor \
             --github-release-response "$response" \
             --vulnerability-receipt "$receipt" \
@@ -959,6 +963,7 @@ jobs:
           connector_identity="${source_repository}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
           install -d -m 0700 dist
           test ! -e "$SERVER_PACKAGE_DIR"
+          install -d -m 0700 "$SERVER_PACKAGE_DIR"
           common=(
             --release-dir "$RELEASE_DIR"
             --image-trust-dir "$IMAGE_TRUST_DIR"
@@ -1073,6 +1078,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The server-package tools refuse group/world-writable temp
+          # ancestors; the shared runner /tmp is mode 1777.
+          install -d -m 0700 "$RUNNER_TEMP/server-package-tmp"
+          export TMPDIR="$RUNNER_TEMP/server-package-tmp"
           source_repository="https://github.com/${GITHUB_REPOSITORY}"
           identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
           connector_identity="${source_repository}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
@@ -1208,6 +1217,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The server-package tools refuse group/world-writable temp
+          # ancestors; the shared runner /tmp is mode 1777.
+          install -d -m 0700 "$RUNNER_TEMP/server-package-tmp"
+          export TMPDIR="$RUNNER_TEMP/server-package-tmp"
           source_repository="https://github.com/${GITHUB_REPOSITORY}"
           identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
           connector_identity="${source_repository}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
@@ -1289,8 +1302,8 @@ jobs:
           install -d -m 0700 "$cache"
           empty_config="$CONTROL_VULNERABILITY_DIR/trivy-empty.yaml"
           empty_ignore="$CONTROL_VULNERABILITY_DIR/trivy-empty.ignore"
-          : > "$empty_config"
-          : > "$empty_ignore"
+          printf '# pinned no-op Trivy configuration\n' > "$empty_config"
+          printf '# pinned no-op Trivy ignorefile\n' > "$empty_ignore"
           python3 -I deploy/server-package/oci_toolchain.py verify --crane "$CRANE"
           install -d -m 0700 "$RUNNER_TEMP/control-vulnerability-crane-home"
           timeout 900 env -i \
@@ -1500,8 +1513,12 @@ jobs:
             --profile control-release \
             --source-commit "$GITHUB_SHA" \
             --receipt "$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json"
-          jq -e '
-              (.evidence_inventory | length) == 53
+          server_parts=$(jq -er '
+              [.packages | to_entries[] | .value.delivery.parts | length] | add
+            ' "$SERVER_PACKAGE_DIR/server-packages.manifest.json")
+          [[ "$server_parts" =~ ^[1-9][0-9]*$ ]]
+          jq -e --argjson server_parts "$server_parts" '
+              (.evidence_inventory | length) == 50 + $server_parts
               and ([.evidence_inventory[].path
                 | select((startswith("control/") or startswith("server/")) | not)]
                 | length) == 41
@@ -1636,6 +1653,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The server-package tools refuse group/world-writable temp
+          # ancestors; the shared runner /tmp is mode 1777.
+          install -d -m 0700 "$RUNNER_TEMP/server-package-tmp"
+          export TMPDIR="$RUNNER_TEMP/server-package-tmp"
           source_repository="https://github.com/${GITHUB_REPOSITORY}"
           identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
           connector_identity="${source_repository}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
@@ -1896,8 +1917,12 @@ jobs:
               control-server-package-online-verification.json.sigstore.json | sort) \
             <(find "$SERVER_PACKAGE_RECEIPT_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
           receipt="$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json"
-          jq -e '
-              (.evidence_inventory | length) == 53
+          server_parts=$(jq -er '
+              [.packages | to_entries[] | .value.delivery.parts | length] | add
+            ' "$CONTROL_VULNERABILITY_DIR/server/server-packages.manifest.json")
+          [[ "$server_parts" =~ ^[1-9][0-9]*$ ]]
+          jq -e --argjson server_parts "$server_parts" '
+              (.evidence_inventory | length) == 50 + $server_parts
               and ([.evidence_inventory[].path
                 | select((startswith("control/") or startswith("server/")) | not)]
                 | length) == 41
@@ -2237,6 +2262,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The server-package tools refuse group/world-writable temp
+          # ancestors; the shared runner /tmp is mode 1777.
+          install -d -m 0700 "$RUNNER_TEMP/server-package-tmp"
+          export TMPDIR="$RUNNER_TEMP/server-package-tmp"
           source_repository="https://github.com/${GITHUB_REPOSITORY}"
           identity="${source_repository}/.github/workflows/control-images-release.yml@${GITHUB_REF}"
           connector_identity="${source_repository}/.github/workflows/connector-release.yml@refs/tags/${CONNECTOR_RELEASE_TAG}"
@@ -2368,8 +2397,12 @@ jobs:
 
           public_vulnerability="$VULNERABILITY_DIR"
           receipt="$public_vulnerability/vulnerability-receipt.json"
-          jq -e '
-              (.evidence_inventory | length) == 53
+          server_parts=$(jq -er '
+              [.packages | to_entries[] | .value.delivery.parts | length] | add
+            ' "$SERVER_DIR/server-packages.manifest.json")
+          [[ "$server_parts" =~ ^[1-9][0-9]*$ ]]
+          jq -e --argjson server_parts "$server_parts" '
+              (.evidence_inventory | length) == 50 + $server_parts
               and ([.evidence_inventory[].path
                 | select((startswith("control/") or startswith("server/")) | not)]
                 | length) == 41
@@ -2579,7 +2612,11 @@ jobs:
               "${repository}:${GITHUB_REF_NAME}" >/dev/null 2>&1
             then
               assert_remote_tag
+              # --prefer-index=false performs a carbon copy; the default
+              # wraps a single manifest in a fresh one-entry index whose
+              # digest would no longer equal the attested manifest digest.
               docker buildx imagetools create \
+                --prefer-index=false \
                 --tag "${repository}:${GITHUB_REF_NAME}" \
                 "${repository}@${digest}"
             fi

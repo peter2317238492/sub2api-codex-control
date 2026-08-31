@@ -67,6 +67,7 @@ PACKAGE_PREFIX = "sub2api-codex-control-server"
 SIGNATURE_SUFFIX = ".sigstore.json"
 SPDX_SUFFIX = ".spdx.json"
 PROVENANCE_SUFFIX = ".provenance.json"
+CONNECTOR_PROVENANCE_SUFFIX = ".intoto.json"
 ATTESTATION_SUFFIX = ".intoto.sigstore.json"
 SLSA_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
 SPDX_FORMAT = "SPDX-2.3-json"
@@ -161,6 +162,21 @@ def canonical_json(value: Any) -> bytes:
             allow_nan=False,
             sort_keys=True,
             separators=(",", ":"),
+        ).encode("ascii")
+        + b"\n"
+    )
+
+
+def connector_canonical_json(value: Any) -> bytes:
+    """The byte form written by connector/release/release.py's canonical writer."""
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            indent=2,
+            separators=(",", ": "),
         ).encode("ascii")
         + b"\n"
     )
@@ -1095,7 +1111,7 @@ def validate_connector_metadata(
             },
             "Connector package provenance",
         )
-        expected_provenance = f"{filename}{PROVENANCE_SUFFIX}"
+        expected_provenance = f"{filename}{CONNECTOR_PROVENANCE_SUFFIX}"
         if (
             provenance["predicate_type"] != SLSA_PREDICATE_TYPE
             or provenance["filename"] != expected_provenance
@@ -1196,13 +1212,12 @@ def verify_connector_release_inputs(args: argparse.Namespace) -> dict[str, Any]:
     connector_release = import_tool(
         CONNECTOR_RELEASE_TOOL_PATH, "server_package_connector_release"
     )
-    aggregate = strict_json(
-        read_regular(
-            aggregate_path, "Connector verification aggregate", maximum=MAX_JSON_BYTES
-        ),
-        "Connector verification aggregate",
-        canonical=True,
+    aggregate_raw = read_regular(
+        aggregate_path, "Connector verification aggregate", maximum=MAX_JSON_BYTES
     )
+    aggregate = strict_json(aggregate_raw, "Connector verification aggregate")
+    if connector_canonical_json(aggregate) != aggregate_raw:
+        fail("Connector verification aggregate is not canonical connector JSON")
     try:
         connector_release.validate_aggregate_receipt(aggregate)
     except connector_release.ReleaseError as exc:
@@ -1223,11 +1238,10 @@ def verify_connector_release_inputs(args: argparse.Namespace) -> dict[str, Any]:
     metadata_raw = read_regular(
         metadata_path, "Connector release metadata", maximum=MAX_JSON_BYTES
     )
-    metadata = validate_connector_metadata(
-        strict_json(metadata_raw, "Connector release metadata", canonical=True),
-        aggregate,
-        args,
-    )
+    metadata_value = strict_json(metadata_raw, "Connector release metadata")
+    if connector_canonical_json(metadata_value) != metadata_raw:
+        fail("Connector release metadata is not canonical connector JSON")
+    metadata = validate_connector_metadata(metadata_value, aggregate, args)
     metadata_evidence = aggregate["evidence"]["release_metadata"]
     if (
         metadata_evidence["filename"] != metadata_path.name
