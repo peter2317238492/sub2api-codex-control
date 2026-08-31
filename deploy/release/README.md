@@ -220,14 +220,14 @@ deploy/release/verify-control-images.sh \
   --release-dir /secure/download/control-images \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity \
-    https://github.com/OWNER/REPOSITORY/.github/workflows/control-images-release.yml@refs/tags/control-v0.1.0 \
+    https://github.com/OWNER/REPOSITORY/.github/workflows/control-images-release.yml@refs/tags/control-v0.1.1 \
   --certificate-github-workflow-sha 0123456789abcdef0123456789abcdef01234567 \
   --certificate-github-workflow-trigger push \
   --certificate-github-workflow-repository OWNER/REPOSITORY \
-  --certificate-github-workflow-ref refs/tags/control-v0.1.0 \
+  --certificate-github-workflow-ref refs/tags/control-v0.1.1 \
   --expected-source-repository https://github.com/OWNER/REPOSITORY \
   --expected-source-commit 0123456789abcdef0123456789abcdef01234567 \
-  --expected-release-tag control-v0.1.0 \
+  --expected-release-tag control-v0.1.1 \
   --expected-api-repository ghcr.io/owner/sub2api-codex-control-api \
   --expected-pwa-repository ghcr.io/owner/sub2api-codex-control-pwa \
   --expected-postgres-tools-repository ghcr.io/owner/sub2api-codex-postgres-tools
@@ -277,24 +277,24 @@ already exist. The standalone verifier requires `/usr/bin/python3` 3.11 or
 newer and must run in isolated safe-path mode (`-I`):
 
 ```sh
-install -d -m 0700 /secure/staging/control-v0.1.0-offline-parent
-/usr/bin/python3 -I /secure/download/control-v0.1.0/server/server-package-verify.py verify-release \
-  --release-dir /secure/download/control-v0.1.0/server \
-  --extract-to /secure/staging/control-v0.1.0-offline-parent \
+install -d -m 0700 /secure/staging/control-v0.1.1-offline-parent
+/usr/bin/python3 -I /secure/download/control-v0.1.1/server/server-package-verify.py verify-release \
+  --release-dir /secure/download/control-v0.1.1/server \
+  --extract-to /secure/staging/control-v0.1.1-offline-parent \
   --mode offline \
-  --verification-receipt /secure/receipts/control-v0.1.0-offline.json \
+  --verification-receipt /secure/receipts/control-v0.1.1-offline.json \
   --cosign /usr/local/bin/cosign \
   --expected-cosign-version v3.0.6 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity \
-    https://github.com/OWNER/REPOSITORY/.github/workflows/control-images-release.yml@refs/tags/control-v0.1.0 \
+    https://github.com/OWNER/REPOSITORY/.github/workflows/control-images-release.yml@refs/tags/control-v0.1.1 \
   --certificate-github-workflow-sha CONTROL_COMMIT_40_HEX \
   --certificate-github-workflow-trigger push \
   --certificate-github-workflow-repository OWNER/REPOSITORY \
-  --certificate-github-workflow-ref refs/tags/control-v0.1.0 \
+  --certificate-github-workflow-ref refs/tags/control-v0.1.1 \
   --expected-source-repository https://github.com/OWNER/REPOSITORY \
   --expected-source-commit CONTROL_COMMIT_40_HEX \
-  --expected-release-tag control-v0.1.0 \
+  --expected-release-tag control-v0.1.1 \
   --expected-api-repository ghcr.io/owner/sub2api-codex-control-api \
   --expected-pwa-repository ghcr.io/owner/sub2api-codex-control-pwa \
   --expected-postgres-tools-repository ghcr.io/owner/sub2api-codex-postgres-tools \
