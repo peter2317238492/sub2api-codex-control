@@ -92,6 +92,10 @@ TEXT_BYTES_LIMIT = 8 * 1024 * 1024
 BINARY_FILE_SHA256 = {
     "apps/pwa/public/icon-192.png": "e72b29aa445c29b8777654d84168e2c018674fa052dffe0d99c296d9f8a26bd6",
     "apps/pwa/public/icon-512.png": "f4ecb06141bc73b90448ec6774e2d0400f2083efefe6b7ee94cda23d5c064f33",
+    # Redacted real-acceptance screenshots embedded by the illustrated guides.
+    "docs/images/pwa-conversation.jpeg": "976af3003e52bc16ca66735f612b7e9149b3720a7d837f98e2d518317f787337",
+    "docs/images/pwa-main-view.jpeg": "3770a43b3f49f688f406b2d6ad19d6ae6aa72d9c38924bc984d5d46113ac700a",
+    "docs/images/pwa-pairing-dialog.jpeg": "60bec5bb584f31bbd6612a5f5d3ae9873720f779946e32ec50f35e67c192ff51",
 }
 PORTABLE_PATH_RE = re.compile(r"^[A-Za-z0-9._+@/-]+$")
 PLACEHOLDER_DIRECTORIES = {
