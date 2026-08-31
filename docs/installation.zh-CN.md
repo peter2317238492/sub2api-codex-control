@@ -139,10 +139,24 @@ sub2api-codex-connector-ctl start
 sub2api-codex-connector-ctl status
 ```
 
+![在 PWA 中输入一次性配对码认领设备](images/pwa-pairing-dialog.jpeg)
+
+![配对成功后设备在线，可直接从浏览器对话](images/pwa-main-view.jpeg)
+
 Linux 包安装用户级 `systemd` 服务。升级和卸载会保留用户的
 私密 Connector 状态。对于 v2 受管配置，需要彻底清除时，先在 PWA 撤销设备，再运行
 `sub2api-codex-connector-ctl purge-user-state --yes`；没有可信布局的旧配置应按上述无损迁移
 指引处理。
+
+### 容器内运行的沙箱注意事项
+
+在 Docker 等容器里运行 Connector + Codex 时，Codex 的文件沙箱助手（bubblewrap）需要创建非特权 user namespace，而容器默认的 seccomp 策略会拦截 `CLONE_NEWUSER`，导致沙箱启动失败、每次写入都要走“无沙箱重试”审批。为容器加上：
+
+```sh
+docker run --security-opt seccomp=unconfined ...
+```
+
+即可恢复正常沙箱。裸机或虚拟机上的 Linux 通常默认启用非特权 user namespace，无需此步骤。
 
 ## 从源码构建 Connector 用于开发
 

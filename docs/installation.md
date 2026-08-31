@@ -165,6 +165,10 @@ sub2api-codex-connector-ctl start
 sub2api-codex-connector-ctl status
 ```
 
+![Claiming the device with the one-time pairing code in the PWA](images/pwa-pairing-dialog.jpeg)
+
+![After pairing the device is online and ready to converse from the browser](images/pwa-main-view.jpeg)
+
 The package installs a user-level `systemd` service on Linux or a `launchd`
 service. Package upgrades and removal preserve the user's private
 Connector state. For a v2 managed configuration, revoke the device in the PWA
@@ -172,6 +176,16 @@ before explicitly deleting that state with
 `sub2api-codex-connector-ctl purge-user-state --yes`. Legacy configurations
 without a verified layout must follow the non-destructive migration guidance
 above instead.
+
+### Sandbox note for containerized devices
+
+When the Connector and Codex run inside a container, Codex's filesystem sandbox helper (bubblewrap) needs to create an unprivileged user namespace, and the default container seccomp policy blocks `CLONE_NEWUSER`. The sandbox then fails to start and every write falls back to a "retry without sandbox?" approval. Start the container with:
+
+```sh
+docker run --security-opt seccomp=unconfined ...
+```
+
+Bare-metal and VM Linux hosts normally allow unprivileged user namespaces by default and need no extra step.
 
 ## Build a Connector from source for development
 
