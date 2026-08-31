@@ -1400,6 +1400,82 @@ def validate_image_trust_directory(directory: Path) -> dict[str, Any]:
     return result
 
 
+SIGN_STATEMENT_PREDICATE_TYPE = "https://sigstore.dev/cosign/sign/v1"
+MAX_SIGN_BUNDLE_BYTES = 1024 * 1024
+
+
+def verify_saved_sign_statement(
+    layout: Path,
+    digest: str,
+    expected_annotations: dict[str, str],
+    label: str,
+) -> None:
+    """Bind a Cosign-saved layout to the locked digest and sign statement.
+
+    The layout index must contain exactly the locked image, and one stored
+    Sigstore bundle must carry the Cosign v3 sign statement whose subject
+    pins that digest and every release annotation.
+    """
+    index = strict_json(
+        read_regular(layout / "index.json", f"{label} layout index", maximum=MAX_JSON_BYTES),
+        f"{label} layout index",
+    )
+    manifests = index.get("manifests") if isinstance(index, dict) else None
+    if (
+        not isinstance(manifests, list)
+        or len(manifests) != 1
+        or not isinstance(manifests[0], dict)
+        or manifests[0].get("digest") != digest
+    ):
+        fail(f"{label} saved layout does not pin the locked digest")
+    plain_digest = digest.removeprefix("sha256:")
+    blob_dir = layout / "blobs" / "sha256"
+    if not blob_dir.is_dir():
+        fail(f"{label} saved layout has no blob directory")
+    for blob in sorted(blob_dir.iterdir()):
+        try:
+            if not blob.is_file() or blob.stat().st_size > MAX_SIGN_BUNDLE_BYTES:
+                continue
+            bundle = json.loads(blob.read_bytes())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(bundle, dict):
+            continue
+        envelope = bundle.get("dsseEnvelope")
+        if not isinstance(envelope, dict) or not isinstance(
+            envelope.get("payload"), str
+        ):
+            continue
+        try:
+            statement = json.loads(base64.b64decode(envelope["payload"], validate=True))
+        except (ValueError, binascii.Error):
+            continue
+        if (
+            not isinstance(statement, dict)
+            or statement.get("predicateType") != SIGN_STATEMENT_PREDICATE_TYPE
+        ):
+            continue
+        subjects = statement.get("subject")
+        if not isinstance(subjects, list):
+            continue
+        for subject in subjects:
+            if not isinstance(subject, dict):
+                continue
+            subject_digest = subject.get("digest")
+            annotations = subject.get("annotations")
+            if (
+                isinstance(subject_digest, dict)
+                and subject_digest.get("sha256") == plain_digest
+                and isinstance(annotations, dict)
+                and all(
+                    annotations.get(key) == value
+                    for key, value in expected_annotations.items()
+                )
+            ):
+                return
+    fail(f"{label} saved layout lacks the verified sign statement binding")
+
+
 def verify_offline_image_trust(
     args: argparse.Namespace,
     lock: dict[str, Any],
@@ -1427,7 +1503,7 @@ def verify_offline_image_trust(
             "-a",
             f"source_commit={lock['source']['commit']}",
         ]
-        signature = run_checked(
+        run_checked(
             [
                 args.cosign,
                 "verify",
@@ -1440,24 +1516,18 @@ def verify_offline_image_trust(
                 local_image,
             ]
         )
-        claims = control_images.parse_json_output(
-            signature.stdout, f"{component} offline image signature"
+        # Cosign v3 renders local-image signature claims without the digest
+        # or annotations, so bind the digest through the layout itself.
+        verify_saved_sign_statement(
+            Path(local_image),
+            image["digest"],
+            {
+                "component": component,
+                "release_tag": lock["release_tag"],
+                "source_commit": lock["source"]["commit"],
+            },
+            f"{component} offline signature",
         )
-        matching_claim = False
-        for claim in claims:
-            critical = claim.get("critical") or claim.get("Critical")
-            if not isinstance(critical, dict):
-                continue
-            image_claim = critical.get("image") or critical.get("Image")
-            if not isinstance(image_claim, dict):
-                continue
-            observed = image_claim.get("docker-manifest-digest") or image_claim.get(
-                "Docker-manifest-digest"
-            )
-            if observed == image["digest"]:
-                matching_claim = True
-        if not matching_claim:
-            fail(f"{component} offline signature does not bind the locked digest")
         for evidence_name, cosign_type in (
             ("sbom", "spdxjson"),
             ("provenance", "slsaprovenance1"),

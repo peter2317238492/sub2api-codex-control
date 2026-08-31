@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/v1"
     external_api_base_path: str = "/codex-api"
     build_version: str = Field(
-        default="0.1.3",
+        default="0.1.4",
         min_length=1,
         max_length=64,
         pattern=r"^[0-9A-Za-z][0-9A-Za-z._+-]*$",
