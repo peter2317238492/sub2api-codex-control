@@ -572,16 +572,38 @@ jobs:
               -a "release_tag=$GITHUB_REF_NAME"
               -a "source_commit=$GITHUB_SHA"
             )
-            signature_claims="$RUNNER_TEMP/$component.offline-signature.json"
             cosign verify "${common[@]}" "${annotations[@]}" \
               --trusted-root "$IMAGE_TRUST_DIR/trusted_root.json" \
-              --local-image "$IMAGE_TRUST_DIR/$component" > "$signature_claims"
+              --local-image "$IMAGE_TRUST_DIR/$component" >/dev/null
+            # Cosign v3 renders local-image signature claims without the
+            # digest or annotations, so bind the digest independently: the
+            # saved layout must be exactly the locked image, and it must
+            # carry the verified v3 sign statement whose subject pins the
+            # digest and all release annotations.
             jq -e --arg digest "${image_ref#*@}" '
-              type == "array" and length > 0 and
-              any(.[];
-                ((.critical // .Critical).image // (.critical // .Critical).Image)
-                | (."docker-manifest-digest" // ."Docker-manifest-digest") == $digest)
-            ' "$signature_claims" >/dev/null
+              .manifests | length == 1 and .[0].digest == $digest
+            ' "$IMAGE_TRUST_DIR/$component/index.json" >/dev/null
+            sign_statement_found=0
+            for blob in "$IMAGE_TRUST_DIR/$component"/blobs/sha256/*; do
+              if jq -e \
+                --arg digest "${image_ref##*@sha256:}" \
+                --arg component "$component" \
+                --arg release_tag "$GITHUB_REF_NAME" \
+                --arg source_commit "$GITHUB_SHA" '
+                  (.dsseEnvelope.payload | @base64d | fromjson) as $statement
+                  | $statement.predicateType == "https://sigstore.dev/cosign/sign/v1"
+                    and ($statement.subject | type == "array")
+                    and any($statement.subject[];
+                      .digest.sha256 == $digest
+                      and .annotations.component == $component
+                      and .annotations.release_tag == $release_tag
+                      and .annotations.source_commit == $source_commit)
+                ' "$blob" >/dev/null 2>&1; then
+                sign_statement_found=1
+                break
+              fi
+            done
+            [ "$sign_statement_found" -eq 1 ]
             cosign verify-attestation "${common[@]}" \
               --trusted-root "$IMAGE_TRUST_DIR/trusted_root.json" \
               --local-image "$IMAGE_TRUST_DIR/$component" \
