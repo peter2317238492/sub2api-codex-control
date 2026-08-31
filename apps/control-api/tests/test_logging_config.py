@@ -43,7 +43,7 @@ def test_formatter_emits_bounded_schema_and_allowlisted_scalars() -> None:
     assert payload["timestamp"].endswith("Z")
     assert payload["severity"] == "WARNING"
     assert payload["component"] == "control-api"
-    assert payload["release"] == "0.1.1@unknown"
+    assert payload["release"] == "0.1.2@unknown"
     assert payload["logger"] == "control_api.services"
     assert payload["event"] == "session.exchange_failed"
     assert len(payload["message"]) == MAX_MESSAGE_LENGTH
