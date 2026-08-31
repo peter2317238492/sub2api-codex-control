@@ -85,7 +85,7 @@ sequenceDiagram
     P->>A: 提交配对码
     A-->>T: 认领成功
     T->>T: pair 自行退出
-    Note over U,A: 配对码一次性、限时；过期 / 被拒 / 已用需重新生成
+    Note over U,A: 配对码一次性、限时 — 过期、被拒或已用需重新生成
 ```
 
 ## 4. 日常使用：线程与 turn
