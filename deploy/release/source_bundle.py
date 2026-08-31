@@ -38,6 +38,7 @@ PORTABLE_PATH_RE = re.compile(r"^[A-Za-z0-9._+@/-]+$")
 ALLOWED_TOP_LEVEL = {
     ".editorconfig",
     ".env.example",
+    ".gitattributes",
     ".github",
     ".gitignore",
     "CONTRIBUTING.md",
@@ -86,6 +87,7 @@ ALLOWED_PLACEHOLDER_PATHS = {
     "deploy/docker-compose/backups/README.md",
     "deploy/docker-compose/secrets/.gitignore",
     "deploy/docker-compose/secrets/README.md",
+    "deploy/monitoring/evidence/.gitignore",
     "tests/e2e/reports/.gitignore",
     "tests/e2e/reports/README.md",
 }
