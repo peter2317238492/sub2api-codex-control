@@ -493,12 +493,10 @@ jobs:
             cosign attest --yes \
               --type spdxjson \
               --predicate "$RELEASE_DIR/$component.spdx.json" \
-              "${annotations[@]}" \
               "$image_ref"
             cosign attest --yes \
               --type slsaprovenance1 \
               --predicate "$RELEASE_DIR/$component.provenance.json" \
-              "${annotations[@]}" \
               "$image_ref"
           done
           cosign sign-blob --yes \
@@ -568,12 +566,14 @@ jobs:
               --certificate-github-workflow-trigger push
               --certificate-github-workflow-repository "$GITHUB_REPOSITORY"
               --certificate-github-workflow-ref "$GITHUB_REF"
+            )
+            annotations=(
               -a "component=$component"
               -a "release_tag=$GITHUB_REF_NAME"
               -a "source_commit=$GITHUB_SHA"
             )
             signature_claims="$RUNNER_TEMP/$component.offline-signature.json"
-            cosign verify "${common[@]}" \
+            cosign verify "${common[@]}" "${annotations[@]}" \
               --trusted-root "$IMAGE_TRUST_DIR/trusted_root.json" \
               --local-image "$IMAGE_TRUST_DIR/$component" > "$signature_claims"
             jq -e --arg digest "${image_ref#*@}" '

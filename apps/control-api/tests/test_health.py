@@ -38,7 +38,7 @@ async def test_internal_metrics_are_persistent_and_low_cardinality(harness: Harn
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["content-type"].startswith("text/plain; version=0.0.4")
-    assert 'codex_control_build_info{vcs_ref="unknown",version="0.1.2"} 1' in response.text
+    assert 'codex_control_build_info{vcs_ref="unknown",version="0.1.3"} 1' in response.text
     assert "codex_control_sessions_active 1" in response.text
     assert (
         'codex_control_audit_events_retained{action="session.exchange",outcome="succeeded"} 1'

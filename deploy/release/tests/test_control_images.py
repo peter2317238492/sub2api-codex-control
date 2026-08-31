@@ -428,10 +428,16 @@ class ControlImageReleaseTests(unittest.TestCase):
             self.assertIn(SOURCE_REF, call)
             self.assertFalse(any("regexp" in argument for argument in call))
         for component in control_images.COMPONENTS:
+            repository, digest = IMAGE_FIXTURES[component]
             component_calls = [
-                call for call in verified_calls if f"component={component}" in call
+                call for call in verified_calls if call[-1] == f"{repository}@{digest}"
             ]
             self.assertEqual(len(component_calls), 3, component)
+            annotated_calls = [
+                call for call in component_calls if f"component={component}" in call
+            ]
+            self.assertEqual(len(annotated_calls), 1, component)
+            self.assertEqual(annotated_calls[0][1], "verify", component)
 
     def test_wrong_external_identity_is_rejected_after_blob_verification(self) -> None:
         with (

@@ -1473,7 +1473,6 @@ def verify_offline_image_trust(
                     "--type",
                     cosign_type,
                     *trust,
-                    *annotations,
                     local_image,
                 ]
             )
