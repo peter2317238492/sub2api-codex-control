@@ -1242,7 +1242,6 @@ def verify_release_snapshot(
                     "--type",
                     cosign_type,
                     *trust,
-                    *annotations,
                     image["reference"],
                 ]
             )
