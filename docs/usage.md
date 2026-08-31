@@ -37,6 +37,10 @@ still require local `sudo`.
 On a narrow screen, use the device and thread icons in the header to open the
 corresponding sidebars.
 
+![Codex Control desktop layout: device rail, thread list, and conversation](images/pwa-main-view.jpeg)
+
+*Real production screenshot: an online device, its thread, and a conversation with Codex echoing the file content it wrote.*
+
 ## First-time setup
 
 ### 1. Sign in and open Control
@@ -122,7 +126,9 @@ sub2api-codex-connector-ctl pair
 
 The Connector reports a private, mode-`0600` `pairing-code.json` path on
 stderr. Read the 16-character one-time code only from that file. In the PWA,
-select **Pair existing Connector** and enter the code. Keep `pair` running; it
+select **Pair existing Connector** and enter the code.
+
+![The PWA pairing dialog awaiting the 16-character one-time code](images/pwa-pairing-dialog.jpeg) Keep `pair` running; it
 exits only after the browser claim is confirmed.
 
 The pairing code is a temporary credential. Do not screenshot it, paste it in
@@ -141,6 +147,8 @@ sub2api-codex-connector-ctl status
 
 Return to the PWA and confirm that the device is **Online**. The Connector makes
 an outbound WSS connection only and does not listen on an inbound device port.
+
+![A real turn in the browser: the task, streamed Codex replies, and the final file content](images/pwa-conversation.jpeg)
 
 ## Daily use
 

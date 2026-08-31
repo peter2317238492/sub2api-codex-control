@@ -32,6 +32,10 @@ Sub2API 管理员负责部署站点、发布可信安装包和维护服务。用
 
 在窄屏设备上，顶栏的设备与线程图标用于打开对应侧栏。
 
+![Codex Control 桌面端主界面：左侧设备栏、中间线程栏、右侧对话区](images/pwa-main-view.jpeg)
+
+*真实生产环境截图：设备在线、线程与对话（含 Codex 回显的文件内容）。*
+
 ## 首次设置
 
 ### 1. 登录并打开 Control
@@ -110,6 +114,8 @@ Connector 会在 stderr 提示一个 mode `0600` 的 `pairing-code.json` 路径�
 16 位一次性配对码，然后在 PWA 点击**配对已有 Connector**并输入。保持 `pair` 运行，直到
 网页认领完成且命令自行退出。
 
+![PWA 配对对话框：输入 16 位一次性配对码后点击认领设备](images/pwa-pairing-dialog.jpeg)
+
 配对码是临时凭据。不要截图、复制到聊天或写入日志；过期、被拒绝或已使用的配对码必须重新
 生成。
 
@@ -123,6 +129,8 @@ sub2api-codex-connector-ctl status
 ```
 
 返回 PWA，确认设备状态为**在线**。Connector 只建立出站 WSS，不监听设备入站端口。
+
+![浏览器中的真实对话：任务下发、Codex 流式回复与最终文件内容回显](images/pwa-conversation.jpeg)
 
 ## 日常使用
 
