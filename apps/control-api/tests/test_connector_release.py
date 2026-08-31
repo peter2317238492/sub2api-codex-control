@@ -17,7 +17,7 @@ from control_api.connector_release import (
 from control_api.schemas import ConnectorReleaseMetadata
 
 REPOSITORY = "https://github.com/peter2317238492/sub2api-codex-control"
-VERSION = "0.1.10"
+VERSION = "0.1.11"
 TAG = f"connector-v{VERSION}"
 
 
@@ -141,7 +141,7 @@ def test_release_metadata_requires_the_fixed_complete_native_inventory() -> None
         "x" * (16 * 1024 + 1),
         "[" * 1200 + "0" + "]" * 1200,
         '{"release_mode":"release","release_mode":"release"}',
-        json.dumps({**release_metadata(), "version": "0.1.11", "tag": "connector-v0.1.11"}),
+        json.dumps({**release_metadata(), "version": "0.1.12", "tag": "connector-v0.1.12"}),
         json.dumps({**release_metadata(), "codex_version": "0.148.0"}),
         json.dumps({**release_metadata(), "schema_digest": "0" * 64}),
     ],
