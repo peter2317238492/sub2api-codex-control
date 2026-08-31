@@ -85,7 +85,7 @@ sequenceDiagram
     P->>A: submit the code
     A-->>T: claim accepted
     T->>T: pair exits on its own
-    Note over U,A: codes are one-time and short-lived; expired / rejected / used codes must be regenerated
+    Note over U,A: codes are one-time and short-lived — expired, rejected, or used codes must be regenerated
 ```
 
 ## 4. Daily use: threads and turns
@@ -102,7 +102,7 @@ flowchart TD
     FL -- "resume icon while the device is online" --> R
     X --> I
     DN --> I
-    I -- "archive when idle or failed" --> AR["Archived (removes the remote view only; the on-device Codex thread stays)"]
+    I -- "archive when idle or failed" --> AR["Archived (removes the remote view only — the on-device Codex thread stays)"]
     FL --> AR
 ```
 
