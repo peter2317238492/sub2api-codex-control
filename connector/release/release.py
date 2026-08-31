@@ -5804,11 +5804,15 @@ def validate_public_asset(
 ) -> dict[str, Any]:
     if not isinstance(asset, dict):
         raise ReleaseError(f"{context} must be an object")
-    require_exact_keys(
-        asset,
-        {"id", "name", "size", "digest", "state", "browser_download_url"},
-        context,
-    )
+    # GitHub's API decorates asset objects with additional metadata
+    # (content_type, timestamps, uploader, ...); only the projected identity
+    # fields below participate in the canonical descriptor, so extra keys are
+    # ignored while every required key stays mandatory and fully validated.
+    required = {"id", "name", "size", "digest", "state", "browser_download_url"}
+    missing = sorted(required - set(asset))
+    if missing:
+        raise ReleaseError(f"{context} keys mismatch; missing={missing}, extra=[]")
+    asset = {key: asset[key] for key in required}
     name = asset["name"]
     if (
         not isinstance(asset["id"], int)

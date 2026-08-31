@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     sub2api_expected_commit: Literal["e0c48a1"] = "e0c48a1"
     sub2api_contract_marker: str = ""
 
-    connector_expected_version: Literal["0.1.9"] = "0.1.9"
+    connector_expected_version: Literal["0.1.10"] = "0.1.10"
     codex_expected_version: Literal["0.147.0"] = "0.147.0"
     appserver_schema_digest: Literal[
         "511c1b3ca038a80740a5a41ca10a7f925c0f744e582fb9aaa03cc46c6e98b80b"
