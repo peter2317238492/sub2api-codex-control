@@ -1970,7 +1970,7 @@ jobs:
           receipt="$CONTROL_VULNERABILITY_DIR/vulnerability-receipt.json"
           server_parts=$(jq -er '
               [.packages | to_entries[] | .value.delivery.parts | length] | add
-            ' "$CONTROL_VULNERABILITY_DIR/server/server-packages.manifest.json")
+            ' "$SERVER_PACKAGE_DIR/server-packages.manifest.json")
           [[ "$server_parts" =~ ^[1-9][0-9]*$ ]]
           jq -e --argjson server_parts "$server_parts" '
               (.evidence_inventory | length) == 50 + $server_parts
