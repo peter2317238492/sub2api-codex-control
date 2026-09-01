@@ -18,6 +18,9 @@ from typing import Any, BinaryIO, NoReturn
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
+ARTIFACT_TYPE_RE = re.compile(
+    r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]{0,126}$"
+)
 TAG_RE = re.compile(
     r"^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?/)"
     r"*(?:[a-z0-9]+(?:[._-][a-z0-9]+)*):"
@@ -273,12 +276,19 @@ def descriptor(
     allow_platform: bool = False,
 ) -> dict[str, Any]:
     result = require_object(value, label)
-    optional = {"annotations", "urls"}
+    # OCI 1.1 descriptors may carry artifactType; crane's exports include it.
+    optional = {"annotations", "urls", "artifactType"}
     if allow_platform:
         optional.add("platform")
     require_exact_or_optional_keys(
         result, {"mediaType", "digest", "size"}, optional, label
     )
+    artifact_type = result.get("artifactType")
+    if artifact_type is not None and (
+        not isinstance(artifact_type, str)
+        or ARTIFACT_TYPE_RE.fullmatch(artifact_type) is None
+    ):
+        fail(f"{label}.artifactType must be an RFC 6838 media type")
     media_type = result.get("mediaType")
     if media_type not in media_types:
         fail(f"{label} has unsupported media type {media_type!r}")

@@ -506,11 +506,15 @@ def _extract_findings(target: str, report: dict[str, Any]) -> tuple[list[Finding
             package_version = package.get("Version")
             identifier = package.get("Identifier")
             purl = identifier.get("PURL", "") if isinstance(identifier, dict) else ""
+            if package_version is None and package.get("Relationship") == "root":
+                # The scanned tree's own root module (for example a Go main
+                # module) legitimately has no version.
+                package_version = ""
             if (
                 not isinstance(package_name, str)
                 or not package_name
                 or not isinstance(package_version, str)
-                or not package_version
+                or (not package_version and package.get("Relationship") != "root")
                 or not isinstance(purl, str)
             ):
                 raise GateError(f"Trivy report for {target} has an incomplete package")
@@ -554,6 +558,18 @@ def _extract_findings(target: str, report: dict[str, Any]) -> tuple[list[Finding
         raise GateError(
             f"Trivy report for {target} lacks --list-all-pkgs vulnerability coverage"
         )
+    # The same package installed at several filesystem paths yields
+    # byte-identical findings (one per path); collapse exact duplicates.
+    # Findings that share an identity but disagree on severity or fixed
+    # version still fail below.
+    seen_findings: set[Finding] = set()
+    unique_findings: list[Finding] = []
+    for finding in findings:
+        if finding in seen_findings:
+            continue
+        seen_findings.add(finding)
+        unique_findings.append(finding)
+    findings = unique_findings
     identities = [finding.identity for finding in findings]
     if len(identities) != len(set(identities)):
         raise GateError(f"Trivy report for {target} contains duplicate findings")
@@ -805,15 +821,17 @@ def _load_dispositions(
     expected = {finding.identity for finding in findings}
     observed: set[tuple[str, str, str, str]] = set()
     normalized: list[dict[str, Any]] = []
+    # Disposition entries are pre-authored in the source tree, so they can
+    # only bind values knowable before the release run: the finding identity
+    # plus the review terms. Run-bound values (target identity, report and
+    # database hashes, the release commit) are bound by the receipt itself,
+    # which also hashes this dispositions file; an entry cannot carry the
+    # commit that will contain it.
     entry_keys = {
         "target",
         "vulnerability_id",
         "package",
         "installed_version",
-        "target_identity",
-        "report_sha256",
-        "database_metadata_sha256",
-        "source_commit",
         "status",
         "owner",
         "rationale",
@@ -837,22 +855,9 @@ def _load_dispositions(
         observed.add(identity)  # type: ignore[arg-type]
         if identity not in expected:
             raise GateError(f"unused vulnerability disposition: {identity}")
-        target_context = target_contexts.get(str(entry.get("target")))
-        if not isinstance(target_context, dict) or any(
-            entry.get(field) != target_context.get(field)
-            for field in (
-                "target_identity",
-                "report_sha256",
-                "database_metadata_sha256",
-            )
-        ):
+        if str(entry.get("target")) not in target_contexts:
             raise GateError(
-                f"vulnerability disposition is not bound to current target evidence: {identity}"
-            )
-        if entry.get("source_commit") != source_commit:
-            raise GateError(
-                "vulnerability disposition is not bound to "
-                f"{source_commit}: {identity}"
+                f"vulnerability disposition names an unknown target: {identity}"
             )
         if entry.get("status") not in allowed:
             raise GateError(f"unsupported vulnerability disposition status: {identity}")

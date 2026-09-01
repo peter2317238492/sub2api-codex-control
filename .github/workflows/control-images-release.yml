@@ -1317,12 +1317,57 @@ jobs:
             "$CRANE" pull --format=oci --annotate-ref \
             ghcr.io/aquasecurity/trivy-java-db:1 \
             "$CONTROL_VULNERABILITY_DIR/trivy-java-db-oci"
-          "$TRIVY" --cache-dir "$cache" --config "$empty_config" \
-            image --db-repository ghcr.io/aquasecurity/trivy-db:2 \
-            --download-db-only --no-progress
-          "$TRIVY" --cache-dir "$cache" --config "$empty_config" \
-            image --java-db-repository ghcr.io/aquasecurity/trivy-java-db:1 \
-            --download-java-db-only --no-progress
+          # The databases are pinned by manifest digest so the finding set
+          # that the committed dispositions review is exactly the set this
+          # release scans; a moved upstream tag fails here instead of
+          # silently scanning different content. The Trivy cache is staged
+          # from the pinned pulled layer (no second network download), with
+          # DownloadedAt recorded at staging time as the client would.
+          TRIVY_DB_MANIFEST_DIGEST=sha256:c6376d966ee3438d2fe5ebfa4628a542ae2625bb0096b18fa75c06d7db406bf9
+          TRIVY_JAVA_DB_MANIFEST_DIGEST=sha256:9240d00cbec7784a6b14809e7c01797afd664c36e7bb3ad2942a52aefa25e56c
+          jq -e --arg digest "$TRIVY_DB_MANIFEST_DIGEST" \
+            '.manifests | length == 1 and .[0].digest == $digest' \
+            "$CONTROL_VULNERABILITY_DIR/trivy-db-oci/index.json" >/dev/null
+          jq -e --arg digest "$TRIVY_JAVA_DB_MANIFEST_DIGEST" \
+            '.manifests | length == 1 and .[0].digest == $digest' \
+            "$CONTROL_VULNERABILITY_DIR/trivy-java-db-oci/index.json" >/dev/null
+          stage_trivy_cache() {
+            local layout=$1 dest=$2
+            local manifest layer
+            manifest=$(jq -er '.manifests[0].digest | sub("^sha256:"; "")' \
+              "$layout/index.json")
+            layer=$(jq -er '.layers[0].digest | sub("^sha256:"; "")' \
+              "$layout/blobs/sha256/$manifest")
+            install -d -m 0700 "$dest"
+            python3 - "$layout/blobs/sha256/$layer" "$dest" <<'PY'
+          import datetime
+          import json
+          import pathlib
+          import sys
+          import tarfile
+
+          blob, dest = sys.argv[1], pathlib.Path(sys.argv[2])
+          with tarfile.open(blob, "r:gz") as archive:
+              for member in archive.getmembers():
+                  name = member.name.removeprefix("./")
+                  if not member.isreg() or name != pathlib.Path(name).name:
+                      raise SystemExit(f"unsafe database layer member: {member.name}")
+                  source = archive.extractfile(member)
+                  if source is None:
+                      raise SystemExit(f"unreadable database layer member: {name}")
+                  (dest / name).write_bytes(source.read())
+          metadata_path = dest / "metadata.json"
+          metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+          metadata["DownloadedAt"] = (
+              datetime.datetime.now(datetime.UTC)
+              .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+              + "Z"
+          )
+          metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+          PY
+          }
+          stage_trivy_cache "$CONTROL_VULNERABILITY_DIR/trivy-db-oci" "$cache/db"
+          stage_trivy_cache "$CONTROL_VULNERABILITY_DIR/trivy-java-db-oci" "$cache/java-db"
           test -f "$cache/db/metadata.json"
           test -f "$cache/db/trivy.db"
           test -f "$cache/java-db/metadata.json"
