@@ -1320,11 +1320,17 @@ jobs:
           # The databases are pinned by manifest digest so the finding set
           # that the committed dispositions review is exactly the set this
           # release scans; a moved upstream tag fails here instead of
-          # silently scanning different content. The Trivy cache is staged
-          # from the pinned pulled layer (no second network download), with
-          # DownloadedAt recorded at staging time as the client would.
-          TRIVY_DB_MANIFEST_DIGEST=sha256:c6376d966ee3438d2fe5ebfa4628a542ae2625bb0096b18fa75c06d7db406bf9
-          TRIVY_JAVA_DB_MANIFEST_DIGEST=sha256:9240d00cbec7784a6b14809e7c01797afd664c36e7bb3ad2942a52aefa25e56c
+          # silently scanning different content. The pins live in repository
+          # variables (external release policy, like the Connector release
+          # pins) because the upstream tags advance every few hours — the
+          # variables are refreshed against the reviewed dispositions right
+          # before tagging. The Trivy cache is staged from the pinned pulled
+          # layer (no second network download), with DownloadedAt recorded
+          # at staging time as the client would.
+          TRIVY_DB_MANIFEST_DIGEST="${{ vars.CONTROL_TRIVY_DB_DIGEST }}"
+          TRIVY_JAVA_DB_MANIFEST_DIGEST="${{ vars.CONTROL_TRIVY_JAVA_DB_DIGEST }}"
+          [[ "$TRIVY_DB_MANIFEST_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$TRIVY_JAVA_DB_MANIFEST_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           jq -e --arg digest "$TRIVY_DB_MANIFEST_DIGEST" \
             '.manifests | length == 1 and .[0].digest == $digest' \
             "$CONTROL_VULNERABILITY_DIR/trivy-db-oci/index.json" >/dev/null

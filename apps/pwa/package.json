@@ -1,6 +1,6 @@
 {
   "name": "@sub2api-codex/pwa",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "Browser client for Sub2API Codex Control",
   "license": "Apache-2.0",
