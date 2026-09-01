@@ -49,7 +49,7 @@ EXPECTED_WORKFLOW_SHA256 = {
         "6272badd5a2452804a47210a841dad7f22f3f2a9d0d5117b2d8e4292e05fc6c1"
     ),
     Path(".github/workflows/control-images-release.yml"): (
-        "9463e7474910ed7a75afa6b693bcd82c09f5307c090826387572a7531dd5df3b"
+        "daf4dbc0b561a93cc53b04b859f5c45463b2d91f3cd74071d63ea334c868d618"
     ),
 }
 # Formal release workflows may run only from their protected tag push, and
