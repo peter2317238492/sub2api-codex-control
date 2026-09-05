@@ -95,7 +95,7 @@ func (s *HTTPTokenSource) Token(ctx context.Context) (DeviceToken, error) {
 	request.Header.Set("Authorization", "Device "+s.Credentials.RefreshCredential)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
-	response, err := s.HTTP.Do(request)
+	response, err := productionCanaryHTTPClient(s.HTTP).Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
 			return DeviceToken{}, fmt.Errorf("device token exchange canceled: %w", ctx.Err())

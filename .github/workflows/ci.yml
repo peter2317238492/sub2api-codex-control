@@ -101,7 +101,7 @@ jobs:
 
       - name: Test the isolated production canary driver
         run: |
-          .venv/bin/pip install -r tests/e2e/production-canary-requirements.txt
+          .venv/bin/pip install -r tests/e2e/requirements-production-canary.txt
           .venv/bin/python -m pytest tests/e2e/test_production_connector_canary.py
 
   web:

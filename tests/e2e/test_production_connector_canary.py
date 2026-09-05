@@ -91,7 +91,7 @@ def test_approval_binding_rejects_other_turns_commands_items_and_expiry(
         turn_id="native-turn",
         kind="command",
         workspace=tmp_path,
-        approve_target=target,
+        target=target,
     )
     assert canary._approval_is_bound(record, copy.deepcopy(record), **arguments)
     for field, value in (
@@ -137,6 +137,59 @@ def test_portable_process_cleanup_leaves_an_unrelated_process_running() -> None:
         unrelated.wait(timeout=5)
 
 
+def test_negative_approvals_are_bound_to_the_actual_requested_target(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "marker"
+    record = {
+        "approval_id": "outer",
+        "device_id": "device",
+        "kind": "command",
+        "expires_at": (datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+        "details": {
+            "threadId": "native-thread",
+            "turnId": "native-turn",
+            "itemId": "item",
+            "cwd": str(tmp_path),
+        },
+    }
+    arguments = dict(
+        device_id="device",
+        thread_id="native-thread",
+        turn_id="native-turn",
+        workspace=tmp_path,
+        target=target,
+    )
+    record["details"]["command"] = f"printf timeout > {shlex.quote(str(target))}"
+    assert canary._approval_is_bound(
+        record, record, kind="command", command_value="timeout", **arguments
+    )
+    record["details"]["command"] = "printf timeout > /outside"
+    assert not canary._approval_is_bound(
+        record, record, kind="command", command_value="timeout", **arguments
+    )
+    record["kind"] = "file_change"
+    record["details"]["fileChanges"] = {str(target): {"type": "add"}}
+    assert canary._approval_is_bound(record, record, kind="file_change", **arguments)
+    record["details"]["fileChanges"] = {"/outside": {"type": "add"}}
+    assert not canary._approval_is_bound(
+        record, record, kind="file_change", **arguments
+    )
+    record["kind"] = "permission"
+    record["details"]["permissions"] = {"fileSystem": {"read": [str(tmp_path)]}}
+    assert canary._approval_is_bound(record, record, kind="permission", **arguments)
+    for permissions in (
+        {"fileSystem": {"read": ["/outside"]}},
+        {"fileSystem": {"write": [str(tmp_path)]}},
+        {"fileSystem": {"read": [str(tmp_path)]}, "network": {"enabled": True}},
+        {},
+    ):
+        record["details"]["permissions"] = permissions
+        assert not canary._approval_is_bound(
+            record, record, kind="permission", **arguments
+        )
+
+
 def test_process_identity_is_rechecked_before_sigkill(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -159,6 +212,101 @@ def test_process_identity_is_rechecked_before_sigkill(
     )
     assert canary._terminate_owned_processes({process}, owner_session=99)
     assert process.signals == [signal.SIGTERM]
+
+
+def test_child_spawned_during_shutdown_is_collected(tmp_path: Path) -> None:
+    marker = tmp_path / "late-child.json"
+    code = (
+        "import signal,subprocess,sys,time,json,psutil\n"
+        "def stop(*args):\n"
+        " p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)'])\n"
+        f" open({str(marker)!r},'w').write(json.dumps([p.pid,psutil.Process(p.pid).create_time()]))\n"
+        " raise SystemExit(0)\n"
+        "signal.signal(signal.SIGTERM,stop)\n"
+        "print('ready',flush=True)\n"
+        "time.sleep(20)\n"
+    )
+    process = canary.CanaryProcess(
+        [sys.executable, "-c", code], start_new_session=True, stdout=subprocess.PIPE
+    )
+    try:
+        assert process.stdout.readline() == b"ready\n"
+        assert canary._stop_process(process)
+        pid, created = json.loads(marker.read_text())
+        try:
+            assert canary.psutil.Process(pid).create_time() != created
+        except canary.psutil.NoSuchProcess:
+            pass
+    finally:
+        if marker.exists():
+            pid, created = json.loads(marker.read_text())
+            try:
+                child = canary.psutil.Process(pid)
+                if child.create_time() == created:
+                    child.kill()
+            except canary.psutil.NoSuchProcess:
+                pass
+        canary._cleanup_canary_processes()
+
+
+def test_approval_scenarios_do_not_consume_a_terminal_event_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Client:
+        browser_event_cursors = []
+        evidence = CanaryEvidence()
+
+        def __init__(self):
+            self.count = 0
+            self.seen = set()
+
+        def pending_approval_ids(self, *args):
+            return set()
+
+        def request(self, *args, **kwargs):
+            return None
+
+        def accepted_command(self, *args):
+            self.count += 1
+            return str(self.count)
+
+        def command_event(self, stream, command, method, description):
+            assert command not in self.seen
+            self.seen.add(command)
+            return {"state": "succeeded", "result": {"turn": {"id": "turn-" + command}}}
+
+        def wait_browser_event(self, stream, description, predicate, **kwargs):
+            raise AssertionError("timed out waiting for " + description)
+
+    client = Client()
+    monkeypatch.setattr(canary, "_wait_thread_idle", lambda *args: None)
+    assert not canary._verify_real_approvals(
+        client=client,
+        browser_stream=object(),
+        device_id="device",
+        thread_id="thread",
+        remote_thread_id="native",
+        workspace=tmp_path,
+        mutating_headers={},
+    )
+    assert len(client.seen) == 4
+
+
+def test_expired_primary_budget_blocks_work_but_allows_logout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = ProductionCanary("https://control.invalid", CanaryEvidence())
+    client._run_deadline = time.monotonic() - 1
+    calls = []
+    monkeypatch.setattr(
+        canary.Smoke,
+        "request",
+        lambda self, path, **kwargs: calls.append(path) or Result(204, {}, b""),
+    )
+    with pytest.raises(AssertionError, match="budget is exhausted"):
+        client.request("/codex-api/v1/devices")
+    assert calls == []
+    assert client.request("/codex-api/v1/session/logout", method="POST").status == 204
 
 
 def test_codex_home_mismatch_is_rejected_before_launch(

@@ -395,7 +395,7 @@
       "source_ref": "release-7.2.2",
       "version_evidence": {
         "kind": "python-constraint",
-        "path": "tests/e2e/production-canary-requirements.txt",
+        "path": "tests/e2e/requirements-production-canary.txt",
         "package": "psutil"
       },
       "license_expression": "BSD-3-Clause",

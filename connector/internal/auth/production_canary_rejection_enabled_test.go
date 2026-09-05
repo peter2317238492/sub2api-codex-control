@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/peter2317238492/sub2api-codex-control/connector/internal/pairing"
 )
 
 func TestCanaryRejectionRequiresExactCredentialFailure(t *testing.T) {
@@ -46,5 +48,29 @@ func TestCanaryRejectionRequiresExactCredentialFailure(t *testing.T) {
 				t.Fatalf("credential classification differs: %v", err)
 			}
 		})
+	}
+}
+
+func TestCanaryTokenRequestStopsBeforeFollowingRedirect(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusFound, Request: request,
+			Header: http.Header{"Location": []string{"http://control.test/leak"}},
+			Body:   io.NopCloser(strings.NewReader("")),
+		}, nil
+	})}
+	source := &HTTPTokenSource{
+		HTTP: client, URL: "https://control.test/codex-api/v1/device/connect-token",
+		Credentials: pairing.Credentials{DeviceID: "11111111-1111-4111-8111-111111111111", RefreshCredential: "fixture-refresh"},
+		Identity:    newTestIdentity(t),
+	}
+	_, err := source.Token(t.Context())
+	if calls != 1 || err == nil || !strings.Contains(err.Error(), "HTTP status 302") {
+		t.Fatalf("redirect was not stopped before another request: calls=%d err=%v", calls, err)
+	}
+	if client.CheckRedirect != nil {
+		t.Fatal("instrumented policy mutated the caller's HTTP client")
 	}
 }

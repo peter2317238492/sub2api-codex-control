@@ -32,11 +32,13 @@ Install the pinned operator-only dependency into a dedicated virtual environment
 
 ```sh
 python3 -m venv /private/path/canary-venv
-/private/path/canary-venv/bin/pip install -r tests/e2e/production-canary-requirements.txt
+/private/path/canary-venv/bin/pip install -r tests/e2e/requirements-production-canary.txt
 ```
 
 The driver uses psutil process identities to guard against PID reuse on macOS
 and Linux. It retains its private state if process cleanup cannot be proven.
+The exited session leader remains unreaped until shutdown-born children have
+been collected and the session is proven empty.
 The `--codex-home` path must match the effective inherited `CODEX_HOME`, or
 `HOME/.codex` when that variable is unset; it does not redirect the child home.
 
@@ -100,10 +102,15 @@ requests are denied. Pairing, decisions and revocation use separate freshly
 exchanged Control sessions, which are logged out immediately; the primary
 browser stream and its cursor remain unchanged. Only the canary's access token
 is retained in memory for those exchanges, then cleared.
+Ordinary work is bounded by the primary session's returned expiry, reserving
+30 seconds for cleanup; this driver does not claim primary-session renewal.
+Negative scenarios also require their exact requested command, file or read
+permission target. Cursor replay alone does not establish which replica served it.
 
 Revocation proof requires the instrumented Connector to observe exactly HTTP
 401, `WWW-Authenticate: Device`, and `invalid_device_credential` from a fresh
 signed token exchange using the unchanged credential/key. Generic reconnects,
-redirects, proof failures and outages do not count. Evidence publication is
-mandatory for a successful exit. This instrumented run does not replace
+redirects, proof failures and outages do not count. Redirects are stopped before
+another token request can be sent. Evidence publication is mandatory for a
+successful exit. This instrumented run does not replace
 verification and lifecycle acceptance of signed client installers.

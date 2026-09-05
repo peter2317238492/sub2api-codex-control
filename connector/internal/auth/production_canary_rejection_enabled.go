@@ -12,6 +12,14 @@ import (
 
 var ErrInvalidDeviceCredential = errors.New("device token exchange returned HTTP status 401: invalid device credential")
 
+func productionCanaryHTTPClient(client *http.Client) *http.Client {
+	isolated := *client
+	isolated.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &isolated
+}
+
 func productionCanaryRejection(response *http.Response, expectedURL string) error {
 	if response.StatusCode != http.StatusUnauthorized || response.Header.Get("WWW-Authenticate") != "Device" ||
 		response.Request == nil || response.Request.URL == nil || response.Request.URL.String() != expectedURL ||
