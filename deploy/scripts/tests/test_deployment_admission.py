@@ -1647,6 +1647,44 @@ class AuthProbeTests(unittest.TestCase):
 
 
 class OperatorInputTests(unittest.TestCase):
+    def test_admitted_contract_copy_roundtrips_through_both_consumers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root.chmod(0o700)
+            content = (REPO_ROOT / "docs/contracts/sub2api-auth.v0.2.1.json").read_bytes()
+            digest = hashlib.sha256(content).hexdigest()
+            source = root / "signed-contract.json"
+            source.write_bytes(content)
+            source.chmod(0o444)
+            immutable = root / "runtime-contract.json"
+            private = root / "probe-contract.json"
+            for source_path, destination, flags, expected_mode in (
+                (source, immutable, ["--read-only"], 0o444),
+                (immutable, private, [], 0o600),
+            ):
+                result = subprocess.run(
+                    [sys.executable, str(ADMISSION), "copy-admitted-file",
+                     "--source", str(source_path), "--destination", str(destination),
+                     "--label", "pinned auth contract", "--expected-sha256", digest, *flags],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(stat.S_IMODE(destination.stat().st_mode), expected_mode)
+                self.assertEqual(destination.read_bytes(), content)
+            spec = importlib.util.spec_from_file_location("runtime_contract_reader", RUNTIME)
+            runtime_reader = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(runtime_reader)
+            self.assertEqual(
+                runtime_reader.read_immutable_contract_bytes(immutable, "contract", max_bytes=65536),
+                content,
+            )
+            contract = json.loads(content)
+            _, observed = PROBE_MODULE.load_contract(
+                private, {**contract["runtime"], "contract_sha256": digest}
+            )
+            self.assertEqual(observed, digest)
+            self.assertEqual(stat.S_IMODE(immutable.stat().st_mode), 0o444)
+
     def test_private_env_copy_is_nofollow_owned_bounded_and_durable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

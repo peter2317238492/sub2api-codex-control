@@ -1300,7 +1300,8 @@ atomic_json "$deployment_dir/auth-contract-input.json" \
   --source "$auth_contract_source" \
   --destination "$auth_contract_file" \
   --label "signed Sub2API auth contract" \
-  --expected-sha256 "$auth_contract_sha256"
+  --expected-sha256 "$auth_contract_sha256" \
+  --read-only
 control_database=$(
   json_field "$compose_snapshot" services control-api environment CONTROL_DB_NAME
 )
@@ -1434,10 +1435,11 @@ atomic_json "$deployment_dir/auth-probe-runtime-input.json" \
   --destination "$probe_input_dir/runtime.json" \
   --label "Sub2API runtime attestation"
 atomic_json "$deployment_dir/auth-probe-contract-input.json" \
-  python3 "$checks" copy-private-file \
+  python3 "$checks" copy-admitted-file \
   --source "$auth_contract_file" \
   --destination "$probe_input_dir/contract.json" \
-  --label "pinned Sub2API auth contract"
+  --label "pinned Sub2API auth contract" \
+  --expected-sha256 "$auth_contract_sha256"
 
 probe_nonce=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
 fixture_expected_user_id=${SUB2API_FIXTURE_EXPECTED_USER_ID:-$smoke_expected_user_id}
