@@ -3,7 +3,7 @@
 ## Scope and topology
 
 This deployment adds `control-api` and `codex-pwa` sidecars without modifying
-Sub2API. The target must already run the exact immutable `0.2.0` tuple in
+Sub2API. The target must already run the exact immutable `0.2.1` tuple in
 `versions.lock.json`; this runbook provides no in-place updater or legacy
 compatibility path. Only the Control API joins the existing external Docker
 network named by `SUB2API_NETWORK_NAME` (default
@@ -39,7 +39,7 @@ retain the corresponding production smoke output with the release matrix.
 
 ## Preconditions
 
-1. Prove the live Sub2API matches the exact `0.2.0` manifest, image ID, labels,
+1. Prove the live Sub2API matches the exact `0.2.1` manifest, image ID, labels,
    PID 1 SHA-256, read-only rootfs, empty Docker diff, admitted `/app/data` mount,
    and locked auth fixture. Record that attestation with the immutable image
    digests, source commit, migration revision, Connector version, Codex version,
@@ -126,11 +126,11 @@ The 2026-08-12 read-only inspection found this legacy self-updated state:
 That state is historical drift evidence only. It is not accepted by the formal
 release gate and must not be encoded as a production compatibility exception.
 Before Control services start, the Sub2API container must run the locked
-`0.2.0` linux/amd64 manifest
-`weishaw/sub2api@sha256:271bb3b34661803681cabf54e99811ab8e248b0dd4c88b09ea1226e22dea5751`
+`0.2.1` immutable index (selecting its linux/amd64 image)
+`weishaw/sub2api@sha256:b3845aad81d728a5e4efa4d677a638f27947be286ed9a17788a42a1f07fe7e50`
 with image ID
-`sha256:271bb3b34661803681cabf54e99811ab8e248b0dd4c88b09ea1226e22dea5751`
-(the containerd image store reports the manifest digest as the image ID).
+`sha256:b3845aad81d728a5e4efa4d677a638f27947be286ed9a17788a42a1f07fe7e50`
+(the containerd image store reports the index digest as the image ID).
 Run the fail-closed verifier against that immutable container:
 
 ```sh
@@ -168,11 +168,11 @@ disposable mode-`0600` token files are copied into a private read-only probe
 mount; raw tokens and token hashes never enter the evidence. Prebuilt external
 authentication evidence and alternate probe origins are prohibited.
 
-The immutable gate pins the exact 0.2.0 manifest/image ID, container
+The immutable gate pins the exact 0.2.1 manifest/image ID, container
 `Config.Image`, entrypoint/Cmd, loopback `8080` binding, external network,
 admitted `/app/data` storage identity, runtime tuple, and empty writable diff. It verifies
 that the live PID 1 binary equals the official archive/image binary. A
-successful check produces `CONTROL_SUB2API_CONTRACT_MARKER=0.2.0/aa23648`;
+successful check produces `CONTROL_SUB2API_CONTRACT_MARKER=0.2.1/578785e`;
 any different value or `UNVERIFIED` blocks deployment.
 
 ## Mandatory pre-mutation snapshot
@@ -418,7 +418,7 @@ Redis restore containers use the backup-bound local image IDs with
 `--network none --pull never`; an absent image fails instead of being acquired.
 It then verifies pulled
 image IDs/OCI labels and Sub2API runtime/auth identity. The runtime attestation
-must report `admission_profile=immutable-image-v1`, exact `0.2.0/aa236488...`
+must report `admission_profile=immutable-image-v1`, exact `0.2.1/578785ee...`
 identity, and no writable-layer drift. The wrapper then records the live
 database revision and rechecks Compose, Sub2API, and the database revision.
 Immediately before the destructive window, it records the exact API container
@@ -610,8 +610,8 @@ expected identity explicitly:
 Also confirm:
 
 - the final Sub2API runtime attestation reports `immutable-image-v1`, the exact
-  `0.2.0` manifest/image ID/PID 1 binary, no writable-layer drift, and the
-  locked `sub2api-auth.v0.2.0.json` digest with fresh identity-bound auth
+  `0.2.1` manifest/image ID/PID 1 binary, no writable-layer drift, and the
+  locked `sub2api-auth.v0.2.1.json` digest with fresh identity-bound auth
   evidence; a banner or smoke response alone is insufficient;
 - `docker inspect` shows no raw Sub2API key, database password, Redis password,
   or session HMAC value in Compose environment metadata.

@@ -27,10 +27,10 @@ EXPECTED_COMPONENT_IDS = {
     "x-text",
 }
 EXPECTED_MANIFEST_SHA256 = (
-    "3784a165522d0d00b49309a7092ca8f56fec91e52aeb301841fef507e09db103"
+    "5b3bbb19664aef9c2d3bbece4e63188b846c372f311c2ab283a22821db2ac67c"
 )
 EXPECTED_THIRD_PARTY_NOTICES_SHA256 = (
-    "6139e719cc7d346172b26daf67f0ab868954d376c9fe9a3e84065cd0c594f91d"
+    "5e5c674a242775fbf968318ebad1fa5708e0c74d30c9aa5b173b1d3c0ef35c95"
 )
 EXPECTED_GO_MODULE = "github.com/peter2317238492/sub2api-codex-control/connector"
 EXPECTED_REPOSITORY = "https://github.com/peter2317238492/sub2api-codex-control"
@@ -43,7 +43,7 @@ PACKAGE_JSON_PATHS = (
 )
 EXPECTED_WORKFLOW_SHA256 = {
     Path(".github/workflows/ci.yml"): (
-        "3779e5824077c571cf2e042ed9b558ffebc7501d5aacca02114b8d055cbbb78b"
+        "c9e12813c6f482b3ef07c4673d46bbddd547e4c3eadfbaf0050f16d354386716"
     ),
     Path(".github/workflows/connector-release.yml"): (
         "6272badd5a2452804a47210a841dad7f22f3f2a9d0d5117b2d8e4292e05fc6c1"

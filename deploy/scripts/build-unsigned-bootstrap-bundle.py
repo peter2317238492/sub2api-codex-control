@@ -170,7 +170,7 @@ EXECUTABLE_SOURCE_FILES = frozenset(
     }
 )
 
-SUB2API_AUTH_CONTRACT_PATH = "docs/contracts/sub2api-auth.v0.2.0.json"
+SUB2API_AUTH_CONTRACT_PATH = "docs/contracts/sub2api-auth.v0.2.1.json"
 NGINX_REQUIRED_SOURCE_FILES = frozenset(
     {
         "deploy/nginx/api-security-headers.conf",

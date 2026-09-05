@@ -110,7 +110,7 @@ class AuthProbeHardeningTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.contract = self.root / "contract.json"
         self.contract.write_bytes(
-            (REPO_ROOT / "docs/contracts/sub2api-auth.v0.2.0.json").read_bytes()
+            (REPO_ROOT / "docs/contracts/sub2api-auth.v0.2.1.json").read_bytes()
         )
         self.contract.chmod(0o644)
         contract_sha = PROBE.hashlib.sha256(self.contract.read_bytes()).hexdigest()
@@ -122,8 +122,8 @@ class AuthProbeHardeningTests(unittest.TestCase):
                     "image_id": f"sha256:{'2' * 64}",
                     "image_digest": f"registry/sub2api@sha256:{'3' * 64}",
                     "binary_sha256": "4" * 64,
-                    "runtime_version": "0.2.0",
-                    "runtime_commit": "aa236488351eb71e120fc2b6fb32e36b0374c918",
+                    "runtime_version": "0.2.1",
+                    "runtime_commit": "578785ee7fb35030b094b69624efe25670a36f5f",
                     "contract_sha256": contract_sha,
                 }
             ),
@@ -274,7 +274,7 @@ class AuthProbeHardeningTests(unittest.TestCase):
             PROBE.run(self.arguments())
 
         self.contract.write_bytes(
-            (REPO_ROOT / "docs/contracts/sub2api-auth.v0.2.0.json").read_bytes()
+            (REPO_ROOT / "docs/contracts/sub2api-auth.v0.2.1.json").read_bytes()
         )
         runtime = json.loads(self.runtime.read_text(encoding="utf-8"))
         runtime["container_id"] = f"sha256:{'1' * 64}"
