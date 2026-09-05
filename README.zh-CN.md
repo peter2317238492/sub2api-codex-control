@@ -23,7 +23,7 @@
   <a href="https://github.com/peter2317238492/sub2api-codex-control/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/peter2317238492/sub2api-codex-control/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="发布状态" src="https://img.shields.io/badge/status-release%20candidate-E6A23C">
   <img alt="Codex 版本" src="https://img.shields.io/badge/Codex-0.147.0-111827">
-  <img alt="Sub2API 版本" src="https://img.shields.io/badge/Sub2API-0.1.178-2563EB">
+  <img alt="Sub2API 版本" src="https://img.shields.io/badge/Sub2API-0.2.0-2563EB">
   <a href="LICENSE"><img alt="许可证" src="https://img.shields.io/badge/license-Apache--2.0-22C55E"></a>
 </p>
 

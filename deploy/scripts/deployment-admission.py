@@ -2426,13 +2426,15 @@ def copy_to_private_destination(
     forbidden_source_mode: int,
     expected_sha256: str | None,
     require_single_link: bool,
+    source_uid: int | None | str = "caller",
 ) -> dict[str, Any]:
     if not args.source.is_absolute() or not args.destination.is_absolute():
         fail("private input source and destination must be absolute")
+    expected_source_uid = os.geteuid() if source_uid == "caller" else source_uid
     source_descriptor, source_metadata = open_stable_regular_file(
         args.source,
         args.label,
-        expected_uid=os.geteuid(),
+        expected_uid=expected_source_uid,
         exact_mode=exact_source_mode,
         max_size=args.max_bytes,
     )
@@ -2510,6 +2512,21 @@ def copy_private_file(args: argparse.Namespace) -> dict[str, Any]:
         forbidden_source_mode=0,
         expected_sha256=None,
         require_single_link=False,
+    )
+
+
+def copy_service_secret(args: argparse.Namespace) -> dict[str, Any]:
+    # Compose file secrets are bind-mounted into the service containers, so
+    # the source is owned by the service user (not root) with a read-only
+    # private mode; the private copy still lands root-owned 0600 in the
+    # deployment directory for the root-only recovery checks.
+    return copy_to_private_destination(
+        args,
+        exact_source_mode=None,
+        forbidden_source_mode=0o027,
+        expected_sha256=None,
+        require_single_link=True,
+        source_uid=None,
     )
 
 
@@ -3779,6 +3796,15 @@ def parse_args() -> argparse.Namespace:
     copy_parser.add_argument("--label", required=True)
     copy_parser.add_argument("--max-bytes", type=int, default=MAX_PRIVATE_INPUT_BYTES)
     copy_parser.set_defaults(handler=copy_private_file)
+
+    service_secret_parser = commands.add_parser("copy-service-secret")
+    service_secret_parser.add_argument("--source", type=Path, required=True)
+    service_secret_parser.add_argument("--destination", type=Path, required=True)
+    service_secret_parser.add_argument("--label", required=True)
+    service_secret_parser.add_argument(
+        "--max-bytes", type=int, default=MAX_PRIVATE_INPUT_BYTES
+    )
+    service_secret_parser.set_defaults(handler=copy_service_secret)
 
     admitted_copy_parser = commands.add_parser("copy-admitted-file")
     admitted_copy_parser.add_argument("--source", type=Path, required=True)

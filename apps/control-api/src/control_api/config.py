@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/v1"
     external_api_base_path: str = "/codex-api"
     build_version: str = Field(
-        default="0.1.8",
+        default="0.1.9",
         min_length=1,
         max_length=64,
         pattern=r"^[0-9A-Za-z][0-9A-Za-z._+-]*$",
@@ -80,8 +80,8 @@ class Settings(BaseSettings):
     sub2api_auth_me_path: str = "/api/v1/auth/me"
     sub2api_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     sub2api_verify_tls: bool = True
-    sub2api_expected_version: Literal["0.1.178"] = "0.1.178"
-    sub2api_expected_commit: Literal["e0c48a1"] = "e0c48a1"
+    sub2api_expected_version: Literal["0.2.0"] = "0.2.0"
+    sub2api_expected_commit: Literal["aa23648"] = "aa23648"
     sub2api_contract_marker: str = ""
 
     connector_expected_version: Literal["0.1.11"] = "0.1.11"

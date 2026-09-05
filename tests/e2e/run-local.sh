@@ -153,7 +153,7 @@ control_protocol_sha256=$(openssl dgst -sha256 \
   "$repo_root/packages/control-protocol/schema/control-envelope.schema.json" \
   | awk 'NR == 1 {print $NF}')
 sub2api_auth_contract_sha256=$(openssl dgst -sha256 \
-  "$repo_root/docs/contracts/sub2api-auth.v0.1.178.json" \
+  "$repo_root/docs/contracts/sub2api-auth.v0.2.0.json" \
   | awk 'NR == 1 {print $NF}')
 
 mkdir -p \

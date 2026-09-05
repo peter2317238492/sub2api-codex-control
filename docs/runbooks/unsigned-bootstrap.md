@@ -235,9 +235,9 @@ CONTROL_REDIS_QUERY=
 CONTROL_REDIS_PREFIX=codex-control:
 
 CONTROL_API_WORKERS=1
-CONTROL_SUB2API_EXPECTED_VERSION=0.1.176
-CONTROL_SUB2API_EXPECTED_COMMIT=e803e38
-CONTROL_SUB2API_CONTRACT_MARKER=0.1.176/e803e38
+CONTROL_SUB2API_EXPECTED_VERSION=0.2.0
+CONTROL_SUB2API_EXPECTED_COMMIT=aa23648
+CONTROL_SUB2API_CONTRACT_MARKER=0.2.0/aa23648
 CONTROL_TRUST_FORWARDED_FOR=true
 
 CONTROL_DATABASE_PASSWORD_SECRET_FILE=/secure/codex-control/secrets/control_db_password
@@ -300,11 +300,11 @@ runtime_attestation="/secure/codex-control/sub2api-runtime-${deployment_id}.json
 exception_file="/secure/codex-control/stale-backup-exception-${deployment_id}.json"
 
 # The digest-locked auth contract is immutable bundle input, not a secret.
-test "$(stat -f '%Lp' "$stage/docs/contracts/sub2api-auth.v0.1.176.json" 2>/dev/null || stat -c '%a' "$stage/docs/contracts/sub2api-auth.v0.1.176.json")" = 444
+test "$(stat -f '%Lp' "$stage/docs/contracts/sub2api-auth.v0.2.0.json" 2>/dev/null || stat -c '%a' "$stage/docs/contracts/sub2api-auth.v0.2.0.json")" = 444
 
 SUB2API_CONTAINER=sub2api \
 VERSIONS_LOCK_FILE="$stage/versions.lock.json" \
-SUB2API_AUTH_CONTRACT_FILE="$stage/docs/contracts/sub2api-auth.v0.1.176.json" \
+SUB2API_AUTH_CONTRACT_FILE="$stage/docs/contracts/sub2api-auth.v0.2.0.json" \
 SUB2API_ATTESTATION_FILE="$runtime_attestation" \
 SUB2API_EXPECTED_NETWORK=sub2api-deploy_sub2api-network \
 SUB2API_EXPECTED_NETWORK_ALIAS=sub2api \

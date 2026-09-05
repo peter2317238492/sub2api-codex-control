@@ -1626,6 +1626,39 @@ class OperatorInputTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "larger than 1024 bytes"):
                 ADMISSION_MODULE.copy_private_file(arguments)
 
+    def test_service_secret_copy_admits_service_owned_private_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root.chmod(0o700)
+            source = root / "control_db_password"
+            source.write_text("s3cret\n", encoding="ascii")
+            destination = root / "control-db-password"
+            arguments = types.SimpleNamespace(
+                source=source,
+                destination=destination,
+                label="Control PostgreSQL password secret",
+                max_bytes=1024,
+            )
+            for mode in (0o440, 0o400, 0o600, 0o640):
+                source.chmod(mode)
+                evidence = ADMISSION_MODULE.copy_service_secret(arguments)
+                self.assertEqual(destination.read_bytes(), source.read_bytes())
+                self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o600)
+                self.assertEqual(
+                    evidence["source_sha256"],
+                    hashlib.sha256(source.read_bytes()).hexdigest(),
+                )
+                destination.unlink()
+            for mode in (0o444, 0o460, 0o604):
+                source.chmod(mode)
+                with self.assertRaisesRegex(ValueError, "untrusted group or user"):
+                    ADMISSION_MODULE.copy_service_secret(arguments)
+            source.chmod(0o440)
+            alias = root / "control_db_password.link"
+            os.link(source, alias)
+            with self.assertRaisesRegex(ValueError, "exactly one hard link"):
+                ADMISSION_MODULE.copy_service_secret(arguments)
+
     def test_admitted_release_input_copy_requires_hash_and_single_inode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

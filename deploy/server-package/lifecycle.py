@@ -35,7 +35,7 @@ import stat
 import subprocess
 import time
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, NoReturn
 
@@ -1142,7 +1142,23 @@ ABSOLUTE_DIRECTORY_NAMES = {
     "CONTROL_PRODUCTION_BACKUP_ROOT",
     "SUB2API_HOST_DATA_PATH",
     "CONTROL_NGINX_CONFIG_PATH",
+    "SUB2API_EXPECTED_DATA_BIND_SOURCE",
 }
+# Explicit bind policy for a Sub2API container whose /app/data is a host
+# bind mount; the runtime verifier refuses a bind without all four values
+# (verify-sub2api-runtime.sh), so the operator must supply none or all.
+BIND_POLICY_ID_NAMES = {
+    "SUB2API_EXPECTED_DATA_BIND_UID",
+    "SUB2API_EXPECTED_DATA_BIND_GID",
+}
+BIND_POLICY_MODE_NAME = "SUB2API_EXPECTED_DATA_BIND_MODE"
+BIND_POLICY_NAMES = {
+    "SUB2API_EXPECTED_DATA_BIND_SOURCE",
+    BIND_POLICY_MODE_NAME,
+    *BIND_POLICY_ID_NAMES,
+}
+ACCEPTED_BIND_MODES = {"0700", "0750", "0755"}
+MAX_BIND_POLICY_ID = 65535
 IDENTIFIER_NAMES = {
     "CONTROL_SMOKE_EXPECTED_USER_ID",
     "SUB2API_FIXTURE_EXPECTED_USER_ID",
@@ -1169,6 +1185,8 @@ ALLOWED_OPERATOR_NAMES = (
     | IDENTIFIER_NAMES
     | POSITIVE_INTEGER_NAMES
     | CONTAINER_PATH_NAMES
+    | BIND_POLICY_ID_NAMES
+    | {BIND_POLICY_MODE_NAME}
 )
 REQUIRED_OPERATOR_NAMES = {
     "CONTROL_COMPOSE_ENV_FILE",
@@ -1221,7 +1239,14 @@ RESERVED_ENV_NAMES = {
 }
 
 
-def _validate_private_referenced_file(path: Path, label: str, *, expected_uid: int) -> None:
+def _validate_private_referenced_file(
+    path: Path,
+    label: str,
+    *,
+    expected_uid: int,
+    additional_uids: Iterable[int] = (),
+) -> None:
+    accepted_uids = {expected_uid, *additional_uids}
     try:
         metadata = path.lstat()
     except OSError as exc:
@@ -1229,11 +1254,11 @@ def _validate_private_referenced_file(path: Path, label: str, *, expected_uid: i
     if (
         stat.S_ISLNK(metadata.st_mode)
         or not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != expected_uid
+        or metadata.st_uid not in accepted_uids
         or metadata.st_nlink != 1
         or stat.S_IMODE(metadata.st_mode) & 0o077
     ):
-        fail(f"{label} must be one private root-owned regular file")
+        fail(f"{label} must be one private regular file owned by an admitted user")
 
 
 def _audit_compose_env(path: Path, *, expected_uid: int) -> None:
@@ -1312,12 +1337,21 @@ def parse_operator_env(path: Path, *, expected_uid: int = 0) -> tuple[dict[str, 
         if name in ABSOLUTE_FILE_NAMES | ABSOLUTE_DIRECTORY_NAMES | CONTAINER_PATH_NAMES:
             candidate = Path(value)
             _absolute_normalized(candidate, name)
-            if name in ABSOLUTE_FILE_NAMES:
+            # The Sub2API config lives inside the Sub2API data tree, which
+            # the Sub2API service user owns; it is validated after the bind
+            # policy is known so that owner can be admitted explicitly.
+            if name in ABSOLUTE_FILE_NAMES and name != "SUB2API_HOST_CONFIG_PATH":
                 _validate_private_referenced_file(
                     candidate, name, expected_uid=expected_uid
                 )
         elif name in POSITIVE_INTEGER_NAMES:
             if not value.isdigit() or not 0 < int(value) <= MAX_DEPLOYMENT_TIMEOUT_SECONDS:
+                fail(f"operator environment value is invalid: {name}")
+        elif name in BIND_POLICY_ID_NAMES:
+            if not value.isdigit() or not 0 < int(value) <= MAX_BIND_POLICY_ID:
+                fail(f"operator environment value is invalid: {name}")
+        elif name == BIND_POLICY_MODE_NAME:
+            if value not in ACCEPTED_BIND_MODES:
                 fail(f"operator environment value is invalid: {name}")
         elif SAFE_IDENTIFIER_RE.fullmatch(value) is None:
             fail(f"operator environment identifier is invalid: {name}")
@@ -1325,6 +1359,21 @@ def parse_operator_env(path: Path, *, expected_uid: int = 0) -> tuple[dict[str, 
     missing = REQUIRED_OPERATOR_NAMES - set(values)
     if missing:
         fail(f"operator environment lacks required values: {sorted(missing)}")
+    bind_policy_present = BIND_POLICY_NAMES & set(values)
+    if bind_policy_present and bind_policy_present != BIND_POLICY_NAMES:
+        fail(
+            "operator environment must supply the complete Sub2API bind policy: "
+            f"{sorted(BIND_POLICY_NAMES)}"
+        )
+    admitted_config_uids: list[int] = []
+    if bind_policy_present:
+        admitted_config_uids.append(int(values["SUB2API_EXPECTED_DATA_BIND_UID"]))
+    _validate_private_referenced_file(
+        Path(values["SUB2API_HOST_CONFIG_PATH"]),
+        "SUB2API_HOST_CONFIG_PATH",
+        expected_uid=expected_uid,
+        additional_uids=admitted_config_uids,
+    )
     _audit_compose_env(Path(values["CONTROL_COMPOSE_ENV_FILE"]), expected_uid=expected_uid)
     return values, hashlib.sha256(raw).hexdigest()
 
