@@ -2449,6 +2449,7 @@ def copy_to_private_destination(
     expected_sha256: str | None,
     require_single_link: bool,
     source_uid: int | None | str = "caller",
+    destination_mode: int = 0o600,
 ) -> dict[str, Any]:
     if not args.source.is_absolute() or not args.destination.is_absolute():
         fail("private input source and destination must be absolute")
@@ -2502,6 +2503,7 @@ def copy_to_private_destination(
             if written <= 0:
                 fail(f"could not write private copy of {args.label}")
             view = view[written:]
+        os.fchmod(destination_descriptor, destination_mode)
         os.fsync(destination_descriptor)
         os.fsync(destination_parent_descriptor)
         assert_stable(source_descriptor, source_metadata, args.label)
@@ -2561,6 +2563,7 @@ def copy_admitted_file(args: argparse.Namespace) -> dict[str, Any]:
         forbidden_source_mode=0o022,
         expected_sha256=args.expected_sha256,
         require_single_link=True,
+        destination_mode=0o444 if getattr(args, "read_only", False) else 0o600,
     )
 
 
@@ -3833,6 +3836,7 @@ def parse_args() -> argparse.Namespace:
     admitted_copy_parser.add_argument("--destination", type=Path, required=True)
     admitted_copy_parser.add_argument("--label", required=True)
     admitted_copy_parser.add_argument("--expected-sha256", required=True)
+    admitted_copy_parser.add_argument("--read-only", action="store_true")
     admitted_copy_parser.add_argument(
         "--max-bytes", type=int, default=MAX_PRIVATE_INPUT_BYTES
     )
