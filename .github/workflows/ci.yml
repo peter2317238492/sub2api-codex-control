@@ -149,5 +149,5 @@ jobs:
         run: |
           python3 -m unittest discover -s release/tests -v
           go test -race -count=1 ./...
-          go test -race -count=1 -tags productioncanary ./internal/auth ./internal/transport
+          go test -race -count=1 -tags productioncanary ./internal/auth ./internal/transport ./internal/runtime
           go vet ./...

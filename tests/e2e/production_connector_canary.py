@@ -760,6 +760,63 @@ def _read_credential_rejection(state_dir: Path) -> bool | None:
     return True
 
 
+def _file_denial_proof(
+    state_dir: Path,
+    thread_id: str,
+    turn_id: str,
+    item_id: str,
+    target: Path,
+) -> bool | None:
+    from smoke import read_private_bytes
+
+    path = state_dir / "production-canary-file-change.json"
+    try:
+        value = _json_bytes(
+            read_private_bytes(path, "file-change proof", 1024), "file-change proof"
+        )
+    except ValueError:
+        try:
+            path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        raise
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {"version", "identity_sha256", "target_sha256", "target_matches", "declined"}
+        or type(value["version"]) is not int
+        or value["version"] != 1
+        or type(value["target_matches"]) is not bool
+        or type(value["declined"]) is not bool
+    ):
+        raise ValueError("file-change proof is invalid")
+    identity = hashlib.sha256(
+        json.dumps([thread_id, turn_id, item_id], separators=(",", ":")).encode()
+    ).hexdigest()
+    if value["identity_sha256"] != identity:
+        return None
+    return (
+        value["target_sha256"] == hashlib.sha256(str(target).encode()).hexdigest()
+        and value["target_matches"]
+        and value["declined"]
+    )
+
+
+def _wait_file_denial_proof(
+    state_dir: Path,
+    thread_id: str,
+    turn_id: str,
+    item_id: str,
+    target: Path,
+) -> bool | None:
+    deadline = time.monotonic() + 5
+    while True:
+        proof = _file_denial_proof(state_dir, thread_id, turn_id, item_id, target)
+        if proof is not None or time.monotonic() >= deadline:
+            return proof
+        time.sleep(0.02)
+
+
 def assert_refresh_only_credentials(state_dir: Path) -> None:
     from smoke import read_private_bytes
 
@@ -1645,7 +1702,7 @@ def _approval_is_bound(
     workspace: Path,
     target: Path,
     command_value: str = "approved",
-) -> bool:
+) -> bool | None:
     if not isinstance(event.get("approval_id"), str) or not event["approval_id"]:
         return False
     projections = []
@@ -1699,6 +1756,8 @@ def _approval_is_bound(
             details["command"], target, command_value
         )
     if kind == "file_change":
+        if details["fileChanges"] is None:
+            return None
         return details["fileChanges"] == {str(target): {"type": "add"}}
     if kind == "permission":
         permissions = details["permissions"]
@@ -1744,6 +1803,7 @@ def _verify_real_approvals(
     thread_id: str,
     remote_thread_id: str,
     workspace: Path,
+    state_dir: Path,
     mutating_headers: dict[str, str],
 ) -> bool:
     scenarios = (
@@ -1850,7 +1910,7 @@ def _verify_real_approvals(
             raise AssertionError(  # noqa: TRY004 - acceptance contract assertion.
                 "approval has no dynamic identity"
             )
-        if not _approval_is_bound(
+        binding = _approval_is_bound(
             event_approval,
             approval,
             device_id=device_id,
@@ -1860,6 +1920,9 @@ def _verify_real_approvals(
             workspace=workspace,
             target=target,
             command_value="timeout" if action == "timeout" else "approved",
+        )
+        if binding is False or (
+            binding is None and (kind != "file_change" or action != "deny")
         ):
             client.privileged_request(
                 f"/codex-api/v1/approvals/{approval_id}/decision",
@@ -1875,15 +1938,16 @@ def _verify_real_approvals(
             )
             if decision.status != 204:
                 raise AssertionError("approval decision was rejected")
-            conflict = client.privileged_request(
-                f"/codex-api/v1/approvals/{approval_id}/decision",
-                method="POST",
-                body={"decision": "deny" if action == "approve" else "approve"},
-            )
-            if conflict.status != 409:
-                raise AssertionError(
-                    "conflicting one-shot approval decision was accepted"
+            if binding is True:
+                conflict = client.privileged_request(
+                    f"/codex-api/v1/approvals/{approval_id}/decision",
+                    method="POST",
+                    body={"decision": "deny" if action == "approve" else "approve"},
                 )
+                if conflict.status != 409:
+                    raise AssertionError(
+                        "conflicting one-shot approval decision was accepted"
+                    )
         else:
             client.eventually(
                 "real command approval defaults to deny on timeout",
@@ -1900,14 +1964,37 @@ def _verify_real_approvals(
             if stale.status not in {404, 409, 410}:
                 raise AssertionError("timed-out approval accepted a stale decision")
         _wait_thread_idle(client, thread_id, "approval turn returns to idle")
+        if kind == "file_change" and not _canary_path_absent(target):
+            raise AssertionError("denied file-change side effect occurred")
+        if binding is None:
+            proof = _wait_file_denial_proof(
+                state_dir,
+                remote_thread_id,
+                native_turn_id,
+                str(approval["details"]["itemId"]),
+                target,
+            )
+            if proof is False:
+                raise AssertionError(
+                    "native file-change completion differs from the denied target"
+                )
+            if proof is None:
+                continue
+            conflict = client.privileged_request(
+                f"/codex-api/v1/approvals/{approval_id}/decision",
+                method="POST",
+                body={"decision": "approve"},
+            )
+            if conflict.status != 409:
+                raise AssertionError(
+                    "conflicting one-shot approval decision was accepted"
+                )
         if (
             kind == "command"
             and action == "approve"
             and _read_canary_side_effect(target) != b"approved"
         ):
             raise AssertionError("approved command side effect differs")
-        if kind == "file_change" and not _canary_path_absent(target):
-            raise AssertionError("denied file-change side effect occurred")
         if action == "timeout" and not _canary_path_absent(target):
             raise AssertionError("timed-out command side effect occurred")
         if kind == "permission" and not _canary_path_absent(target):
@@ -2144,6 +2231,7 @@ def _run_control_flow(
             thread_id=thread_id,
             remote_thread_id=remote_thread_id,
             workspace=workspace,
+            state_dir=state_dir,
             mutating_headers=mutating_headers,
         )
 

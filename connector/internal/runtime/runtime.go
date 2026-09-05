@@ -170,6 +170,7 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		}
 		failure := newSessionFailure(cancelEpoch)
 		notifications := newNotificationHandler(sessionCtx, emit, observe, failure.Fail)
+		notifications.canary = productionCanaryFileObserver(options.Config.StateDir, guard, options.Config.WorkspaceRoots)
 		broker.SetValidators(func(kind string, details map[string]any) error {
 			threadID := stringField(details, "threadId", "thread_id", "conversationId")
 			thread, managed := threads.Get(threadID)

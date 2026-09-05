@@ -26,6 +26,7 @@ type notificationHandler struct {
 	ctx      context.Context
 	emit     notificationEmitter
 	observe  notificationObserver
+	canary   func(string, json.RawMessage)
 	fail     func(error)
 	limiter  *tokenBucket
 	failOnce sync.Once
@@ -44,7 +45,13 @@ func newNotificationHandler(
 }
 
 func (h *notificationHandler) Handle(method string, params json.RawMessage) {
-	if !policy.EventAllowed(method) || h.ctx.Err() != nil {
+	if h.ctx.Err() != nil {
+		return
+	}
+	if h.canary != nil {
+		h.canary(method, params)
+	}
+	if !policy.EventAllowed(method) {
 		return
 	}
 	if !h.limiter.Allow() {

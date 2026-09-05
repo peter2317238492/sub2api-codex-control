@@ -44,7 +44,7 @@ PACKAGE_JSON_PATHS = (
 )
 EXPECTED_WORKFLOW_SHA256 = {
     Path(".github/workflows/ci.yml"): (
-        "fee8449bee7f3817ad15fcdae9fb3ebbd2e3aef2eb64468b9e2b9fd9e690cb7d"
+        "4732e18b222912d93c1ca354be56026933105922e116d23e3a73d956ff254cc2"
     ),
     Path(".github/workflows/connector-release.yml"): (
         "6272badd5a2452804a47210a841dad7f22f3f2a9d0d5117b2d8e4292e05fc6c1"
