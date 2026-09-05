@@ -20,6 +20,7 @@ EXPECTED_COMPONENT_IDS = {
     "jsonschema",
     "lucide",
     "pinia",
+    "psutil",
     "regexp2",
     "sub2api",
     "trivy",
@@ -27,10 +28,10 @@ EXPECTED_COMPONENT_IDS = {
     "x-text",
 }
 EXPECTED_MANIFEST_SHA256 = (
-    "5b3bbb19664aef9c2d3bbece4e63188b846c372f311c2ab283a22821db2ac67c"
+    "12bd737fc8713e2eb4e364dd3e7b64ee40de0fd6146a75712d28caccb7fb035b"
 )
 EXPECTED_THIRD_PARTY_NOTICES_SHA256 = (
-    "5e5c674a242775fbf968318ebad1fa5708e0c74d30c9aa5b173b1d3c0ef35c95"
+    "c02c923418f0d68fd725f2760d4667b9f44804d027a87e42b61d677de146b380"
 )
 EXPECTED_GO_MODULE = "github.com/peter2317238492/sub2api-codex-control/connector"
 EXPECTED_REPOSITORY = "https://github.com/peter2317238492/sub2api-codex-control"
@@ -43,7 +44,7 @@ PACKAGE_JSON_PATHS = (
 )
 EXPECTED_WORKFLOW_SHA256 = {
     Path(".github/workflows/ci.yml"): (
-        "c9e12813c6f482b3ef07c4673d46bbddd547e4c3eadfbaf0050f16d354386716"
+        "2ed32cf28d1b5660f29ce051f38ca48df5fe7e893201270aefb8cf5ab51f3c23"
     ),
     Path(".github/workflows/connector-release.yml"): (
         "6272badd5a2452804a47210a841dad7f22f3f2a9d0d5117b2d8e4292e05fc6c1"
@@ -76,6 +77,7 @@ NOTICE_RELATIONSHIPS = {
     "jsonschema": ("runtime-dependency", "Connector dependency"),
     "regexp2": ("test-only-transitive", "Test-only transitive Connector dependency"),
     "x-text": ("transitive-runtime-dependency", "Transitive Connector dependency"),
+    "psutil": ("operator-verification-tool", "Canary process verification"),
 }
 
 

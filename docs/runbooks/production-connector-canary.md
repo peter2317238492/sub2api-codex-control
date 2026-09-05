@@ -11,7 +11,9 @@ Before any production execution:
 
 1. Review and freeze `tests/e2e/production_connector_canary.py` and its tests.
 2. Run the targeted pytest and Ruff gates from the exact frozen source.
-3. Build a disposable unsigned Connector from that source and record its SHA-256.
+3. Build a disposable unsigned Connector from that source with
+   `go build -tags productioncanary`, and record its SHA-256. Its version must
+   be `0.1.11+productioncanary`; a normal released binary has no crash hook.
 4. Resolve the real Codex executable to the native `0.147.0` binary and record its
    SHA-256. The npm launcher is not an acceptable identity because it delegates to
    a second executable.
@@ -25,6 +27,18 @@ Production execution remains blocked until an independent reviewer reports no
 P0/P1 finding against the frozen source and hashes.
 
 ## Invocation
+
+Install the pinned operator-only dependency into a dedicated virtual environment:
+
+```sh
+python3 -m venv /private/path/canary-venv
+/private/path/canary-venv/bin/pip install -r tests/e2e/production-canary-requirements.txt
+```
+
+The driver uses psutil process identities to guard against PID reuse on macOS
+and Linux. It retains its private state if process cleanup cannot be proven.
+The `--codex-home` path must match the effective inherited `CODEX_HOME`, or
+`HOME/.codex` when that variable is unset; it does not redirect the child home.
 
 The credential is inherited on a file descriptor. Its value and path are absent
 from the Python and Connector argument vectors and environment. Do not enable
@@ -45,7 +59,7 @@ connector_sha256=$(shasum -a 256 "$connector" | awk '{print $1}')
 codex_sha256=$(shasum -a 256 "$codex" | awk '{print $1}')
 exec 3<"$auth"
 
-PYTHONPATH=tests/e2e python3 -I tests/e2e/production_connector_canary.py \
+/private/path/canary-venv/bin/python3 -I tests/e2e/production_connector_canary.py \
   --base-url https://control.example.com \
   --auth-fd 3 \
   --connector-binary "$connector" \
@@ -79,3 +93,17 @@ The canary verifies command approval (approve and timeout) and file-change denia
 only when real Codex emits those requests. Permission approval cannot be directly
 requested by the typed public API; if real Codex does not emit it, evidence records
 that boundary and exit `2` prevents a full-pass claim.
+
+Automatic command approval requires matching native turn and item identities,
+the exact disposable cwd, and the exact requested marker command. Unexpected
+requests are denied. Pairing, decisions and revocation use separate freshly
+exchanged Control sessions, which are logged out immediately; the primary
+browser stream and its cursor remain unchanged. Only the canary's access token
+is retained in memory for those exchanges, then cleared.
+
+Revocation proof requires the instrumented Connector to observe exactly HTTP
+401, `WWW-Authenticate: Device`, and `invalid_device_credential` from a fresh
+signed token exchange using the unchanged credential/key. Generic reconnects,
+redirects, proof failures and outages do not count. Evidence publication is
+mandatory for a successful exit. This instrumented run does not replace
+verification and lifecycle acceptance of signed client installers.

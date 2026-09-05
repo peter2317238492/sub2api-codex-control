@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import collections
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -29,7 +30,22 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from smoke import (
+import psutil
+
+# Isolated Python must load this frozen sibling, never a module from the cwd.
+_smoke_path = Path(__file__).resolve().with_name("smoke.py")
+_smoke_spec = importlib.util.spec_from_file_location("smoke", _smoke_path)
+if _smoke_spec is None or _smoke_spec.loader is None:
+    raise ImportError("the frozen smoke helper is unavailable")
+_smoke_module = sys.modules.get("smoke")
+if _smoke_module is None:
+    _smoke_module = importlib.util.module_from_spec(_smoke_spec)
+    sys.modules["smoke"] = _smoke_module
+    _smoke_spec.loader.exec_module(_smoke_module)
+elif Path(_smoke_module.__file__).resolve() != _smoke_path:
+    raise ImportError("an unexpected smoke helper is already loaded")
+
+from smoke import (  # noqa: E402
     Result,
     Smoke,
     WebSocketStream,
@@ -707,26 +723,41 @@ def wait_for_replayed_record_ack(
     raise AssertionError("server did not ACK and prune the exact replayed spool record")
 
 
-def read_token_reconnects(state_dir: Path) -> int:
+def _credential_identity(state_dir: Path) -> tuple[str, str]:
     from smoke import read_private_bytes
 
-    value = _json_bytes(
-        read_private_bytes(
-            state_dir / "connector-metrics.json", "Connector metrics state", 1 << 20
-        ),
-        "Connector metrics state",
+    return tuple(
+        hashlib.sha256(
+            read_private_bytes(state_dir / name, "device identity input", 16 << 10)
+        ).hexdigest()
+        for name in ("device-credentials.json", "device-identity.json")
     )
-    reconnects = value.get("reconnects") if isinstance(value, dict) else None
-    if (
-        not isinstance(reconnects, list)
-        or len(reconnects) != 4
-        or any(
-            isinstance(item, bool) or not isinstance(item, int) or item < 0
-            for item in reconnects
+
+
+def _read_credential_rejection(state_dir: Path) -> bool | None:
+    from smoke import read_private_bytes
+
+    path = state_dir / "production-canary-credential-rejected.json"
+    try:
+        value = _json_bytes(
+            read_private_bytes(path, "credential rejection proof", 1024),
+            "credential rejection proof",
         )
+    except ValueError:
+        try:
+            path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        raise
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"credential_rejected", "version"}
+        or value["credential_rejected"] is not True
+        or type(value["version"]) is not int
+        or value["version"] != 1
     ):
-        raise ValueError("Connector metrics reconnect counters are invalid")
-    return reconnects[0]
+        raise ValueError("credential rejection proof is invalid")
+    return True
 
 
 def assert_refresh_only_credentials(state_dir: Path) -> None:
@@ -778,75 +809,65 @@ def _read_crash_marker(state_dir: Path) -> object | None:
     return True if value == {"armed": True, "version": 1} else None
 
 
-def _descendant_processes(parent_pid: int) -> set[int]:
-    if parent_pid <= 0:
-        return set()
-    completed = subprocess.run(
-        ["ps", "-axo", "pid=,ppid=,sid="],
-        env=build_connector_environment(os.environ),
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
+_canary_processes: set[psutil.Popen] = set()
+
+
+class CanaryProcess(psutil.Popen):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.children_seen: set[psutil.Process] = set()
+        _canary_processes.add(self)
+
+
+def _descendant_processes(parent: CanaryProcess) -> set[psutil.Process]:
+    # A surviving identity anchors session ownership after an intentional crash.
+    anchors = [parent, *parent.children_seen]
+    anchor = next(
+        (
+            item
+            for item in anchors
+            if item.is_running() and _process_session(item.pid) == parent.pid
+        ),
+        None,
     )
-    if completed.returncode != 0:
-        raise OSError("cannot enumerate Connector-owned processes")
-    children: dict[int, set[int]] = {}
-    session_members: set[int] = set()
-    for line in completed.stdout.splitlines():
-        fields = line.split()
-        if len(fields) != 3 or not all(field.isdigit() for field in fields):
+    members: set[psutil.Process] = set()
+    for candidate in psutil.process_iter():
+        if candidate.pid == parent.pid or _process_session(candidate.pid) != parent.pid:
             continue
-        pid, ppid, session_id = (int(field) for field in fields)
-        children.setdefault(ppid, set()).add(pid)
-        if session_id == parent_pid and pid != parent_pid:
-            session_members.add(pid)
-    result: set[int] = set()
-    pending = list(children.get(parent_pid, ()))
-    while pending:
-        pid = pending.pop()
-        if pid in result:
+        try:
+            candidate = psutil.Process(candidate.pid)
+            candidate.create_time()
+            members.add(candidate)
+        except psutil.NoSuchProcess:
             continue
-        result.add(pid)
-        pending.extend(children.get(pid, ()))
-    return result | session_members
+    if members and (
+        anchor is None
+        or not anchor.is_running()
+        or _process_session(anchor.pid) != parent.pid
+    ):
+        raise OSError("cannot prove ownership of the Connector process session")
+    parent.children_seen.update(members)
+    return set(parent.children_seen)
 
 
 def _terminate_owned_processes(
-    processes: set[int], *, owner_session: int | None = None
+    processes: set[psutil.Process], *, owner_session: int
 ) -> bool:
-    own_pid = os.getpid()
-    targets = sorted(
-        pid
-        for pid in processes
-        if pid > 1
-        and pid != own_pid
-        and (owner_session is None or _process_session(pid) == owner_session)
-    )
-    for pid in targets:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            continue
-    deadline = time.monotonic() + 5
-    remaining = set(targets)
-    while remaining and time.monotonic() < deadline:
-        for pid in tuple(remaining):
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for process in processes:
             try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                remaining.remove(pid)
-        if remaining:
-            time.sleep(0.05)
-    for pid in remaining:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    return all(
-        _process_absent(pid, owner_session=owner_session) for pid in targets
-    )
+                if (
+                    process.pid > 1
+                    and process.pid != os.getpid()
+                    and process.is_running()
+                    and _process_session(process.pid) == owner_session
+                ):
+                    # psutil rechecks PID plus creation time before each signal.
+                    process.send_signal(sig)
+            except psutil.NoSuchProcess:
+                continue
+        psutil.wait_procs(list(processes), timeout=5)
+    return all(not process.is_running() for process in processes)
 
 
 def _process_session(pid: int) -> int | None:
@@ -858,14 +879,16 @@ def _process_session(pid: int) -> int | None:
         return -1
 
 
-def _process_absent(pid: int, *, owner_session: int | None = None) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return owner_session is not None and _process_session(pid) != owner_session
+def _validate_codex_home(path: Path) -> None:
+    environment = build_connector_environment(os.environ)
+    effective = environment.get("CODEX_HOME")
+    if not effective:
+        effective = str(Path(environment.get("HOME", str(Path.home()))) / ".codex")
+    if Path(effective).resolve() != path.resolve():
+        raise ValueError("--codex-home differs from the effective child Codex home")
+    if not hasattr(os, "getsid"):
+        raise ValueError("canary process isolation requires POSIX sessions")
+    psutil.Process().create_time()
 
 
 class ProductionCanary(Smoke):
@@ -887,6 +910,9 @@ class ProductionCanary(Smoke):
         self.opener.addheaders = [("User-Agent", CANARY_USER_AGENT)]
         self.command_states: dict[str, dict[str, object]] = {}
         self.session_mutating_headers: dict[str, str] | None = None
+        self._reauth_access_token = ""
+        self._reauth_user_id = ""
+        self.evidence.cleanup.setdefault("privileged_sessions", True)
         self._browser_backlog: collections.deque[dict[str, object]] = (
             collections.deque()
         )
@@ -895,6 +921,42 @@ class ProductionCanary(Smoke):
     def clear_leak_sentinel(self) -> None:
         self.provider_key_canary = None
         self._leak_sentinel = ""
+
+    def privileged_request(
+        self, path: str, *, method: str, body: object | None = None
+    ) -> Result:
+        allowed = (
+            method == "POST"
+            and path == "/codex-api/v1/pairings/claim"
+            or method == "POST"
+            and re.fullmatch(r"/codex-api/v1/approvals/[0-9a-f-]{36}/decision", path)
+            or method == "DELETE"
+            and re.fullmatch(r"/codex-api/v1/devices/[0-9a-f-]{36}", path)
+        )
+        if not allowed or not self._reauth_access_token or not self._reauth_user_id:
+            raise AssertionError("privileged canary request is not scoped to its login")
+        temporary = ProductionCanary(self.origin, CanaryEvidence())
+        try:
+            headers = _exchange_control_session(
+                temporary, self._reauth_access_token, self._reauth_user_id
+            )
+            return temporary.request(path, method=method, body=body, headers=headers)
+        finally:
+            cleaned = temporary.evidence.cleanup.get("control_session", True)
+            if temporary.session_mutating_headers is not None:
+                try:
+                    logout = temporary.request(
+                        "/codex-api/v1/session/logout",
+                        method="POST",
+                        headers=temporary.session_mutating_headers,
+                    )
+                    cleaned = logout.status in {204, 401}
+                except (OSError, ValueError, AssertionError):
+                    cleaned = False
+            _clear_control_client(temporary)
+            if not cleaned:
+                self.evidence.cleanup["privileged_sessions"] = False
+                raise AssertionError("privileged canary session cleanup failed")
 
     def wait_browser_event(
         self,
@@ -1100,9 +1162,9 @@ def _login_to_sub2api(client: ProductionCanary, auth: AuthMaterial) -> tuple[str
     return access_token, str(user_id)
 
 
-def _session_exchange(
+def _exchange_control_session(
     client: ProductionCanary, access_token: str, expected_user_id: str
-) -> tuple[dict[str, str], WebSocketStream]:
+) -> dict[str, str]:
     exchange = client.request(
         "/codex-api/v1/session/exchange",
         method="POST",
@@ -1150,6 +1212,13 @@ def _session_exchange(
         or current_body.get("csrf_header_name") != header_name
     ):
         raise AssertionError("Control session readback differs from its exchange")
+    return mutating_headers
+
+
+def _session_exchange(
+    client: ProductionCanary, access_token: str, expected_user_id: str
+) -> tuple[dict[str, str], WebSocketStream]:
+    mutating_headers = _exchange_control_session(client, access_token, expected_user_id)
     cookie_header = "; ".join(
         f"{cookie.name}={cookie.value}" for cookie in client.cookies
     )
@@ -1276,25 +1345,44 @@ def _verify_binary_version(
     binary.verify("binary")
 
 
-def _stop_process(process: subprocess.Popen[bytes], timeout: float = 15) -> bool:
-    descendants = _descendant_processes(process.pid)
+def _stop_process(process: CanaryProcess, timeout: float = 15) -> bool:
+    enumeration_ok = True
+    try:
+        descendants = _descendant_processes(process)
+    except (OSError, psutil.Error):
+        descendants = set(process.children_seen)
+        enumeration_ok = False
     if process.poll() is None:
         process.send_signal(signal.SIGTERM)
         try:
             process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, psutil.TimeoutExpired):
             process.kill()
             process.wait(timeout=5)
-    return _terminate_owned_processes(
+    children_stopped = _terminate_owned_processes(
         descendants, owner_session=process.pid
     )
+    stopped = enumeration_ok and children_stopped
+    if stopped:
+        _canary_processes.discard(process)
+    return stopped
+
+
+def _cleanup_canary_processes() -> bool:
+    cleaned = True
+    for process in tuple(_canary_processes):
+        try:
+            cleaned = _stop_process(process) and cleaned
+        except (OSError, ValueError, psutil.Error, subprocess.SubprocessError):
+            cleaned = False
+    return cleaned and not _canary_processes
 
 
 def _connector_process(
     binary: FrozenFile, config: FrozenFile, codex: FrozenFile
-) -> subprocess.Popen[bytes]:
+) -> CanaryProcess:
     _verify_frozen_files(binary, codex, config)
-    process = subprocess.Popen(
+    process = CanaryProcess(
         build_connector_argv(binary.path, config.path),
         env=build_connector_environment(os.environ),
         stdin=subprocess.DEVNULL,
@@ -1460,6 +1548,86 @@ def _is_expected_timeout(error: AssertionError, description: str) -> bool:
     return str(error) == f"timed out waiting for {description}"
 
 
+def _is_marker_command(command: object, target: Path) -> bool:
+    expected = f"printf approved > {shlex.quote(str(target))}"
+    if isinstance(command, str):
+        if any(character in command for character in ("\n", "\r", "$", "`")):
+            return False
+        if command == expected:
+            return True
+        try:
+            command = shlex.split(command)
+        except ValueError:
+            return False
+    return (
+        isinstance(command, list)
+        and len(command) == 3
+        and all(isinstance(item, str) for item in command)
+        and command[0] in {"/bin/sh", "/bin/bash", "/bin/zsh"}
+        and command[1] in {"-c", "-lc"}
+        and command[2] == expected
+        and not any(character in expected for character in ("\n", "\r", "$", "`"))
+    )
+
+
+def _approval_is_bound(
+    event: dict[str, object],
+    pending: dict[str, object],
+    *,
+    device_id: str,
+    thread_id: str,
+    turn_id: str,
+    kind: str,
+    workspace: Path,
+    approve_target: Path | None,
+) -> bool:
+    if not isinstance(event.get("approval_id"), str) or not event["approval_id"]:
+        return False
+    projections = []
+    for record in (event, pending):
+        details = record.get("details")
+        if (
+            record.get("device_id") != device_id
+            or record.get("kind") != kind
+            or not isinstance(details, dict)
+            or details.get("threadId") != thread_id
+            or details.get("turnId") != turn_id
+            or not isinstance(details.get("itemId"), str)
+            or not details["itemId"]
+        ):
+            return False
+        try:
+            expires = datetime.fromisoformat(
+                str(record["expires_at"]).replace("Z", "+00:00")
+            )
+            if expires.tzinfo is None or expires <= datetime.now(UTC):
+                return False
+        except (KeyError, TypeError, ValueError):
+            return False
+        projections.append(
+            {
+                key: details.get(key)
+                for key in (
+                    "threadId",
+                    "turnId",
+                    "itemId",
+                    "approvalId",
+                    "cwd",
+                    "command",
+                )
+            }
+        )
+    if (
+        event.get("approval_id") != pending.get("approval_id")
+        or projections[0] != projections[1]
+    ):
+        return False
+    return approve_target is None or (
+        projections[0]["cwd"] == str(workspace)
+        and _is_marker_command(projections[0]["command"], approve_target)
+    )
+
+
 def _verify_real_approvals(
     *,
     client: ProductionCanary,
@@ -1485,6 +1653,8 @@ def _verify_real_approvals(
     for index, (kind, action, target) in enumerate(scenarios, start=1):
         scenario = f"{kind}_{action}"
         _wait_thread_idle(client, thread_id, "approval scenario begins from idle")
+        if not _canary_path_absent(target):
+            raise AssertionError("approval scenario target already exists")
         baseline_ids = client.pending_approval_ids(device_id, remote_thread_id)
         scenario_cursor = (
             client.browser_event_cursors[-1] if client.browser_event_cursors else 0
@@ -1499,6 +1669,19 @@ def _verify_real_approvals(
             body={"text": _approval_prompt(kind, action, target)},
         )
         turn_command_id = client.accepted_command(turn, "turn/start")
+        started = client.command_event(
+            browser_stream,
+            turn_command_id,
+            "turn/start",
+            "approval scenario turn is acknowledged",
+        )
+        result = started.get("result")
+        native_turn = result.get("turn") if isinstance(result, dict) else None
+        native_turn_id = (
+            native_turn.get("id") if isinstance(native_turn, dict) else None
+        )
+        if not isinstance(native_turn_id, str) or not native_turn_id:
+            raise AssertionError("approval scenario has no native turn identity")
         description = f"new real {kind} approval is emitted by this canary device"
         try:
             event = client.wait_browser_event(
@@ -1569,19 +1752,33 @@ def _verify_real_approvals(
             raise AssertionError(  # noqa: TRY004 - acceptance contract assertion.
                 "approval has no dynamic identity"
             )
-        if action in {"approve", "deny"}:
-            decision = client.request(
+        if not _approval_is_bound(
+            event_approval,
+            approval,
+            device_id=device_id,
+            thread_id=remote_thread_id,
+            turn_id=native_turn_id,
+            kind=kind,
+            workspace=workspace,
+            approve_target=target if action == "approve" else None,
+        ):
+            client.privileged_request(
                 f"/codex-api/v1/approvals/{approval_id}/decision",
                 method="POST",
-                headers=mutating_headers,
+                body={"decision": "deny"},
+            )
+            raise AssertionError("unexpected or unbound approval was denied")
+        if action in {"approve", "deny"}:
+            decision = client.privileged_request(
+                f"/codex-api/v1/approvals/{approval_id}/decision",
+                method="POST",
                 body={"decision": action},
             )
             if decision.status != 204:
                 raise AssertionError("approval decision was rejected")
-            conflict = client.request(
+            conflict = client.privileged_request(
                 f"/codex-api/v1/approvals/{approval_id}/decision",
                 method="POST",
-                headers=mutating_headers,
                 body={"decision": "deny" if action == "approve" else "approve"},
             )
             if conflict.status != 409:
@@ -1596,10 +1793,9 @@ def _verify_real_approvals(
                 ),
                 timeout=45,
             )
-            stale = client.request(
+            stale = client.privileged_request(
                 f"/codex-api/v1/approvals/{approval_id}/decision",
                 method="POST",
-                headers=mutating_headers,
                 body={"decision": "approve"},
             )
             if stale.status not in {404, 409, 410}:
@@ -1652,24 +1848,24 @@ def _run_control_flow(
     mutating_headers: dict[str, str],
     browser_stream: WebSocketStream,
 ) -> None:
-    process: subprocess.Popen[bytes] | None = None
+    process: CanaryProcess | None = None
     device_id = ""
     thread_id = ""
-    crash_children: set[int] = set()
+    crash_children: set[psutil.Process] = set()
+    crash_owner_session = 0
+    before_protected: dict[str, str] | None = None
     try:
         before_protected = snapshot_protected_files(codex_home)
         before_cli = _ordinary_cli(codex_binary, workspace)
-        process = _connector_process(
-            connector_binary, connector_config, codex_binary
-        )
+        process = _connector_process(connector_binary, connector_config, codex_binary)
         client.evidence.cleanup["connector_processes"] = False
         code_path = state_dir / "pairing-code.json"
         _wait_for_file(code_path, 60)
         pairing_code = read_pairing_code(code_path)
-        claim = client.request(
+        client.evidence.cleanup["device"] = False
+        claim = client.privileged_request(
             "/codex-api/v1/pairings/claim",
             method="POST",
-            headers=mutating_headers,
             body={"code": pairing_code},
         )
         claim_body = claim.json() if claim.status == 200 else None
@@ -1893,6 +2089,7 @@ def _run_control_flow(
         if status != 101 or resumed_browser is None:
             raise AssertionError("browser cursor reconnect did not upgrade")
         browser_stream = resumed_browser
+        client.evidence.cleanup["browser_websocket"] = False
         client.command_event(
             browser_stream,
             offline_command_id,
@@ -1910,7 +2107,8 @@ def _run_control_flow(
 
         assert_refresh_only_credentials(state_dir)
         spool_before = read_spool_meta(state_dir)
-        crash_children = _descendant_processes(process.pid)
+        crash_owner_session = process.pid
+        crash_children = _descendant_processes(process)
         if not crash_children:
             raise AssertionError("Connector has no owned app-server process to clean")
         process.send_signal(signal.SIGUSR1)
@@ -1935,7 +2133,9 @@ def _run_control_flow(
             raise AssertionError(
                 "canary Connector did not crash at the frozen ACK point"
             )
-        if not _terminate_owned_processes(crash_children):
+        if not _terminate_owned_processes(
+            crash_children, owner_session=crash_owner_session
+        ):
             raise AssertionError("crashed Connector left an owned app-server process")
         crash_children.clear()
         frozen_record = read_spool_records(state_dir).get(replay_sequence)
@@ -2019,10 +2219,12 @@ def _run_control_flow(
                 raise AssertionError("dangerous raw RPC HTTP route did not fail closed")
         client.evidence.mark("dangerous_rpc_http_404")
 
-        revoke = client.request(
+        credential_identity = _credential_identity(state_dir)
+        if _read_credential_rejection(state_dir) is not None:
+            raise AssertionError("credential rejection proof predates revocation")
+        revoke = client.privileged_request(
             f"/codex-api/v1/devices/{device_id}",
             method="DELETE",
-            headers=mutating_headers,
         )
         if revoke.status != 204:
             raise AssertionError("device revocation failed")
@@ -2037,16 +2239,14 @@ def _run_control_flow(
             ),
             timeout=30,
         )
-        _stop_process(process)
-        reconnects_before = read_token_reconnects(state_dir)
+        if not _stop_process(process):
+            raise AssertionError("revoked Connector process cleanup failed")
+        if _credential_identity(state_dir) != credential_identity:
+            raise AssertionError("device credential changed before its rejection probe")
         process = _connector_process(connector_binary, connector_config, codex_binary)
         client.eventually(
             "revoked refresh credential is rejected by the token endpoint",
-            lambda: (
-                value
-                if (value := read_token_reconnects(state_dir)) > reconnects_before
-                else None
-            ),
+            lambda: _read_credential_rejection(state_dir),
             timeout=15,
         )
         client.eventually(
@@ -2054,7 +2254,10 @@ def _run_control_flow(
             lambda: _device_absent(client, device_id),
             timeout=15,
         )
-        _stop_process(process)
+        if not _stop_process(process):
+            raise AssertionError("rejected Connector process cleanup failed")
+        if _credential_identity(state_dir) != credential_identity:
+            raise AssertionError("rejection proof used a different device credential")
         client.evidence.mark("revoke_rejects_old_credential")
         client.evidence.cleanup["device"] = True
         device_id = ""
@@ -2073,10 +2276,16 @@ def _run_control_flow(
                 "permission approval cannot be deterministically requested through the public text-only RPC"
             )
     finally:
-        process_clean = process is None or _stop_process(process)
-        processes_clean = not crash_children or _terminate_owned_processes(
-            crash_children
-        )
+        try:
+            process_clean = process is None or _stop_process(process)
+        except (OSError, ValueError, psutil.Error, subprocess.SubprocessError):
+            process_clean = False
+        try:
+            processes_clean = not crash_children or _terminate_owned_processes(
+                crash_children, owner_session=crash_owner_session
+            )
+        except (OSError, ValueError, psutil.Error):
+            processes_clean = False
         client.evidence.cleanup["connector_processes"] = (
             process_clean
             and (process is None or process.poll() is not None)
@@ -2084,15 +2293,24 @@ def _run_control_flow(
         )
         if device_id:
             try:
-                cleanup = client.request(
+                cleanup = client.privileged_request(
                     f"/codex-api/v1/devices/{device_id}",
                     method="DELETE",
-                    headers=mutating_headers,
                 )
-                client.evidence.cleanup["device"] = cleanup.status == 204
-            except (OSError, ValueError):
+                client.evidence.cleanup["device"] = cleanup.status in {204, 404}
+            except (OSError, ValueError, AssertionError):
                 client.evidence.cleanup["device"] = False
-        browser_stream.close()
+        try:
+            browser_stream.close()
+            client.evidence.cleanup["browser_websocket"] = True
+        except (OSError, ValueError):
+            client.evidence.cleanup["browser_websocket"] = False
+        if before_protected is not None:
+            try:
+                preserved = snapshot_protected_files(codex_home) == before_protected
+            except (OSError, ValueError):
+                preserved = False
+            client.evidence.mark("codex_protected_hashes_unchanged", preserved)
 
 
 def _write_connector_config(
@@ -2179,6 +2397,8 @@ def _clear_control_client(client: ProductionCanary | None) -> None:
         except KeyError:
             pass
     client.opener.addheaders = []
+    client._reauth_access_token = ""
+    client._reauth_user_id = ""
     if client.session_mutating_headers is not None:
         client.session_mutating_headers.clear()
         client.session_mutating_headers = None
@@ -2295,6 +2515,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         evidence.mark("binary_identity_and_version")
         codex_home = canonical_absolute_path(args.codex_home, "Codex home")
+        _validate_codex_home(codex_home)
         run_dir = create_private_run_directory(args.private_run_dir)
         for name in ("config", "run_directory", "state", "workspace"):
             evidence.cleanup[name] = False
@@ -2324,6 +2545,8 @@ def main(argv: list[str] | None = None) -> int:
         access_token, user_id = _login_to_sub2api(client, auth)
         auth.clear()
         auth = None
+        client._reauth_access_token = access_token
+        client._reauth_user_id = user_id
         mutating_headers, browser_stream = _session_exchange(
             client, access_token, user_id
         )
@@ -2346,7 +2569,14 @@ def main(argv: list[str] | None = None) -> int:
         result = 0
     except ExternalVerificationBlocked:
         result = 2
-    except (AssertionError, OSError, ValueError, json.JSONDecodeError):
+    except (
+        AssertionError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+        psutil.Error,
+        subprocess.SubprocessError,
+    ):
         result = 1
     finally:
         access_token = ""
@@ -2392,7 +2622,12 @@ def main(argv: list[str] | None = None) -> int:
         for frozen in (connector_config, codex_binary, connector_binary):
             if frozen is not None:
                 frozen.close()
-        removed = _remove_private_run_directory(run_dir)
+        evidence.cleanup["connector_processes"] = _cleanup_canary_processes()
+        removed = (
+            _remove_private_run_directory(run_dir)
+            if evidence.cleanup["connector_processes"] and evidence.cleanup["device"]
+            else False
+        )
         evidence.cleanup["state"] = removed
         evidence.cleanup["workspace"] = removed
         evidence.cleanup["config"] = removed
@@ -2403,7 +2638,7 @@ def main(argv: list[str] | None = None) -> int:
         _clear_control_client(client)
         mutating_headers = None
         cleanup_complete = all(evidence.cleanup.values())
-        if not cleanup_complete:
+        if not cleanup_complete or not all(evidence.checks.values()):
             result = 1
         evidence.finish(
             "passed"
@@ -2420,6 +2655,7 @@ def main(argv: list[str] | None = None) -> int:
             destination = write_redacted_evidence(evidence_dir, evidence)
         except (OSError, ValueError):
             destination = None
+            result = 1
     if result == 1:
         print("not ok - production Connector canary failed", file=sys.stderr)
         return 1

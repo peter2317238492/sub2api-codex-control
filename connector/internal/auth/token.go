@@ -104,6 +104,9 @@ func (s *HTTPTokenSource) Token(ctx context.Context) (DeviceToken, error) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		if rejection := productionCanaryRejection(response, s.URL); rejection != nil {
+			return DeviceToken{}, rejection
+		}
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
 		return DeviceToken{}, fmt.Errorf("device token exchange returned HTTP status %d", response.StatusCode)
 	}
