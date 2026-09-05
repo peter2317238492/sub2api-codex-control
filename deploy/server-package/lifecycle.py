@@ -22,6 +22,11 @@ if __name__ == "__main__" and (
     )
     raise SystemExit(2)
 
+# The verifier and lifecycle import trusted tools from verified package
+# trees whose inventories are exact; never let the interpreter write
+# bytecode caches into them, regardless of the operator's environment.
+sys.dont_write_bytecode = True
+
 import argparse
 import contextlib
 import hashlib
