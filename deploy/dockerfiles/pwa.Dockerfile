@@ -20,7 +20,7 @@ RUN pnpm install --frozen-lockfile --filter @sub2api-codex/pwa...
 
 COPY apps/pwa apps/pwa
 COPY packages/control-protocol packages/control-protocol
-COPY docs/contracts/sub2api-auth.v0.2.0.json docs/contracts/sub2api-auth.v0.2.0.json
+COPY docs/contracts/sub2api-auth.v0.2.1.json docs/contracts/sub2api-auth.v0.2.1.json
 RUN pnpm --filter @sub2api-codex/pwa build
 
 

@@ -260,9 +260,9 @@ def compose_config(backup_dir: Path) -> dict[str, Any]:
         "CONTROL_CSRF_HEADER_NAME": "x-csrf-token",
         "CONTROL_SUB2API_BASE_URL": "http://sub2api:8080",
         "CONTROL_SUB2API_AUTH_ME_PATH": "/api/v1/auth/me",
-        "CONTROL_SUB2API_EXPECTED_VERSION": "0.2.0",
-        "CONTROL_SUB2API_EXPECTED_COMMIT": "aa23648",
-        "CONTROL_SUB2API_CONTRACT_MARKER": "0.2.0/aa23648",
+        "CONTROL_SUB2API_EXPECTED_VERSION": "0.2.1",
+        "CONTROL_SUB2API_EXPECTED_COMMIT": "578785e",
+        "CONTROL_SUB2API_CONTRACT_MARKER": "0.2.1/578785e",
         "CONTROL_TRUST_FORWARDED_FOR": "true",
         "CONTROL_ALLOWED_ORIGINS_CSV": "https://control.example.invalid",
         "CONTROL_DATABASE_PASSWORD_FILE": "/run/secrets/control_db_password",
@@ -1533,8 +1533,8 @@ class APIImageContractTests(unittest.TestCase):
         self.expected = {
             "appserver_schema_digest": "5" * 64,
             "codex_expected_version": "0.147.0",
-            "sub2api_expected_commit": "aa23648",
-            "sub2api_expected_version": "0.2.0",
+            "sub2api_expected_commit": "578785e",
+            "sub2api_expected_version": "0.2.1",
         }
         write_json(
             self.versions_lock,
@@ -1545,7 +1545,7 @@ class APIImageContractTests(unittest.TestCase):
                 },
                 "sub2api": {
                     "runtime_version": self.expected["sub2api_expected_version"],
-                    "runtime_commit": "aa23648" + "b" * 33,
+                    "runtime_commit": "578785e" + "b" * 33,
                 },
             },
         )
@@ -1626,7 +1626,7 @@ class APIImageContractTests(unittest.TestCase):
 
         write_json(self.observed, self.expected)
         lock = json.loads(self.versions_lock.read_text(encoding="utf-8"))
-        lock["sub2api"]["runtime_commit"] = "aa23648"
+        lock["sub2api"]["runtime_commit"] = "578785e"
         write_json(self.versions_lock, lock)
         result, _ = self.invoke(success=False)
         self.assertIn("invalid Codex or Sub2API contract tuple", result.stderr)

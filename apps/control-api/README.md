@@ -152,7 +152,7 @@ The connection-token proof signs the exact UTF-8 string
 the nonce is an unpadded base64url 24-byte random value, and the signature is an
 unpadded base64url Ed25519 signature. A proof nonce is accepted once.
 
-Production requires `CONTROL_SUB2API_CONTRACT_MARKER=0.2.0/aa23648`. This
+Production requires `CONTROL_SUB2API_CONTRACT_MARKER=0.2.1/578785e`. This
 marker is supplied only after an external deployment check verifies the pinned
 Sub2API binary contract; the Control API does not trust an unauthenticated
 remote version guess.

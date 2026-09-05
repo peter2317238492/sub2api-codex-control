@@ -1,26 +1,27 @@
 # Sub2API runtime contract
 
-Status: formally frozen at Sub2API `0.2.0`; production admission accepts only
+Status: frozen at Sub2API `0.2.1`; production admission accepts only
 the explicit `immutable-image-v1` profile.
 
-The upstream `v0.2.0` annotated tag object
-`dd07c4d8d484878e617c945cc8bacc304a5a6560` resolves to commit
-`aa236488351eb71e120fc2b6fb32e36b0374c918`. The release was published at
-`2026-09-02T03:24:41Z`. Its linux/amd64 archive SHA-256 is
-`2d8aa1a31de89e9fcfba99b3330e20da11b0760a62447f0aa32b3b5e9f65dfb4`;
-the extracted `/app/sub2api` binary is 119423136 bytes with SHA-256
-`32536062df62388fd508c73d5fa94f84ff6bdd38837dd175ba83e26b4e711bc3`
-and reports build time `2026-09-02T03:13:57Z`. The production host's
-self-updated PID 1 binary was found byte-identical to it before the
-re-freeze, so migrating the container to the digest-pinned image changes
-no runtime behaviour.
+The upstream `v0.2.1` annotated tag object
+`adc26f68f687685e847bfb997559f48e79cac475` resolves to commit
+`578785ee7fb35030b094b69624efe25670a36f5f`. The release was published at
+`2026-09-05T09:45:01Z`. Its linux/amd64 archive SHA-256 is
+`06d5ce6e4be7c2042635d455d6ae1b5990a3fc7692416908d0db395879306363`;
+the extracted binary is 119656608 bytes with SHA-256
+`b709a61c22bfb6b662619658444e20186fdfd8d1850984fa9a909572c0a5026a`
+and reports build time `2026-09-05T09:34:19Z`. On 2026-09-05 the production
+container had already been upgraded to this release; its `/app/sub2api`
+matched the independently downloaded, checksum-verified release archive.
+This source freeze does not replace the fresh runtime and authentication
+acceptance required during deployment.
 
 Exact runtime and image values are machine-readable in `versions.lock.json`.
 The pinned refresh/logout/session-binding/storage shape is in
-`sub2api-auth.v0.2.0.json`, whose SHA-256
-`e69ecf9536f21271121c3b000d1b40562fd10618ad79a5ebe848e472e24d4c21`
-is locked there. A blob-level comparison from `v0.1.178` to `v0.2.0` (and
-earlier from `v0.1.176` to `v0.1.178`) found no change in the frozen frontend auth, JWT middleware, session-binding
+`sub2api-auth.v0.2.1.json`, whose SHA-256
+`3affbb6ade0b4d6d97df9f2ea3834049e94f64798267763c0c2353cd1f494594`
+is locked there. A blob-level comparison from `v0.2.0` to `v0.2.1`
+found no change in the frozen frontend auth, JWT middleware, session-binding
 middleware, refresh handler, or response wrapper, so the contract carries
 over verbatim.
 
@@ -34,7 +35,7 @@ for incident history, but neither the old image nor its formerly exact writable
 shape is an accepted production compatibility profile. It must fail the
 current gate.
 
-The frozen `0.2.0` authentication contract is:
+The frozen `0.2.1` authentication contract is:
 
 - access token localStorage key: `auth_token`
 - refresh token localStorage key: `refresh_token`
@@ -62,16 +63,15 @@ logout endpoints directly and rotates the existing Sub2API localStorage keys.
 
 ## Production freeze gate
 
-The only admitted linux/amd64 manifest is
-`weishaw/sub2api@sha256:271bb3b34661803681cabf54e99811ab8e248b0dd4c88b09ea1226e22dea5751`;
-under the production containerd image store the daemon reports that manifest
-digest as the image ID. The `0.2.0` multi-platform tag resolves first to the
-distinct index digest
-`sha256:553864545ec1b446c4b3e3b394599523463de2ff93170b4a5b0ad00026c8b945`;
-the index must not be substituted for the amd64 RepoDigest. The image was
-created at `2026-09-02T03:23:33.546935291Z`, and its version, revision, source,
-and maintainer labels match the lock (the `0.2.0` image also carries a
-description label, which the lock does not pin).
+The admitted Docker reference is the immutable multi-platform index
+`weishaw/sub2api@sha256:b3845aad81d728a5e4efa4d677a638f27947be286ed9a17788a42a1f07fe7e50`.
+The production containerd image store reports this index digest as the image
+ID and RepoDigest. Its selected linux/amd64 child manifest is
+`sha256:86d605217e7ebdb60a70316a458446cd51c2da207a8b2128661a2cb9caaf9aab`.
+Admission also pins the exact amd64 binary, preventing a different platform
+from satisfying this tuple. The image was created at
+`2026-09-05T09:43:41.268535999Z`, and its version, revision, source, and
+maintainer labels match the lock.
 
 Admission requires digest-only `Config.Image`, the exact RepoDigest/image ID,
 read-only rootfs, all Linux capabilities dropped, no-new-privileges, PID 1 at
