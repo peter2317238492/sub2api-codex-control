@@ -7,6 +7,6 @@ import (
 	"github.com/peter2317238492/sub2api-codex-control/connector/internal/policy"
 )
 
-func productionCanaryFileObserver(string, *policy.Guard, []string) func(string, json.RawMessage) {
+func productionCanaryFileObserver(string, *policy.Guard, []string) func(string, json.RawMessage) error {
 	return nil
 }

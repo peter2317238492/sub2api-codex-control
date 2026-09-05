@@ -114,6 +114,9 @@ and a declined outcome. It records only hashes and booleans in private state;
 paths, diffs and contents are not retained or forwarded. Missing attribution
 remains unverified. An opposing-decision probe is sent only after the target
 and completed denial have been established.
+The fixed proof file retains at most 16 identity-keyed records across reconnects.
+Matching-identity failures are sticky; interleaved completions cannot replace
+them. Overflow or persistence failure fails the instrumented session.
 
 Revocation proof requires the instrumented Connector to observe exactly HTTP
 401, `WWW-Authenticate: Device`, and `invalid_device_credential` from a fresh
