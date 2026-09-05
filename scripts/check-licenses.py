@@ -28,7 +28,7 @@ EXPECTED_COMPONENT_IDS = {
     "x-text",
 }
 EXPECTED_MANIFEST_SHA256 = (
-    "12bd737fc8713e2eb4e364dd3e7b64ee40de0fd6146a75712d28caccb7fb035b"
+    "bef83a78cd5ed8f58ccc38f9f0d62f11dcce892475c0f4b503ace8c3e0d58c2d"
 )
 EXPECTED_THIRD_PARTY_NOTICES_SHA256 = (
     "c02c923418f0d68fd725f2760d4667b9f44804d027a87e42b61d677de146b380"
@@ -44,7 +44,7 @@ PACKAGE_JSON_PATHS = (
 )
 EXPECTED_WORKFLOW_SHA256 = {
     Path(".github/workflows/ci.yml"): (
-        "2ed32cf28d1b5660f29ce051f38ca48df5fe7e893201270aefb8cf5ab51f3c23"
+        "fee8449bee7f3817ad15fcdae9fb3ebbd2e3aef2eb64468b9e2b9fd9e690cb7d"
     ),
     Path(".github/workflows/connector-release.yml"): (
         "6272badd5a2452804a47210a841dad7f22f3f2a9d0d5117b2d8e4292e05fc6c1"

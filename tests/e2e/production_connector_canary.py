@@ -814,6 +814,8 @@ _canary_processes: set[psutil.Popen] = set()
 
 class CanaryProcess(psutil.Popen):
     def __init__(self, *args: object, **kwargs: object) -> None:
+        if kwargs.get("start_new_session") is not True:
+            raise ValueError("canary processes require a dedicated session")
         super().__init__(*args, **kwargs)
         self.children_seen: set[psutil.Process] = set()
         _canary_processes.add(self)
@@ -822,13 +824,22 @@ class CanaryProcess(psutil.Popen):
 def _descendant_processes(parent: CanaryProcess) -> set[psutil.Process]:
     # A surviving identity anchors session ownership after an intentional crash.
     anchors = [parent, *parent.children_seen]
-    anchor = next(
-        (
-            item
-            for item in anchors
-            if item.is_running() and _process_session(item.pid) == parent.pid
-        ),
-        None,
+    parent_unreaped = (
+        (parent.returncode is None and parent.status() == psutil.STATUS_ZOMBIE)
+        if parent.is_running()
+        else False
+    )
+    anchor = (
+        parent
+        if parent_unreaped
+        else next(
+            (
+                item
+                for item in anchors
+                if item.is_running() and _process_session(item.pid) == parent.pid
+            ),
+            None,
+        )
     )
     members: set[psutil.Process] = set()
     for candidate in psutil.process_iter():
@@ -843,7 +854,7 @@ def _descendant_processes(parent: CanaryProcess) -> set[psutil.Process]:
     if members and (
         anchor is None
         or not anchor.is_running()
-        or _process_session(anchor.pid) != parent.pid
+        or (not parent_unreaped and _process_session(anchor.pid) != parent.pid)
     ):
         raise OSError("cannot prove ownership of the Connector process session")
     parent.children_seen.update(members)
@@ -912,6 +923,8 @@ class ProductionCanary(Smoke):
         self.session_mutating_headers: dict[str, str] | None = None
         self._reauth_access_token = ""
         self._reauth_user_id = ""
+        self._run_deadline: float | None = None
+        self.session_expires_at: datetime | None = None
         self.evidence.cleanup.setdefault("privileged_sessions", True)
         self._browser_backlog: collections.deque[dict[str, object]] = (
             collections.deque()
@@ -921,6 +934,22 @@ class ProductionCanary(Smoke):
     def clear_leak_sentinel(self) -> None:
         self.provider_key_canary = None
         self._leak_sentinel = ""
+
+    def _check_run_budget(self) -> None:
+        if self._run_deadline is not None and time.monotonic() >= self._run_deadline:
+            raise AssertionError("canary primary session budget is exhausted")
+
+    def request(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        body: object | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Result:
+        if path != "/codex-api/v1/session/logout":
+            self._check_run_budget()
+        return super().request(path, method=method, body=body, headers=headers)
 
     def privileged_request(
         self, path: str, *, method: str, body: object | None = None
@@ -966,7 +995,10 @@ class ProductionCanary(Smoke):
         *,
         timeout: float = 15,
     ) -> dict[str, object]:
+        self._check_run_budget()
         deadline = time.monotonic() + timeout
+        if self._run_deadline is not None:
+            deadline = min(deadline, self._run_deadline)
         with self._browser_lock:
             for candidate in tuple(self._browser_backlog):
                 if predicate(candidate):
@@ -974,6 +1006,7 @@ class ProductionCanary(Smoke):
                     self.check(True, description)
                     return candidate
             while time.monotonic() < deadline:
+                self._check_run_budget()
                 try:
                     raw = stream.receive_text(
                         min(1.0, max(0.01, deadline - time.monotonic()))
@@ -1203,6 +1236,13 @@ def _exchange_control_session(
         or str(body["user"].get("id")) != expected_user_id
     ):
         raise AssertionError("Control session is not bound to the login identity")
+    try:
+        expires = datetime.fromisoformat(str(body["expires_at"]).replace("Z", "+00:00"))
+        if expires.tzinfo is None or expires <= datetime.now(UTC):
+            raise ValueError("expired session")
+    except (KeyError, ValueError, TypeError) as error:
+        raise AssertionError("Control session has no valid expiry") from error
+    client.session_expires_at = expires
     current = client.request("/codex-api/v1/session")
     current_body = current.json() if current.status == 200 else None
     if (
@@ -1219,6 +1259,10 @@ def _session_exchange(
     client: ProductionCanary, access_token: str, expected_user_id: str
 ) -> tuple[dict[str, str], WebSocketStream]:
     mutating_headers = _exchange_control_session(client, access_token, expected_user_id)
+    budget = (client.session_expires_at - datetime.now(UTC)).total_seconds() - 30
+    if budget <= 0:
+        raise AssertionError("Control session has no safe canary run budget")
+    client._run_deadline = time.monotonic() + budget
     cookie_header = "; ".join(
         f"{cookie.name}={cookie.value}" for cookie in client.cookies
     )
@@ -1345,24 +1389,41 @@ def _verify_binary_version(
     binary.verify("binary")
 
 
-def _stop_process(process: CanaryProcess, timeout: float = 15) -> bool:
-    enumeration_ok = True
-    try:
-        descendants = _descendant_processes(process)
-    except (OSError, psutil.Error):
-        descendants = set(process.children_seen)
-        enumeration_ok = False
-    if process.poll() is None:
-        process.send_signal(signal.SIGTERM)
+def _wait_without_reaping(process: CanaryProcess, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
         try:
-            process.wait(timeout=timeout)
-        except (subprocess.TimeoutExpired, psutil.TimeoutExpired):
+            if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
+                return True
+        except psutil.NoSuchProcess:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+
+
+def _stop_process(process: CanaryProcess, timeout: float = 15) -> bool:
+    try:
+        _descendant_processes(process)
+    except (OSError, psutil.Error):
+        pass
+    if not _wait_without_reaping(process, 0):
+        process.send_signal(signal.SIGTERM)
+        if not _wait_without_reaping(process, timeout):
             process.kill()
-            process.wait(timeout=5)
-    children_stopped = _terminate_owned_processes(
-        descendants, owner_session=process.pid
-    )
-    stopped = enumeration_ok and children_stopped
+            if not _wait_without_reaping(process, 5):
+                return False
+    # Keep the exited leader unreaped while collecting children born during exit.
+    deadline = time.monotonic() + timeout
+    while True:
+        descendants = _descendant_processes(process)
+        if not any(child.is_running() for child in descendants):
+            break
+        _terminate_owned_processes(descendants, owner_session=process.pid)
+        if time.monotonic() >= deadline:
+            return False
+    process.wait(timeout=5)
+    stopped = not any(child.is_running() for child in _descendant_processes(process))
     if stopped:
         _canary_processes.discard(process)
     return stopped
@@ -1525,7 +1586,8 @@ def _approval_prompt(kind: str, action: str, path: Path) -> str:
         )
     return (
         "Request an additional turn-scoped filesystem permission for the existing "
-        f"directory {quoted}, then stop. Do not read, create, or change any file."
+        f"directory {shlex.quote(str(path.parent))}, requesting read access only, then stop. "
+        "Do not read, create, or change any file."
     )
 
 
@@ -1548,8 +1610,10 @@ def _is_expected_timeout(error: AssertionError, description: str) -> bool:
     return str(error) == f"timed out waiting for {description}"
 
 
-def _is_marker_command(command: object, target: Path) -> bool:
-    expected = f"printf approved > {shlex.quote(str(target))}"
+def _is_marker_command(command: object, target: Path, value: str = "approved") -> bool:
+    if value not in {"approved", "timeout"}:
+        return False
+    expected = f"printf {value} > {shlex.quote(str(target))}"
     if isinstance(command, str):
         if any(character in command for character in ("\n", "\r", "$", "`")):
             return False
@@ -1579,7 +1643,8 @@ def _approval_is_bound(
     turn_id: str,
     kind: str,
     workspace: Path,
-    approve_target: Path | None,
+    target: Path,
+    command_value: str = "approved",
 ) -> bool:
     if not isinstance(event.get("approval_id"), str) or not event["approval_id"]:
         return False
@@ -1614,6 +1679,10 @@ def _approval_is_bound(
                     "approvalId",
                     "cwd",
                     "command",
+                    "fileChanges",
+                    "permissions",
+                    "grantRoot",
+                    "path",
                 )
             }
         )
@@ -1622,10 +1691,49 @@ def _approval_is_bound(
         or projections[0] != projections[1]
     ):
         return False
-    return approve_target is None or (
-        projections[0]["cwd"] == str(workspace)
-        and _is_marker_command(projections[0]["command"], approve_target)
-    )
+    details = projections[0]
+    if details["cwd"] is not None and details["cwd"] != str(workspace):
+        return False
+    if kind == "command":
+        return details["cwd"] == str(workspace) and _is_marker_command(
+            details["command"], target, command_value
+        )
+    if kind == "file_change":
+        return details["fileChanges"] == {str(target): {"type": "add"}}
+    if kind == "permission":
+        permissions = details["permissions"]
+        if not isinstance(permissions, dict) or set(permissions) - {
+            "fileSystem",
+            "network",
+        }:
+            return False
+        network = permissions.get("network")
+        if network is not None and (
+            not isinstance(network, dict)
+            or set(network) != {"enabled"}
+            or network["enabled"] is not False
+        ):
+            return False
+        file_system = permissions.get("fileSystem")
+        if not isinstance(file_system, dict):
+            return False
+        file_system = {
+            key: value
+            for key, value in file_system.items()
+            if not (
+                key in {"read", "write", "entries", "globScanMaxDepth"}
+                and value in (None, [])
+            )
+        }
+        return file_system in (
+            {"read": [str(workspace)]},
+            {
+                "entries": [
+                    {"access": "read", "path": {"type": "path", "path": str(workspace)}}
+                ]
+            },
+        )
+    return False
 
 
 def _verify_real_approvals(
@@ -1675,6 +1783,8 @@ def _verify_real_approvals(
             "turn/start",
             "approval scenario turn is acknowledged",
         )
+        if started.get("state") != "succeeded":
+            raise AssertionError("approval scenario turn was not started successfully")
         result = started.get("result")
         native_turn = result.get("turn") if isinstance(result, dict) else None
         native_turn_id = (
@@ -1725,12 +1835,6 @@ def _verify_real_approvals(
                 thread_id,
                 "ambiguous approval scenario returns to idle by default deny",
             )
-            client.command_event(
-                browser_stream,
-                turn_command_id,
-                "turn/start",
-                "ambiguous approval turn reaches a terminal state",
-            )
             continue
         except AssertionError as error:
             if not _is_expected_timeout(error, description):
@@ -1739,12 +1843,6 @@ def _verify_real_approvals(
                 client,
                 thread_id,
                 "untriggered approval scenario returns to idle",
-            )
-            client.command_event(
-                browser_stream,
-                turn_command_id,
-                "turn/start",
-                "untriggered approval turn reaches a terminal state",
             )
             continue
         approval_id = approval.get("approval_id")
@@ -1760,7 +1858,8 @@ def _verify_real_approvals(
             turn_id=native_turn_id,
             kind=kind,
             workspace=workspace,
-            approve_target=target if action == "approve" else None,
+            target=target,
+            command_value="timeout" if action == "timeout" else "approved",
         ):
             client.privileged_request(
                 f"/codex-api/v1/approvals/{approval_id}/decision",
@@ -1801,12 +1900,6 @@ def _verify_real_approvals(
             if stale.status not in {404, 409, 410}:
                 raise AssertionError("timed-out approval accepted a stale decision")
         _wait_thread_idle(client, thread_id, "approval turn returns to idle")
-        client.command_event(
-            browser_stream,
-            turn_command_id,
-            "turn/start",
-            "approval turn/start reaches a terminal state",
-        )
         if (
             kind == "command"
             and action == "approve"
@@ -2098,7 +2191,7 @@ def _run_control_flow(
         )
         if client.browser_event_cursors[-1] <= cursor_before:
             raise AssertionError("browser replay did not advance the durable cursor")
-        client.evidence.mark("cross_replica_browser_cursor_replay")
+        client.evidence.mark("browser_cursor_replay")
 
         cli_during = _ordinary_cli(codex_binary, workspace)
         if cli_during != before_cli:
@@ -2129,14 +2222,14 @@ def _run_control_flow(
         replay_sequence, replay_event_id = wait_for_unacked_command_record(
             state_dir, replay_command_id
         )
-        if process.wait(timeout=15) != 86:
+        if not _wait_without_reaping(process, 15):
+            raise AssertionError("canary Connector did not reach its crash point")
+        if not _stop_process(process):
+            raise AssertionError("crashed Connector left an owned app-server process")
+        if process.returncode != 86:
             raise AssertionError(
                 "canary Connector did not crash at the frozen ACK point"
             )
-        if not _terminate_owned_processes(
-            crash_children, owner_session=crash_owner_session
-        ):
-            raise AssertionError("crashed Connector left an owned app-server process")
         crash_children.clear()
         frozen_record = read_spool_records(state_dir).get(replay_sequence)
         if frozen_record != (replay_event_id, "command_ack", replay_command_id):
