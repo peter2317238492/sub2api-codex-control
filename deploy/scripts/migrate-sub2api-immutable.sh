@@ -301,8 +301,22 @@ if not isinstance(image, str) or "@sha256:" not in image:
     raise SystemExit("version lock has no immutable Sub2API image")
 if not isinstance(image_id, str) or not image_id.startswith("sha256:"):
     raise SystemExit("version lock has no immutable Sub2API image ID")
+tmpfs = sub2api.get("runtime_tmpfs")
+if tmpfs is None:
+    tmpfs = {}
+if not isinstance(tmpfs, dict) or any(
+    not isinstance(path, str)
+    or not isinstance(options, str)
+    or not path.startswith("/")
+    or not options
+    or any(character.isspace() or character in ",:" for character in path)
+    or any(character.isspace() or character == ":" for character in options)
+    for path, options in tmpfs.items()
+):
+    raise SystemExit("version lock has an invalid Sub2API tmpfs policy")
 print(image)
 print(image_id)
+print(json.dumps(tmpfs, sort_keys=True, separators=(",", ":")))
 PY
 }
 
@@ -329,12 +343,16 @@ render_and_validate_compose() {
   chmod 0600 "$resolved" "$uninterpolated"
   python3 -I - "$resolved" "$uninterpolated" "$compose_service" "$container" \
     "$locked_image" "$data_source" "$expected_uid" "$expected_gid" \
-    "$expected_network" > "$hash_output" <<'PY'
+    "$expected_network" "$locked_tmpfs" > "$hash_output" <<'PY'
 import hashlib
 import json
 import sys
 
-resolved_path, raw_path, service_name, container_name, image, source, uid, gid, network = sys.argv[1:]
+resolved_path, raw_path, service_name, container_name, image, source, uid, gid, network, tmpfs_json = sys.argv[1:]
+expected_tmpfs = json.loads(tmpfs_json)
+if not isinstance(expected_tmpfs, dict):
+    raise SystemExit("locked Sub2API tmpfs policy is invalid")
+expected_tmpfs_list = [f"{path}:{options}" for path, options in sorted(expected_tmpfs.items())]
 
 def validate(path, label):
     value = json.load(open(path, encoding="utf-8"))
@@ -361,9 +379,15 @@ def validate(path, label):
         raise SystemExit(f"{label} Sub2API service must drop exactly ALL capabilities")
     if service.get("security_opt") not in (["no-new-privileges"], ["no-new-privileges:true"]):
         raise SystemExit(f"{label} Sub2API service must enable only no-new-privileges")
-    for key in ("build", "cap_add", "devices", "ipc", "pid", "network_mode", "tmpfs", "volumes_from"):
+    for key in ("build", "cap_add", "devices", "ipc", "pid", "network_mode", "volumes_from"):
         if service.get(key) not in (None, [], {}):
             raise SystemExit(f"{label} Sub2API service has prohibited {key}")
+    tmpfs = service.get("tmpfs")
+    if expected_tmpfs_list:
+        if tmpfs != expected_tmpfs_list:
+            raise SystemExit(f"{label} Sub2API service tmpfs mounts do not match the locked tmpfs policy")
+    elif tmpfs not in (None, [], {}):
+        raise SystemExit(f"{label} Sub2API service has prohibited tmpfs")
     if service.get("privileged") not in (None, False):
         raise SystemExit(f"{label} Sub2API service is privileged")
     if service.get("command") is not None or service.get("entrypoint") is not None:
@@ -1344,7 +1368,9 @@ trap 'exit 143' TERM
 validate_paths_and_lock "$preflight_values" || fail "path or release-lock preflight failed"
 locked_image=$(sed -n '1p' "$preflight_values")
 locked_image_id=$(sed -n '2p' "$preflight_values")
+locked_tmpfs=$(sed -n '3p' "$preflight_values")
 [ -n "$locked_image" ] && [ -n "$locked_image_id" ] || fail "release lock preflight returned no image"
+[ -n "$locked_tmpfs" ] || fail "release lock preflight returned no tmpfs policy"
 transaction_id=$(date -u '+%Y%m%dT%H%M%SZ')-$$
 transaction_dir="$backup_root/sub2api-immutable-$transaction_id"
 operation_lock_held=0
@@ -1509,6 +1535,7 @@ validate_paths_and_lock "$pre_mutation_recheck" \
 chmod 0600 "$pre_mutation_recheck"
 [ "$(sed -n '1p' "$pre_mutation_recheck")" = "$locked_image" ] \
   && [ "$(sed -n '2p' "$pre_mutation_recheck")" = "$locked_image_id" ] \
+  && [ "$(sed -n '3p' "$pre_mutation_recheck")" = "$locked_tmpfs" ] \
   || fail "locked Sub2API image changed before mutation"
 
 mutation_started=0
@@ -1755,8 +1782,14 @@ config_hash = labels.get("com.docker.compose.config-hash")
 if not isinstance(config_hash, str) or re.fullmatch(r"[0-9a-f]{64}", config_hash) is None:
     raise SystemExit("candidate Compose config hash label is invalid")
 compose_image = labels.get("com.docker.compose.image")
-if not isinstance(compose_image, str) or re.fullmatch(r"[0-9a-f]{64}", compose_image) is None:
+if not isinstance(compose_image, str):
     raise SystemExit("candidate Compose image label is invalid")
+# Compose 2 wrote the bare image ID; Compose 5 writes it with the sha256: prefix.
+compose_image_hex = compose_image[len("sha256:"):] if compose_image.startswith("sha256:") else compose_image
+if re.fullmatch(r"[0-9a-f]{64}", compose_image_hex) is None:
+    raise SystemExit("candidate Compose image label is invalid")
+if "sha256:" + compose_image_hex != image.get("Id"):
+    raise SystemExit("candidate Compose image label does not name the locked image")
 if re.fullmatch(r"[0-9a-f]{64}", sys.argv[9]) is None:
     raise SystemExit("admitted Compose service projection hash is invalid")
 PY

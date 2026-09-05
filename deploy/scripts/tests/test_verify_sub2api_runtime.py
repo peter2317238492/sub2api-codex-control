@@ -58,6 +58,9 @@ class RuntimeVerifierHardeningTests(unittest.TestCase):
         self.probe_nonce = "a" * 64
         self.probe_user_id = "fixture-user"
         self.probe_base_url = "http://127.0.0.1:8080"
+        self.entrypoint_path = "/app/docker-entrypoint.sh"
+        self.entrypoint_sha = "e" * 64
+        self.tmpfs_options = "rw,nosuid,nodev,noexec,size=512m,mode=1777"
         self.labels = {
             "org.opencontainers.image.version": self.version,
             "org.opencontainers.image.revision": self.commit,
@@ -214,6 +217,7 @@ class RuntimeVerifierHardeningTests(unittest.TestCase):
         pid1_host_pid: int = 4242,
         pid1_path: str = "/app/sub2api",
         pid1_sha256: str | None = None,
+        entrypoint_sha256: str | None = None,
         expected_network: str | None = None,
         expected_alias: str = "sub2api",
         expected_bind_source: Path | None = None,
@@ -295,6 +299,8 @@ class RuntimeVerifierHardeningTests(unittest.TestCase):
             "--auth-probe-base-url",
             self.probe_base_url,
         ]
+        if entrypoint_sha256 is not None:
+            command.extend(["--entrypoint-sha256", entrypoint_sha256])
         if expected_bind_source is not None:
             command.extend(
                 [
@@ -426,6 +432,141 @@ class RuntimeVerifierHardeningTests(unittest.TestCase):
         image["Config"]["Entrypoint"] = None
         image["Config"]["Cmd"] = ["/app/sub2api", "serve"]
         self.invoke(container=container, image=image)
+
+    def wrapper_fixture(
+        self,
+    ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+        lock = copy.deepcopy(self.lock)
+        lock["sub2api"]["runtime_entrypoint_path"] = self.entrypoint_path
+        lock["sub2api"]["runtime_entrypoint_sha256"] = self.entrypoint_sha
+        container = copy.deepcopy(self.container)
+        image = copy.deepcopy(self.image)
+        for config in (container["Config"], image["Config"]):
+            config["Entrypoint"] = [self.entrypoint_path]
+            config["Cmd"] = ["/app/sub2api"]
+        container["Path"] = self.entrypoint_path
+        container["Args"] = ["/app/sub2api"]
+        return lock, container, image
+
+    def test_accepts_pinned_entrypoint_wrapper_that_execs_the_binary(self) -> None:
+        # The official image launches PID 1 through /app/docker-entrypoint.sh,
+        # which execs /app/sub2api; the wrapper is admitted only under its
+        # pinned hash, while PID 1 itself must still be the locked binary.
+        lock, container, image = self.wrapper_fixture()
+        result = self.invoke(
+            lock=lock,
+            container=container,
+            image=image,
+            entrypoint_sha256=self.entrypoint_sha,
+        )
+        attestation = json.loads(result.stdout)
+        self.assertEqual(attestation["launch_path"], self.entrypoint_path)
+        self.assertEqual(attestation["entrypoint_path"], self.entrypoint_path)
+        self.assertEqual(attestation["entrypoint_sha256"], self.entrypoint_sha)
+        self.assertEqual(attestation["pid1_path"], "/app/sub2api")
+        self.assertEqual(attestation["pid1_args"], ["/app/sub2api"])
+        direct = json.loads(self.invoke().stdout)
+        self.assertEqual(direct["launch_path"], "/app/sub2api")
+        self.assertIsNone(direct["entrypoint_path"])
+        self.assertIsNone(direct["entrypoint_sha256"])
+
+    def test_rejects_entrypoint_wrapper_that_is_not_exactly_pinned(self) -> None:
+        lock, container, image = self.wrapper_fixture()
+        with self.subTest("wrapper without hash evidence"):
+            self.invoke(lock=lock, container=container, image=image, success=False)
+        with self.subTest("wrapper with a different hash"):
+            self.invoke(
+                lock=lock,
+                container=container,
+                image=image,
+                entrypoint_sha256="f" * 64,
+                success=False,
+            )
+        with self.subTest("wrapper observed but the lock pins none"):
+            self.invoke(
+                container=container,
+                image=image,
+                entrypoint_sha256=self.entrypoint_sha,
+                success=False,
+            )
+        with self.subTest("evidence supplied for a direct vector"):
+            self.invoke(entrypoint_sha256=self.entrypoint_sha, success=False)
+        with self.subTest("lock pins a wrapper the image does not use"):
+            self.invoke(lock=lock, entrypoint_sha256=self.entrypoint_sha, success=False)
+        with self.subTest("wrapper that does not exec the binary"):
+            other = copy.deepcopy(container)
+            other_image = copy.deepcopy(image)
+            for config in (other["Config"], other_image["Config"]):
+                config["Cmd"] = ["/bin/sh"]
+            other["Args"] = ["/bin/sh"]
+            self.invoke(
+                lock=lock,
+                container=other,
+                image=other_image,
+                entrypoint_sha256=self.entrypoint_sha,
+                success=False,
+            )
+        with self.subTest("path pinned without a hash"):
+            half = copy.deepcopy(lock)
+            del half["sub2api"]["runtime_entrypoint_sha256"]
+            self.invoke(
+                lock=half,
+                container=container,
+                image=image,
+                entrypoint_sha256=self.entrypoint_sha,
+                success=False,
+            )
+        for bad_path in ("app/docker-entrypoint.sh", "/app/../entry.sh", "/app/sub2api", "/app/x y"):
+            with self.subTest(path=bad_path):
+                bad = copy.deepcopy(lock)
+                bad["sub2api"]["runtime_entrypoint_path"] = bad_path
+                self.invoke(
+                    lock=bad,
+                    container=container,
+                    image=image,
+                    entrypoint_sha256=self.entrypoint_sha,
+                    success=False,
+                )
+
+    def test_admits_only_the_locked_tmpfs_policy(self) -> None:
+        lock = copy.deepcopy(self.lock)
+        lock["sub2api"]["runtime_tmpfs"] = {"/tmp": self.tmpfs_options}
+        container = copy.deepcopy(self.container)
+        container["HostConfig"]["Tmpfs"] = {"/tmp": self.tmpfs_options}
+        attestation = json.loads(self.invoke(lock=lock, container=container).stdout)
+        self.assertEqual(attestation["tmpfs"], {"/tmp": self.tmpfs_options})
+        self.assertEqual(json.loads(self.invoke().stdout)["tmpfs"], {})
+        with self.subTest("policy demands a tmpfs the container lacks"):
+            self.invoke(lock=lock, success=False)
+        with self.subTest("container tmpfs options drifted"):
+            drifted = copy.deepcopy(container)
+            drifted["HostConfig"]["Tmpfs"] = {"/tmp": "rw"}
+            self.invoke(lock=lock, container=drifted, success=False)
+        with self.subTest("container mounts an extra tmpfs"):
+            extra = copy.deepcopy(container)
+            extra["HostConfig"]["Tmpfs"]["/var/tmp"] = self.tmpfs_options
+            self.invoke(lock=lock, container=extra, success=False)
+        rejected_policies = {
+            "image tree": {"/app/data": self.tmpfs_options},
+            "root": {"/": self.tmpfs_options},
+            "relative": {"tmp": self.tmpfs_options},
+            "unnormalized": {"/tmp/../tmp": self.tmpfs_options},
+            "missing size": {"/tmp": "rw,nosuid,nodev,noexec,mode=1777"},
+            "executable": {"/tmp": "rw,nosuid,nodev,size=512m,mode=1777"},
+            "unsupported option": {"/tmp": self.tmpfs_options + ",exec"},
+            "repeated option": {"/tmp": self.tmpfs_options + ",rw"},
+            "empty": {},
+            "not an object": [self.tmpfs_options],
+        }
+        for label, policy in rejected_policies.items():
+            with self.subTest(label=label):
+                bad_lock = copy.deepcopy(self.lock)
+                bad_lock["sub2api"]["runtime_tmpfs"] = policy
+                bad_container = copy.deepcopy(self.container)
+                bad_container["HostConfig"]["Tmpfs"] = (
+                    policy if isinstance(policy, dict) else None
+                )
+                self.invoke(lock=bad_lock, container=bad_container, success=False)
 
     def test_shell_uses_container_subcommands_and_bare_container_id(self) -> None:
         write_json(self.root / "versions.lock.json", self.lock)
