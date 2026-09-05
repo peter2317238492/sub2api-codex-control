@@ -1,7 +1,7 @@
 # Sub2API immutable Compose migration
 
 This runbook replaces the mutable production Sub2API service with the exact
-linux/amd64 `0.1.178` image recorded in `versions.lock.json`. The migration is
+linux/amd64 `0.2.0` image recorded in `versions.lock.json`. The migration is
 separate from the Control deployment wrapper: it does not deploy Control,
 change PostgreSQL or Redis, edit Nginx, publish a release, or pull an image.
 The locked image must already be independently verified and present locally.

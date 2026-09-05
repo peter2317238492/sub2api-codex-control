@@ -430,6 +430,68 @@ class OperatorEnvironmentTests(LifecycleFixture):
         with self.assertRaisesRegex(lifecycle.LifecycleError, "mode"):
             lifecycle.parse_operator_env(operator_path, expected_uid=self.uid)
 
+    def _append_operator_lines(self, operator_path: Path, lines: dict[str, str]) -> None:
+        operator_path.write_text(
+            operator_path.read_text()
+            + "".join(f"{name}={value}\n" for name, value in lines.items())
+        )
+        operator_path.chmod(0o600)
+
+    def test_accepts_complete_sub2api_bind_policy(self) -> None:
+        operator_path, values = self.operator_environment()
+        bind_source = self.root / "sub2api-data"
+        policy = {
+            "SUB2API_EXPECTED_DATA_BIND_SOURCE": str(bind_source),
+            "SUB2API_EXPECTED_DATA_BIND_UID": str(self.uid),
+            "SUB2API_EXPECTED_DATA_BIND_GID": "1000",
+            "SUB2API_EXPECTED_DATA_BIND_MODE": "0755",
+        }
+        self._append_operator_lines(operator_path, policy)
+        observed, _ = lifecycle.parse_operator_env(operator_path, expected_uid=self.uid)
+        self.assertEqual(observed, {**values, **policy})
+
+    def test_rejects_partial_sub2api_bind_policy(self) -> None:
+        operator_path, _ = self.operator_environment()
+        self._append_operator_lines(
+            operator_path, {"SUB2API_EXPECTED_DATA_BIND_SOURCE": str(self.root / "d")}
+        )
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "complete Sub2API bind policy"):
+            lifecycle.parse_operator_env(operator_path, expected_uid=self.uid)
+
+    def test_rejects_unsupported_bind_mode_and_identity(self) -> None:
+        for name, value in (
+            ("SUB2API_EXPECTED_DATA_BIND_MODE", "0777"),
+            ("SUB2API_EXPECTED_DATA_BIND_UID", "0"),
+            ("SUB2API_EXPECTED_DATA_BIND_GID", "70000"),
+        ):
+            operator_path, _ = self.operator_environment()
+            policy = {
+                "SUB2API_EXPECTED_DATA_BIND_SOURCE": str(self.root / "sub2api-data"),
+                "SUB2API_EXPECTED_DATA_BIND_UID": "1000",
+                "SUB2API_EXPECTED_DATA_BIND_GID": "1000",
+                "SUB2API_EXPECTED_DATA_BIND_MODE": "0755",
+            }
+            policy[name] = value
+            self._append_operator_lines(operator_path, policy)
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "value is invalid"):
+                lifecycle.parse_operator_env(operator_path, expected_uid=self.uid)
+            operator_path.unlink()
+            shutil.rmtree(self.root / "private")
+
+    def test_private_file_admits_additional_owner_only_when_listed(self) -> None:
+        referenced = self.root / "config.yaml"
+        referenced.write_text("listen: 127.0.0.1:8080\n")
+        referenced.chmod(0o600)
+        foreign_uid = self.uid + 12345
+        lifecycle._validate_private_referenced_file(
+            referenced, "SUB2API_HOST_CONFIG_PATH", expected_uid=foreign_uid,
+            additional_uids=[self.uid],
+        )
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "admitted user"):
+            lifecycle._validate_private_referenced_file(
+                referenced, "SUB2API_HOST_CONFIG_PATH", expected_uid=foreign_uid
+            )
+
 
 class PreflightTests(unittest.TestCase):
     def test_requires_root(self) -> None:

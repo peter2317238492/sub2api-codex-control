@@ -198,7 +198,7 @@ class SourceBundleTests(unittest.TestCase):
             "deploy/scripts/production-recovery.py",
             "deploy/scripts/verify-sub2api-runtime.py",
             "deploy/scripts/verify-sub2api-runtime.sh",
-            "docs/contracts/sub2api-auth.v0.1.178.json",
+            "docs/contracts/sub2api-auth.v0.2.0.json",
             "packages/appserver-schema/generated/json-schema/codex_app_server_protocol.v2.schemas.json",
             "packages/control-protocol/fixtures/json-budget-vectors.json",
             "packages/control-protocol/fixtures/rpc-policy.json",

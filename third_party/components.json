@@ -47,11 +47,11 @@
     {
       "id": "sub2api",
       "name": "Sub2API",
-      "version": "0.1.178",
+      "version": "0.2.0",
       "relationship": "compatibility-reference",
-      "package": "pkg:github/Wei-Shaw/sub2api@v0.1.178",
+      "package": "pkg:github/Wei-Shaw/sub2api@v0.2.0",
       "repository": "https://github.com/Wei-Shaw/sub2api",
-      "source_ref": "v0.1.178",
+      "source_ref": "v0.2.0",
       "version_evidence": {
         "kind": "json-pointer",
         "path": "versions.lock.json",
@@ -70,7 +70,7 @@
         {
           "kind": "license",
           "path": "third_party/licenses/Sub2API-LICENSE.txt",
-          "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/v0.1.178/LICENSE",
+          "source_url": "https://raw.githubusercontent.com/Wei-Shaw/sub2api/v0.2.0/LICENSE",
           "source_sha256": "a5681bf9b05db14d86776930017c647ad9e6e56ff6bbcfdf21e5848288dfaf1b",
           "file_sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
           "normalization": "append-final-newline"

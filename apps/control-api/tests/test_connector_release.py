@@ -92,7 +92,7 @@ def production_settings(connector_release_metadata_json: str) -> Settings:
         metrics_bearer_token="4e" * 32,
         cookie_secure=True,
         allowed_origins_csv="https://control.example.test",
-        sub2api_contract_marker="0.1.178/e0c48a1",
+        sub2api_contract_marker="0.2.0/aa23648",
         connector_release_metadata_json=connector_release_metadata_json,
     )
 

@@ -1310,6 +1310,21 @@ control_database_password_file=$(
 control_redis_password_file=$(
   json_field "$compose_snapshot" secrets control_redis_password file
 )
+# The Compose secret sources are owned by the service users that read them
+# inside the containers; the root-only recovery checks consume private
+# root-owned copies instead.
+atomic_json "$deployment_dir/control-db-password-input.json" \
+  python3 "$checks" copy-service-secret \
+  --source "$control_database_password_file" \
+  --destination "$deployment_dir/control-db-password" \
+  --label "Control PostgreSQL password secret"
+control_database_password_file="$deployment_dir/control-db-password"
+atomic_json "$deployment_dir/control-redis-password-input.json" \
+  python3 "$checks" copy-service-secret \
+  --source "$control_redis_password_file" \
+  --destination "$deployment_dir/control-redis-password" \
+  --label "Control Redis password secret"
+control_redis_password_file="$deployment_dir/control-redis-password"
 
 stage=create-production-state-backup
 write_status "in-progress:$stage"

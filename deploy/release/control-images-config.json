@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "product": "sub2api-codex-control-images",
-  "release_version": "0.1.8",
+  "release_version": "0.1.9",
   "source_workflow": ".github/workflows/control-images-release.yml",
   "cosign_version": "v3.0.6",
   "syft_version": "v1.44.0",
@@ -17,7 +17,7 @@
     "versions.lock.json",
     "packages/control-protocol/schema/control-envelope.schema.json",
     "packages/appserver-schema/generated/json-schema/codex_app_server_protocol.v2.schemas.json",
-    "docs/contracts/sub2api-auth.v0.1.178.json",
+    "docs/contracts/sub2api-auth.v0.2.0.json",
     "pnpm-lock.yaml",
     "deploy/constraints/control-api.txt",
     "deploy/scripts/backup-control-db.sh",

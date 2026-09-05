@@ -120,7 +120,7 @@ class SafeJsonFormatter(logging.Formatter):
     def __init__(self, release: str | None = None) -> None:
         super().__init__()
         configured = release or (
-            f"{os.environ.get('CONTROL_BUILD_VERSION', '0.1.8')}@"
+            f"{os.environ.get('CONTROL_BUILD_VERSION', '0.1.9')}@"
             f"{os.environ.get('CONTROL_BUILD_VCS_REF', 'unknown')}"
         )
         self._release = _safe_identifier(configured, _SAFE_TEXT_FIELDS["release"]) or "unknown"

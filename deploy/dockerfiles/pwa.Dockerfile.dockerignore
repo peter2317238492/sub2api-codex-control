@@ -16,7 +16,7 @@ packages/control-protocol/node_modules
 !packages/appserver-schema/package.json
 !docs/
 !docs/contracts/
-!docs/contracts/sub2api-auth.v0.1.178.json
+!docs/contracts/sub2api-auth.v0.2.0.json
 !deploy/
 !deploy/nginx/
 !deploy/nginx/pwa-nginx.conf
