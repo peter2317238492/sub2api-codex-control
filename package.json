@@ -1,7 +1,7 @@
 {
   "name": "sub2api-codex-control",
   "private": true,
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Same-origin remote control for user-owned Codex installations",
   "license": "Apache-2.0",
   "author": "Sub2API Codex Control contributors",

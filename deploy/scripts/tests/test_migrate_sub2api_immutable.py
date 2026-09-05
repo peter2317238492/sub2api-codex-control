@@ -26,7 +26,7 @@ class ImmutableSub2APIMigrationStaticTests(unittest.TestCase):
             'create_data_archive "$quiesced_archive"', stop
         )
         snapshot = apply_flow.index(
-            'rollback_image_id=$(docker container commit --pause=false "$old_id")',
+            'rollback_image_id=$(docker container commit "$old_id")',
             quiesced,
         )
         override = apply_flow.index("write_rollback_override", snapshot)
@@ -47,6 +47,29 @@ class ImmutableSub2APIMigrationStaticTests(unittest.TestCase):
         self.assertLess(override, remove)
         self.assertLess(remove, replace)
         self.assertLess(replace, candidate)
+
+    def test_rollback_snapshot_captures_only_the_image_id(self) -> None:
+        # Docker CLI 29 prints a deprecation notice on stdout for the pause
+        # flags, so the commit must run bare against the already-stopped
+        # container and its output must be validated as a full image ID.
+        self.assertIn('rollback_image_id=$(docker container commit "$old_id")', self.script)
+        self.assertNotIn("commit --pause", self.script)
+        self.assertNotIn("commit --no-pause", self.script)
+        self.assertIn(
+            'case "$rollback_image_id" in (sha256:*) ;; (*) fail "rollback snapshot returned an invalid image ID" ;; esac',
+            self.script,
+        )
+        self.assertIn('[ "${#rollback_image_id}" -eq 71 ]', self.script)
+
+    def test_health_polling_preserves_the_trap_exit_status(self) -> None:
+        # Every abort handler captures `status=$?` and later calls wait_healthy;
+        # the poller must not reuse that name or the handler exits with a
+        # non-numeric value such as "healthy".
+        start = self.script.index("wait_healthy() {")
+        end = self.script.index("\n}\n", start)
+        body = self.script[start:end]
+        self.assertNotIn("status=$(", body)
+        self.assertIn("observed_health=$(docker container inspect", body)
 
     def test_candidate_compose_is_hash_bound_and_hardened(self) -> None:
         for required in (

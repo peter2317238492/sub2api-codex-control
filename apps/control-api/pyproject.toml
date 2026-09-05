@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sub2api-codex-control-api"
-version = "0.1.9"
+version = "0.1.10"
 description = "Same-origin control plane for user-owned Codex connectors"
 readme = "README.md"
 license = "Apache-2.0"
