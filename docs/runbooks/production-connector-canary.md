@@ -107,6 +107,14 @@ Ordinary work is bounded by the primary session's returned expiry, reserving
 Negative scenarios also require their exact requested command, file or read
 permission target. Cursor replay alone does not establish which replica served it.
 
+When native v2 omits file targets from an approval callback, the canary only
+denies it. A test-only observer then binds the native completed file-change
+item to the callback's thread, turn and item IDs, the exact marker target,
+and a declined outcome. It records only hashes and booleans in private state;
+paths, diffs and contents are not retained or forwarded. Missing attribution
+remains unverified. An opposing-decision probe is sent only after the target
+and completed denial have been established.
+
 Revocation proof requires the instrumented Connector to observe exactly HTTP
 401, `WWW-Authenticate: Device`, and `invalid_device_credential` from a fresh
 signed token exchange using the unchanged credential/key. Generic reconnects,

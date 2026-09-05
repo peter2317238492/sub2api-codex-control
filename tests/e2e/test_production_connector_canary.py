@@ -287,6 +287,7 @@ def test_approval_scenarios_do_not_consume_a_terminal_event_twice(
         thread_id="thread",
         remote_thread_id="native",
         workspace=tmp_path,
+        state_dir=tmp_path,
         mutating_headers={},
     )
     assert len(client.seen) == 4
@@ -307,6 +308,79 @@ def test_expired_primary_budget_blocks_work_but_allows_logout(
         client.request("/codex-api/v1/devices")
     assert calls == []
     assert client.request("/codex-api/v1/session/logout", method="POST").status == 204
+
+
+@pytest.mark.parametrize("proof", [None, True, False])
+def test_unattributed_file_request_is_never_approved_before_completed_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proof
+) -> None:
+    actions = []
+
+    class Client:
+        browser_event_cursors = []
+        evidence = CanaryEvidence()
+        count = 0
+
+        def pending_approval_ids(self, *args):
+            return set()
+
+        def request(self, *args, **kwargs):
+            return None
+
+        def accepted_command(self, *args):
+            self.count += 1
+            return str(self.count)
+
+        def command_event(self, stream, command, *args):
+            return {"state": "succeeded", "result": {"turn": {"id": "turn-" + command}}}
+
+        def wait_browser_event(self, stream, description, predicate, **kwargs):
+            if self.count != 2:
+                raise AssertionError("timed out waiting for " + description)
+            self.approval = {
+                "approval_id": "00000000-0000-4000-8000-000000000001",
+                "device_id": "device",
+                "kind": "file_change",
+                "expires_at": (datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+                "details": {"threadId": "native", "turnId": "turn-2", "itemId": "item"},
+            }
+            event = {"type": "approval.created", "cursor": "1", "data": self.approval}
+            assert predicate(event)
+            return event
+
+        def unique_pending_approval(self, *args):
+            return copy.deepcopy(self.approval)
+
+        def privileged_request(self, path, *, method, body):
+            actions.append(body["decision"])
+            return Result(409 if body["decision"] == "approve" else 204, {}, b"")
+
+    def completed_proof(*args):
+        actions.append("proof")
+        return proof
+
+    monkeypatch.setattr(canary, "_wait_thread_idle", lambda *args: None)
+    monkeypatch.setattr(canary, "_wait_file_denial_proof", completed_proof)
+    client = Client()
+    arguments = dict(
+        client=client,
+        browser_stream=object(),
+        device_id="device",
+        thread_id="thread",
+        remote_thread_id="native",
+        workspace=tmp_path,
+        state_dir=tmp_path,
+        mutating_headers={},
+    )
+    if proof is False:
+        with pytest.raises(AssertionError, match="denied target"):
+            canary._verify_real_approvals(**arguments)
+    else:
+        assert not canary._verify_real_approvals(**arguments)
+        assert client.evidence.approvals["file_change_deny"] is (proof is True)
+    assert actions == (
+        ["deny", "proof", "approve"] if proof is True else ["deny", "proof"]
+    )
 
 
 def test_codex_home_mismatch_is_rejected_before_launch(
@@ -397,6 +471,36 @@ def test_generic_reconnect_metrics_cannot_prove_credential_rejection(
     private_json(marker, {"credential_rejected": 1, "version": True})
     with pytest.raises(ValueError, match="invalid"):
         canary._read_credential_rejection(tmp_path)
+
+
+def test_native_file_denial_proof_requires_exact_identity_target_and_outcome(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "approval-denied.txt"
+    args = (tmp_path, "thread", "turn", "item", target)
+    assert canary._file_denial_proof(*args) is None
+    record = {
+        "version": 1,
+        "identity_sha256": hashlib.sha256(
+            json.dumps(["thread", "turn", "item"], separators=(",", ":")).encode()
+        ).hexdigest(),
+        "target_sha256": hashlib.sha256(str(target).encode()).hexdigest(),
+        "target_matches": True,
+        "declined": True,
+    }
+    path = private_json(tmp_path / "production-canary-file-change.json", record)
+    assert canary._file_denial_proof(*args) is True
+    assert (
+        canary._file_denial_proof(tmp_path, "thread", "another-turn", "item", target)
+        is None
+    )
+    for change in (
+        {"target_matches": False},
+        {"declined": False},
+        {"target_sha256": "0" * 64},
+    ):
+        private_json(path, {**record, **change})
+        assert canary._file_denial_proof(*args) is False
 
 
 def test_evidence_collision_cannot_return_success(
