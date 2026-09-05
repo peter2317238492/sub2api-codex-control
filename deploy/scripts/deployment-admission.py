@@ -84,6 +84,25 @@ def write_json(value: Any) -> None:
     sys.stdout.write("\n")
 
 
+def connector_canonical_json_bytes(value: Any) -> bytes:
+    """The byte form connector/release/release.py signs and publishes.
+
+    The Connector release writes its metadata sorted, two-space indented, and
+    newline terminated; the server package carries those exact signed bytes.
+    """
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            indent=2,
+            separators=(",", ": "),
+        ).encode("ascii")
+        + b"\n"
+    )
+
+
 def strict_json_bytes(
     content: bytes, label: str, *, canonical: bool = False
 ) -> Any:
@@ -472,11 +491,12 @@ def server_package_release(args: argparse.Namespace) -> dict[str, Any]:
         connector_raw[role] = raw
         connector_records[role] = expected_bound
 
-    metadata = connector_release_metadata(
-        strict_json_bytes(
-            connector_raw["metadata"], "packaged Connector release metadata", canonical=True
-        )
+    metadata_value = strict_json_bytes(
+        connector_raw["metadata"], "packaged Connector release metadata"
     )
+    if connector_canonical_json_bytes(metadata_value) != connector_raw["metadata"]:
+        fail("packaged Connector release metadata is not canonical connector JSON")
+    metadata = connector_release_metadata(metadata_value)
     metadata_environment = os.environ.get("CONTROL_CONNECTOR_RELEASE_METADATA_JSON")
     if metadata_environment is None or "\n" in metadata_environment or "\r" in metadata_environment:
         fail("lifecycle-owned Connector release metadata environment is unset or multiline")
