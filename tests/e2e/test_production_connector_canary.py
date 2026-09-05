@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 from production_connector_canary import (
+    CANARY_CONNECTOR_BINARY_VERSION,
+    CODEX_VERSION,
+    CONNECTOR_VERSION,
     ApprovalTriggerUnavailable,
     CanaryEvidence,
     ProductionCanary,
@@ -24,6 +27,14 @@ from production_connector_canary import (
     write_redacted_evidence,
 )
 from smoke import Result
+
+
+def test_canary_versions_match_the_release_contract() -> None:
+    root = Path(__file__).resolve().parents[2]
+    config = json.loads((root / "connector/release/release-config.json").read_text())
+    assert CONNECTOR_VERSION == config["connector_version"]
+    assert CANARY_CONNECTOR_BINARY_VERSION == config["connector_version"] + "+productioncanary"
+    assert CODEX_VERSION == config["codex_version"]
 
 
 def private_json(path: Path, value: object) -> Path:
