@@ -245,6 +245,19 @@ Copy the field names from `config/operator.env.example` into a file outside the
 package. Replace every placeholder, make every path absolute, and protect the
 file and each referenced secret file as root-owned mode `0600`.
 
+Referenced host Compose and environment files must also be private (mode
+`0400` or `0600`, one hard link), even when the Compose file contains no inline
+secrets. A world-readable `0444` Compose file fails operator admission.
+
+`CONTROL_RECOVERY_RESTORE_TIMEOUT_SECONDS` accepts 1 through 86400 seconds per
+restore operation. Set `--deployment-timeout-seconds` to a larger total budget
+that also covers backup, all database restores, verification, and rollout.
+Recovery uses a temporary Docker volume on disk, with two PostgreSQL restore
+workers. It requires at least three times the compressed dump sizes plus 1 GiB
+free on that disk; allow more for highly compressed data and indexes. The
+networkless restore mounts the admitted backup read-only and proves its
+temporary containers and restore volume have been removed on completion.
+
 The parser reads literal `NAME=value` lines and performs no shell expansion.
 Raw passwords, access tokens, and authentication evidence are rejected from
 the operator environment; use the defined `*_FILE` paths. Lifecycle-owned

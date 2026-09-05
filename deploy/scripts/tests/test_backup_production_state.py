@@ -407,6 +407,20 @@ class ProductionStateBackupTests(unittest.TestCase):
             env=self.environment,
         )
 
+    def test_first_install_archives_an_empty_release_record_inventory(self) -> None:
+        record = self.release_records / "deployment-fixture"
+        (record / "deployment.json").unlink()
+        record.rmdir()
+        result = self.run_backup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshot = next(self.backup_root.glob("production-preflight-*"))
+        self.assertEqual((snapshot / "release-records.contents.txt").read_bytes(), b"")
+        with tarfile.open(snapshot / "release-records.tar.gz", "r:gz") as archive:
+            self.assertEqual(archive.getnames(), [])
+        inventory = json.loads((snapshot / "release-records-inventory.json").read_bytes())
+        self.assertEqual(inventory["entries"], [])
+        self.assertIn("release-records.contents.txt", (snapshot / "manifest.sha256").read_text())
+
     def test_creates_one_private_fully_validated_snapshot_without_secret_output(
         self,
     ) -> None:

@@ -60,6 +60,15 @@ jobs:
           python3 -m unittest discover -s deploy/server-package/tests
           python3 -m unittest tests/test_vulnerability_gate.py tests/test_vulnerability_release_roots.py
 
+      - name: Exercise production recovery with real isolated Docker datastores
+        env:
+          RECOVERY_TEST_POSTGRES_IMAGE: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+          RECOVERY_TEST_REDIS_IMAGE: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+        run: |
+          docker pull "$RECOVERY_TEST_POSTGRES_IMAGE"
+          docker pull "$RECOVERY_TEST_REDIS_IMAGE"
+          python3 -m unittest tests/e2e/test_production_recovery_docker.py -v
+
       - name: Compile deployment tools
         run: |
           python3 -m compileall -q deploy/scripts deploy/release tests/e2e

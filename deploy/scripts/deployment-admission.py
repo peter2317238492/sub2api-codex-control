@@ -522,8 +522,10 @@ def server_package_release(args: argparse.Namespace) -> dict[str, Any]:
             fail("Connector public release identity is invalid")
 
     aggregate = strict_json_bytes(
-        connector_raw["aggregate"], "packaged Connector verification aggregate", canonical=True
+        connector_raw["aggregate"], "packaged Connector verification aggregate"
     )
+    if connector_canonical_json_bytes(aggregate) != connector_raw["aggregate"]:
+        fail("packaged Connector verification aggregate is not canonical connector JSON")
     if not isinstance(aggregate, dict):
         fail("Connector verification aggregate is not an object")
     aggregate_release = aggregate.get("release")

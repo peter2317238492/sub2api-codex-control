@@ -490,7 +490,8 @@ class ServerPackageAdmissionTests(unittest.TestCase):
         return raw
 
     def fixture(
-        self, root: Path, *, mode: str = "offline", compact_metadata: bool = False
+        self, root: Path, *, mode: str = "offline", compact_metadata: bool = False,
+        compact_aggregate: bool = False,
     ) -> tuple[Path, Path, str]:
         package = root / "package"
         package.mkdir(mode=0o700)
@@ -519,7 +520,9 @@ class ServerPackageAdmissionTests(unittest.TestCase):
         connector_payloads = {
             "connector-release-metadata.json": metadata_raw,
             "connector-release-metadata.json.sigstore.json": b"connector bundle\n",
-            "connector-public-verification-aggregate.json": self.canonical(
+            "connector-public-verification-aggregate.json": (
+                self.canonical if compact_aggregate else self.connector_canonical
+            )(
                 package / "connector-public-verification-aggregate.json",
                 aggregate,
                 0o444,
@@ -864,6 +867,21 @@ class ServerPackageAdmissionTests(unittest.TestCase):
             )
             result = self.invoke(manifest, receipt, metadata, success=False)
             self.assertIn("not canonical connector JSON", result.stderr)
+
+    def test_package_admission_pins_the_connector_aggregate_serialization(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest, receipt, metadata = self.fixture(Path(temporary))
+            aggregate = (
+                Path(temporary) / "package" / "connector-public-verification-aggregate.json"
+            ).read_bytes()
+            self.assertIn(b"\n  ", aggregate)
+            self.invoke(manifest, receipt, metadata)
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest, receipt, metadata = self.fixture(
+                Path(temporary), compact_aggregate=True
+            )
+            result = self.invoke(manifest, receipt, metadata, success=False)
+            self.assertIn("aggregate is not canonical connector JSON", result.stderr)
 
     def test_package_admission_rejects_metadata_or_receipt_rebinding(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
