@@ -422,10 +422,10 @@ wait_healthy() {
   target_id=$1
   elapsed=0
   while [ "$elapsed" -lt "$health_timeout" ]; do
-    status=$(docker container inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$target_id") \
+    observed_health=$(docker container inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$target_id") \
       || return 1
-    [ "$status" = "healthy" ] && return 0
-    [ "$status" = "unhealthy" ] && return 1
+    [ "$observed_health" = "healthy" ] && return 0
+    [ "$observed_health" = "unhealthy" ] && return 1
     sleep 1
     elapsed=$((elapsed + 1))
   done
@@ -1662,7 +1662,10 @@ quiesced_listing="$transaction_dir/data-quiesced.list"
 quiesced_checksum="$transaction_dir/data-quiesced.sha256"
 create_data_archive "$quiesced_archive" "$quiesced_listing" "$quiesced_checksum"
 
-rollback_image_id=$(docker container commit --pause=false "$old_id")
+# The old container is already stopped here, so no pause flag is needed; the
+# pause flags differ between Docker CLI generations and newer ones print a
+# deprecation notice on stdout that would corrupt the captured image ID.
+rollback_image_id=$(docker container commit "$old_id")
 case "$rollback_image_id" in (sha256:*) ;; (*) fail "rollback snapshot returned an invalid image ID" ;; esac
 [ "${#rollback_image_id}" -eq 71 ] || fail "rollback snapshot did not return a full image ID"
 rollback_image_inspect="$transaction_dir/rollback-image.json"
