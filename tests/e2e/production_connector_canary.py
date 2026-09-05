@@ -772,7 +772,7 @@ def _file_denial_proof(
     path = state_dir / "production-canary-file-change.json"
     try:
         value = _json_bytes(
-            read_private_bytes(path, "file-change proof", 1024), "file-change proof"
+            read_private_bytes(path, "file-change proof", 16384), "file-change proof"
         )
     except ValueError:
         try:
@@ -782,23 +782,37 @@ def _file_denial_proof(
         raise
     if (
         not isinstance(value, dict)
-        or set(value)
-        != {"version", "identity_sha256", "target_sha256", "target_matches", "declined"}
+        or set(value) != {"version", "overflow", "records"}
         or type(value["version"]) is not int
-        or value["version"] != 1
-        or type(value["target_matches"]) is not bool
-        or type(value["declined"]) is not bool
+        or value["version"] != 2
+        or type(value["overflow"]) is not bool
+        or not isinstance(value["records"], dict)
+        or len(value["records"]) > 16
     ):
         raise ValueError("file-change proof is invalid")
+    for key, record in value["records"].items():
+        if (
+            SHA256_RE.fullmatch(key) is None
+            or not isinstance(record, dict)
+            or set(record) != {"target_sha256", "target_matches", "declined"}
+            or not isinstance(record["target_sha256"], str)
+            or SHA256_RE.fullmatch(record["target_sha256"]) is None
+            or type(record["target_matches"]) is not bool
+            or type(record["declined"]) is not bool
+        ):
+            raise ValueError("file-change proof record is invalid")
+    if value["overflow"]:
+        return False
     identity = hashlib.sha256(
         json.dumps([thread_id, turn_id, item_id], separators=(",", ":")).encode()
     ).hexdigest()
-    if value["identity_sha256"] != identity:
+    record = value["records"].get(identity)
+    if record is None:
         return None
     return (
-        value["target_sha256"] == hashlib.sha256(str(target).encode()).hexdigest()
-        and value["target_matches"]
-        and value["declined"]
+        record["target_sha256"] == hashlib.sha256(str(target).encode()).hexdigest()
+        and record["target_matches"]
+        and record["declined"]
     )
 
 

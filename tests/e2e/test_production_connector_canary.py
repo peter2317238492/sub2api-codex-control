@@ -479,16 +479,16 @@ def test_native_file_denial_proof_requires_exact_identity_target_and_outcome(
     target = tmp_path / "approval-denied.txt"
     args = (tmp_path, "thread", "turn", "item", target)
     assert canary._file_denial_proof(*args) is None
+    identity = hashlib.sha256(
+        json.dumps(["thread", "turn", "item"], separators=(",", ":")).encode()
+    ).hexdigest()
     record = {
-        "version": 1,
-        "identity_sha256": hashlib.sha256(
-            json.dumps(["thread", "turn", "item"], separators=(",", ":")).encode()
-        ).hexdigest(),
         "target_sha256": hashlib.sha256(str(target).encode()).hexdigest(),
         "target_matches": True,
         "declined": True,
     }
-    path = private_json(tmp_path / "production-canary-file-change.json", record)
+    proof = {"version": 2, "overflow": False, "records": {identity: record}}
+    path = private_json(tmp_path / "production-canary-file-change.json", proof)
     assert canary._file_denial_proof(*args) is True
     assert (
         canary._file_denial_proof(tmp_path, "thread", "another-turn", "item", target)
@@ -499,8 +499,11 @@ def test_native_file_denial_proof_requires_exact_identity_target_and_outcome(
         {"declined": False},
         {"target_sha256": "0" * 64},
     ):
-        private_json(path, {**record, **change})
+        changed = {**record, **change}
+        private_json(path, {**proof, "records": {identity: changed, "a" * 64: record}})
         assert canary._file_denial_proof(*args) is False
+    private_json(path, {**proof, "overflow": True})
+    assert canary._file_denial_proof(*args) is False
 
 
 def test_evidence_collision_cannot_return_success(
