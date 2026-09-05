@@ -116,7 +116,9 @@ class LifecycleFixture(unittest.TestCase):
         package_root = self.root / "extracted-package"
         package_root.mkdir(mode=0o700)
         metadata_path = package_root / lifecycle.CONNECTOR_METADATA_FILENAME
-        metadata_raw = lifecycle.canonical_json(self.connector_metadata())
+        # The package carries the Connector release's own signed serialization
+        # (sorted, two-space indented), not the Control release's compact form.
+        metadata_raw = lifecycle.connector_canonical_json(self.connector_metadata())
         metadata_path.write_bytes(metadata_raw)
         metadata_path.chmod(0o444)
         connector_evidence: dict[str, dict[str, object]] = {}
@@ -319,8 +321,50 @@ class VerifiedPackageTests(LifecycleFixture):
         self.assertEqual(manifest["release"], "1.2.3")
         self.assertEqual(receipt["package"]["extracted_root"], str(package_root))
         self.assertEqual(
-            lifecycle.strict_json(connector_raw, "metadata")["tag"],
+            lifecycle.strict_json(connector_raw, "metadata", canonical=False)["tag"],
             "connector-v1.2.3",
+        )
+        # The packaged bytes are the Connector release's signed indented form,
+        # never the Control release's compact record form.
+        self.assertEqual(
+            connector_raw,
+            lifecycle.connector_canonical_json(self.connector_metadata()),
+        )
+        self.assertNotEqual(
+            connector_raw, lifecycle.canonical_json(self.connector_metadata())
+        )
+
+    def test_rejects_compact_connector_metadata_serialization(self) -> None:
+        # control-v0.1.11 shipped a lifecycle that demanded the compact form
+        # and therefore rejected every genuine server package: the Connector
+        # release signs and publishes its metadata two-space indented. A
+        # compact file cannot be the signed artifact, so it must fail.
+        package_root, receipt_path = self.verified_package()
+        metadata_path = package_root / lifecycle.CONNECTOR_METADATA_FILENAME
+        compact = lifecycle.canonical_json(self.connector_metadata())
+        with self.assertRaisesRegex(
+            lifecycle.LifecycleError, "not canonical connector JSON"
+        ):
+            lifecycle._validate_connector_metadata(compact)
+        metadata_path.chmod(0o644)
+        metadata_path.write_bytes(compact)
+        metadata_path.chmod(0o444)
+        with self.assertRaises(lifecycle.LifecycleError):
+            lifecycle.validate_verified_package(
+                package_root, receipt_path, expected_uid=self.uid
+            )
+
+    def test_projects_connector_metadata_as_one_compact_line(self) -> None:
+        # deploy-production.sh and deployment-admission.py consume the
+        # metadata from one environment variable that must be a single
+        # compact canonical line equal to the packaged value.
+        packaged = lifecycle.connector_canonical_json(self.connector_metadata())
+        projected = lifecycle.compact_json(lifecycle._validate_connector_metadata(packaged))
+        self.assertNotIn("\n", projected)
+        self.assertEqual(json.loads(projected), self.connector_metadata())
+        self.assertEqual(
+            projected.encode("ascii") + b"\n",
+            lifecycle.canonical_json(self.connector_metadata()),
         )
 
     def test_rejects_changed_file_mode(self) -> None:

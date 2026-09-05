@@ -198,6 +198,38 @@ def canonical_json(value: Any) -> bytes:
     )
 
 
+def connector_canonical_json(value: Any) -> bytes:
+    """The byte form connector/release/release.py signs and publishes.
+
+    The Connector release writes its metadata sorted, two-space indented, and
+    newline terminated; the server package carries those exact signed bytes,
+    so admission must pin that serialization rather than the compact form the
+    Control release uses for its own records.
+    """
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            indent=2,
+            separators=(",", ": "),
+        ).encode("ascii")
+        + b"\n"
+    )
+
+
+def compact_json(value: Any) -> str:
+    """Single-line canonical form projected into the deployment environment."""
+    return json.dumps(
+        value,
+        ensure_ascii=True,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -918,7 +950,9 @@ def _walk_package_tree(root: Path, *, expected_uid: int) -> tuple[set[str], set[
 
 
 def _validate_connector_metadata(raw: bytes) -> dict[str, Any]:
-    metadata = strict_json(raw, "Connector release metadata", canonical=True)
+    metadata = strict_json(raw, "Connector release metadata", canonical=False)
+    if connector_canonical_json(metadata) != raw:
+        fail("Connector release metadata is not canonical connector JSON")
     if not isinstance(metadata, dict):
         fail("Connector release metadata must be an object")
     required = {
@@ -2472,7 +2506,10 @@ def _deployment_environment(
         match = IMAGE_REFERENCE_RE.fullmatch(require_string(reference, "image reference"))
         if match is None:
             fail(f"package image reference is invalid: {component}")
-    connector_json = connector_raw.decode("ascii").removesuffix("\n")
+    # The packaged bytes are the Connector release's indented signed form; the
+    # environment carries the same value as one compact line, which the
+    # deployment admission re-derives from the packaged file and compares.
+    connector_json = compact_json(_validate_connector_metadata(connector_raw))
     injected = {
         "CONTROL_RELEASE_EVIDENCE_DIR": str(package_root / "release"),
         "CONTROL_RELEASE_CERTIFICATE_OIDC_ISSUER": trust[

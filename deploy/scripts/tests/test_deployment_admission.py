@@ -477,11 +477,26 @@ class ServerPackageAdmissionTests(unittest.TestCase):
         path.chmod(mode)
         return raw
 
-    def fixture(self, root: Path, *, mode: str = "offline") -> tuple[Path, Path, str]:
+    def connector_canonical(self, path: Path, value: object, mode: int) -> bytes:
+        # The Connector release signs and publishes its metadata sorted and
+        # two-space indented; the server package carries those exact bytes.
+        raw = (
+            json.dumps(value, sort_keys=True, indent=2, separators=(",", ": ")).encode("ascii")
+            + b"\n"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        path.chmod(mode)
+        return raw
+
+    def fixture(
+        self, root: Path, *, mode: str = "offline", compact_metadata: bool = False
+    ) -> tuple[Path, Path, str]:
         package = root / "package"
         package.mkdir(mode=0o700)
         metadata = connector_metadata_value()
-        metadata_raw = self.canonical(
+        metadata_writer = self.canonical if compact_metadata else self.connector_canonical
+        metadata_raw = metadata_writer(
             package / "connector-release-metadata.json", metadata, 0o444
         )
         connector_identity = {
@@ -752,7 +767,11 @@ class ServerPackageAdmissionTests(unittest.TestCase):
         }
         receipt_path = root / "verification.json"
         self.canonical(receipt_path, receipt, 0o400)
-        metadata_environment = metadata_raw.removesuffix(b"\n").decode("ascii")
+        # lifecycle projects the packaged (indented, signed) metadata into the
+        # environment as one compact canonical line.
+        metadata_environment = json.dumps(
+            json.loads(metadata_raw), sort_keys=True, separators=(",", ":")
+        )
         return manifest_path, receipt_path, metadata_environment
 
     def invoke(
@@ -823,6 +842,28 @@ class ServerPackageAdmissionTests(unittest.TestCase):
                 value["_server_package"]["oci_export"]["filename"],
                 "oci-export-receipt.json",
             )
+
+    def test_package_admission_pins_the_connector_signed_serialization(self) -> None:
+        # The Connector release signs its metadata sorted and two-space
+        # indented; that is what every genuine server package carries.
+        # control-v0.1.11's admission demanded the compact Control form and
+        # rejected the real package, so a compact file must fail here while
+        # the projected environment stays one compact line.
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest, receipt, metadata = self.fixture(Path(temporary))
+            packaged = (Path(temporary) / "package" / "connector-release-metadata.json").read_bytes()
+            self.assertIn(b"\n  ", packaged)
+            self.assertNotIn("\n", metadata)
+            self.assertEqual(json.loads(packaged), json.loads(metadata))
+            self.invoke(manifest, receipt, metadata)
+            indented_environment = packaged.decode("ascii").removesuffix("\n")
+            self.invoke(manifest, receipt, indented_environment, success=False)
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest, receipt, metadata = self.fixture(
+                Path(temporary), compact_metadata=True
+            )
+            result = self.invoke(manifest, receipt, metadata, success=False)
+            self.assertIn("not canonical connector JSON", result.stderr)
 
     def test_package_admission_rejects_metadata_or_receipt_rebinding(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
