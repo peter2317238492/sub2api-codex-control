@@ -99,6 +99,11 @@ jobs:
           .venv/bin/python -m ruff check apps/control-api migrations deploy/release
           .venv/bin/python -m pytest apps/control-api/tests tests/e2e/test_smoke_secret.py
 
+      - name: Test the isolated production canary driver
+        run: |
+          .venv/bin/pip install -r tests/e2e/production-canary-requirements.txt
+          .venv/bin/python -m pytest tests/e2e/test_production_connector_canary.py
+
   web:
     name: PWA and contracts
     runs-on: ubuntu-24.04
@@ -144,4 +149,5 @@ jobs:
         run: |
           python3 -m unittest discover -s release/tests -v
           go test -race -count=1 ./...
+          go test -race -count=1 -tags productioncanary ./internal/auth ./internal/transport
           go vet ./...

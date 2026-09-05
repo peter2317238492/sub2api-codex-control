@@ -15,3 +15,5 @@ func productionCanaryLockFlush() {}
 func productionCanaryUnlockFlush() {}
 
 func productionCanaryAfterSpool(string) {}
+
+func productionCanaryTokenFailure(error) {}

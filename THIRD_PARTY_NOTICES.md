@@ -30,6 +30,7 @@ package's own distribution remains authoritative for its complete notices.
 | santhosh-tekuri/jsonschema | 6.0.2 | Connector dependency | Apache-2.0 |
 | dlclark/regexp2 | 1.11.0 | Test-only transitive Connector dependency | MIT |
 | golang.org/x/text | 0.39.0 | Transitive Connector dependency | BSD-3-Clause |
+| psutil | 7.2.2 | Canary process verification | BSD-3-Clause |
 
 Exact upstream URLs, relationships, license files, and SHA-256 digests are in
 [`third_party/components.json`](third_party/components.json). Verbatim license

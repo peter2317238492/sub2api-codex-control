@@ -173,6 +173,7 @@ func (c *Client) runConnection(ctx context.Context) error {
 	token, err := c.options.TokenSource.Token(tokenCtx)
 	cancelToken()
 	if err != nil {
+		productionCanaryTokenFailure(err)
 		return classifyConnectionFailureWithReason(retryableOperation(err), 0, ReconnectToken)
 	}
 	tokenRefreshDeadline := token.ExpiresAt.Add(-15 * time.Second)

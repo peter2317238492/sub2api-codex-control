@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import os
+import shlex
+import signal
+import subprocess
+import sys
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import production_connector_canary as canary
 import pytest
 from production_connector_canary import (
     CANARY_CONNECTOR_BINARY_VERSION,
@@ -33,8 +42,292 @@ def test_canary_versions_match_the_release_contract() -> None:
     root = Path(__file__).resolve().parents[2]
     config = json.loads((root / "connector/release/release-config.json").read_text())
     assert CONNECTOR_VERSION == config["connector_version"]
-    assert CANARY_CONNECTOR_BINARY_VERSION == config["connector_version"] + "+productioncanary"
+    assert (
+        CANARY_CONNECTOR_BINARY_VERSION
+        == config["connector_version"] + "+productioncanary"
+    )
     assert CODEX_VERSION == config["codex_version"]
+
+
+def test_command_approval_only_allows_the_exact_marker_command(tmp_path: Path) -> None:
+    target = tmp_path / "space in marker.txt"
+    command = f"printf approved > {shlex.quote(str(target))}"
+    assert canary._is_marker_command(command, target)
+    assert canary._is_marker_command(["/bin/sh", "-c", command], target)
+    assert canary._is_marker_command("/bin/zsh -lc " + shlex.quote(command), target)
+    for unexpected in (
+        command + "; printf unexpected > /outside",
+        command + "\nprintf unexpected",
+        command.replace("approved", "$(printf approved)"),
+        command.replace("approved", "`printf approved`"),
+        command.replace(str(target), "/outside"),
+        ["/usr/bin/env", "sh", command],
+        [{}, "-c", command],
+        None,
+    ):
+        assert not canary._is_marker_command(unexpected, target)
+
+
+def test_approval_binding_rejects_other_turns_commands_items_and_expiry(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "marker"
+    record = {
+        "approval_id": "outer",
+        "device_id": "device",
+        "kind": "command",
+        "expires_at": (datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+        "details": {
+            "threadId": "native-thread",
+            "turnId": "native-turn",
+            "itemId": "item",
+            "cwd": str(tmp_path),
+            "command": f"printf approved > {shlex.quote(str(target))}",
+        },
+    }
+    arguments = dict(
+        device_id="device",
+        thread_id="native-thread",
+        turn_id="native-turn",
+        kind="command",
+        workspace=tmp_path,
+        approve_target=target,
+    )
+    assert canary._approval_is_bound(record, copy.deepcopy(record), **arguments)
+    for field, value in (
+        ("turnId", "previous-turn"),
+        ("itemId", "other-item"),
+        ("cwd", "/outside"),
+        ("command", record["details"]["command"] + "; printf other"),
+    ):
+        changed = copy.deepcopy(record)
+        changed["details"][field] = value
+        assert not canary._approval_is_bound(record, changed, **arguments)
+    expired = copy.deepcopy(record)
+    expired["expires_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    assert not canary._approval_is_bound(expired, expired, **arguments)
+    missing = copy.deepcopy(record)
+    del missing["details"]["command"]
+    assert not canary._approval_is_bound(missing, missing, **arguments)
+
+
+def test_portable_process_cleanup_leaves_an_unrelated_process_running() -> None:
+    child_code = "import time; time.sleep(20)"
+    parent_code = f"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',{child_code!r}]); time.sleep(20)"
+    unrelated = subprocess.Popen(
+        [sys.executable, "-c", child_code], start_new_session=True
+    )
+    process = canary.CanaryProcess(
+        [sys.executable, "-c", parent_code], start_new_session=True
+    )
+    try:
+        deadline = time.monotonic() + 5
+        descendants = set()
+        while not descendants and time.monotonic() < deadline:
+            descendants = canary._descendant_processes(process)
+            time.sleep(0.02)
+        assert descendants
+        assert unrelated.pid not in {item.pid for item in descendants}
+        assert canary._stop_process(process)
+        assert unrelated.poll() is None
+        assert not any(item.is_running() for item in descendants)
+    finally:
+        canary._cleanup_canary_processes()
+        unrelated.terminate()
+        unrelated.wait(timeout=5)
+
+
+def test_process_identity_is_rechecked_before_sigkill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Process:
+        pid = 12345
+        running = True
+        signals = []
+
+        def is_running(self):
+            return self.running
+
+        def send_signal(self, sig):
+            self.signals.append(sig)
+            self.running = False
+
+    process = Process()
+    monkeypatch.setattr(canary, "_process_session", lambda pid: 99)
+    monkeypatch.setattr(
+        canary.psutil, "wait_procs", lambda processes, timeout: ([], processes)
+    )
+    assert canary._terminate_owned_processes({process}, owner_session=99)
+    assert process.signals == [signal.SIGTERM]
+
+
+def test_codex_home_mismatch_is_rejected_before_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        canary,
+        "build_connector_environment",
+        lambda source: {"CODEX_HOME": str(tmp_path / "actual")},
+    )
+    with pytest.raises(ValueError, match="effective child"):
+        canary._validate_codex_home(tmp_path / "other")
+
+
+def test_privileged_action_uses_and_closes_an_independent_fresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = ProductionCanary("https://control.invalid", CanaryEvidence())
+    client._reauth_access_token = "fixture-access"
+    client._reauth_user_id = "fixture-user"
+    old_headers = {"Origin": client.origin, "x-csrf-token": "old"}
+    client.session_mutating_headers = old_headers
+    exchanges, requests = [], []
+
+    def exchange(temporary, token, user):
+        assert temporary is not client
+        assert (token, user) == ("fixture-access", "fixture-user")
+        temporary.session_mutating_headers = {
+            "Origin": client.origin,
+            "x-csrf-token": "fresh",
+        }
+        exchanges.append(temporary)
+        return temporary.session_mutating_headers
+
+    def request(temporary, path, **kwargs):
+        requests.append((path, kwargs["headers"].copy()))
+        return Result(204, {}, b"")
+
+    monkeypatch.setattr(canary, "_exchange_control_session", exchange)
+    monkeypatch.setattr(ProductionCanary, "request", request)
+    path = "/codex-api/v1/devices/00000000-0000-4000-8000-000000000001"
+    assert client.privileged_request(path, method="DELETE").status == 204
+    assert len(exchanges) == 1
+    assert [item[0] for item in requests] == [path, "/codex-api/v1/session/logout"]
+    assert all(item[1]["x-csrf-token"] == "fresh" for item in requests)
+    assert client.session_mutating_headers is old_headers
+    canary._clear_control_client(client)
+    assert client._reauth_access_token == ""
+
+
+def test_privileged_session_cleanup_failure_is_not_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = ProductionCanary("https://control.invalid", CanaryEvidence())
+    client._reauth_access_token = "fixture-access"
+    client._reauth_user_id = "fixture-user"
+
+    def exchange(temporary, token, user):
+        temporary.session_mutating_headers = {"x-csrf-token": "fresh"}
+        return temporary.session_mutating_headers
+
+    monkeypatch.setattr(canary, "_exchange_control_session", exchange)
+    monkeypatch.setattr(
+        ProductionCanary,
+        "request",
+        lambda self, path, **kwargs: Result(
+            500 if path.endswith("logout") else 204, {}, b""
+        ),
+    )
+    with pytest.raises(AssertionError, match="session cleanup failed"):
+        client.privileged_request(
+            "/codex-api/v1/devices/00000000-0000-4000-8000-000000000001",
+            method="DELETE",
+        )
+    assert client.evidence.cleanup["privileged_sessions"] is False
+
+
+def test_generic_reconnect_metrics_cannot_prove_credential_rejection(
+    tmp_path: Path,
+) -> None:
+    private_json(tmp_path / "connector-metrics.json", {"reconnects": [100, 0, 0, 0]})
+    assert canary._read_credential_rejection(tmp_path) is None
+    marker = private_json(
+        tmp_path / "production-canary-credential-rejected.json",
+        {"credential_rejected": True, "version": 1},
+    )
+    assert canary._read_credential_rejection(tmp_path) is True
+    private_json(marker, {"credential_rejected": 1, "version": True})
+    with pytest.raises(ValueError, match="invalid"):
+        canary._read_credential_rejection(tmp_path)
+
+
+def test_evidence_collision_cannot_return_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth_path = private_json(
+        tmp_path / "auth.json",
+        {
+            "username": "fixture@example.invalid",
+            "password": "fixture-password",
+            "OPENAI_API_KEY": "unused-fixture-provider",
+        },
+    )
+    binary = tmp_path / "binary"
+    binary.write_bytes(b"frozen binary fixture")
+    binary.chmod(0o700)
+    home = tmp_path / "codex-home"
+    home.mkdir(mode=0o700)
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir(mode=0o700)
+    old = CanaryEvidence()
+    old.finish("passed")
+    evidence_path = write_redacted_evidence(evidence_dir, old)
+    before = evidence_path.read_bytes()
+    monkeypatch.setattr(canary, "_verify_binary_version", lambda *args: None)
+    monkeypatch.setattr(canary, "_validate_codex_home", lambda path: None)
+    monkeypatch.setattr(
+        canary, "_login_to_sub2api", lambda *args: ("fixture-access", "fixture-user")
+    )
+    monkeypatch.setattr(
+        canary,
+        "_session_exchange",
+        lambda *args: ({"x-csrf-token": "fixture"}, object()),
+    )
+    monkeypatch.setattr(
+        ProductionCanary, "request", lambda *args, **kwargs: Result(204, {}, b"")
+    )
+
+    def flow(**kwargs):
+        evidence = kwargs["client"].evidence
+        evidence.approvals = {"verified": True}
+        evidence.cleanup.update({key: True for key in evidence.cleanup})
+
+    monkeypatch.setattr(canary, "_run_control_flow", flow)
+    publications = []
+    original_publish = canary.write_redacted_evidence
+
+    def publish(directory, evidence):
+        publications.append(evidence.outcome)
+        return original_publish(directory, evidence)
+
+    monkeypatch.setattr(canary, "write_redacted_evidence", publish)
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    result = canary.main(
+        [
+            "--base-url",
+            "https://control.invalid",
+            "--auth-fd",
+            str(auth_fd(auth_path)),
+            "--connector-binary",
+            str(binary),
+            "--expected-connector-sha256",
+            digest,
+            "--codex-binary",
+            str(binary),
+            "--expected-codex-sha256",
+            digest,
+            "--codex-home",
+            str(home),
+            "--private-run-dir",
+            str(tmp_path / "run"),
+            "--evidence-dir",
+            str(evidence_dir),
+            "--confirm-real-production-canary",
+        ]
+    )
+    assert result == 1
+    assert publications == ["passed"]
+    assert evidence_path.read_bytes() == before
 
 
 def private_json(path: Path, value: object) -> Path:

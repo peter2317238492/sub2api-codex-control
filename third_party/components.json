@@ -384,6 +384,31 @@
           "normalization": "none"
         }
       ]
+    },
+    {
+      "id": "psutil",
+      "name": "psutil",
+      "version": "7.2.2",
+      "relationship": "operator-verification-tool",
+      "package": "pkg:pypi/psutil@7.2.2",
+      "repository": "https://github.com/giampaolo/psutil",
+      "source_ref": "release-7.2.2",
+      "version_evidence": {
+        "kind": "python-constraint",
+        "path": "tests/e2e/production-canary-requirements.txt",
+        "package": "psutil"
+      },
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "kind": "license",
+          "path": "third_party/licenses/psutil-LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/giampaolo/psutil/release-7.2.2/LICENSE",
+          "source_sha256": "b89c063b3786e28e0c0a38f1931db61fed35e69dd2a2966fbecffee0f46c8d10",
+          "file_sha256": "b89c063b3786e28e0c0a38f1931db61fed35e69dd2a2966fbecffee0f46c8d10",
+          "normalization": "none"
+        }
+      ]
     }
   ]
 }
