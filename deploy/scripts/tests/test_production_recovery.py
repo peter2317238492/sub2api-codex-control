@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -17,6 +19,11 @@ IMAGE_PG = f"sha256:{'1' * 64}"
 IMAGE_REDIS = f"sha256:{'2' * 64}"
 IMAGE_API = f"sha256:{'3' * 64}"
 IMAGE_PWA = f"sha256:{'4' * 64}"
+
+spec = importlib.util.spec_from_file_location("production_recovery", RECOVERY)
+assert spec is not None and spec.loader is not None
+recovery = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(recovery)
 
 
 def sha256(path: Path) -> str:
@@ -143,7 +150,7 @@ case "$all" in
   'inspect --type container '*) exit 1 ;;
   *'ACL LIST'*)
     printf '%s\n' 'user default on #bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ~* &* +@all' \
-      'user codex_control on #aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ~codex-control:* &codex-control:* -@all +ping +get +set +del +incr +expire +eval +publish +subscribe +unsubscribe +client|setinfo'
+      'user codex_control on sanitize-payload #aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ~codex-control:* resetchannels &codex-control:* -@all +ping +get +set +del +incr +expire +eval +publish +subscribe +unsubscribe +client|setinfo'
     ;;
   *'--dbname sub2api'*'--command SELECT 1')
     printf '%s\n' 'permission denied' >&2
@@ -169,6 +176,7 @@ case "$all" in
   *'redis-cli'*' PUBLISH codex-control:isolation-probe-'*) printf '%s\n' '0' ;;
   *'redis-cli'*' PUBLISH !recovery-isolation-denied:'*) printf '%s\n' 'NOPERM channel not allowed' ;;
   *'SELECT count(*)::text ||'*) printf '%s\n' '1|2|3' ;;
+  *'df -Pk /var/lib/postgresql'*) printf '%s\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on' 'fixture 8388608 0 8388608 0% /var/lib/postgresql' ;;
   run\\ -d*) printf '%064d\n' 0 ;;
   *) : ;;
 esac
@@ -193,7 +201,7 @@ esac
             raise AssertionError(result.stdout)
         return result
 
-    def restore(self) -> Path:
+    def restore(self, *, timeout_seconds: int = 2) -> Path:
         output = self.root / "restore.json"
         self.run(
             "isolated-restore",
@@ -204,7 +212,7 @@ esac
             "--docker",
             str(self.docker),
             "--timeout-seconds",
-            "2",
+            str(timeout_seconds),
             "--expected-owner-uid",
             str(os.geteuid()),
         )
@@ -258,7 +266,15 @@ class ProductionRecoveryTests(unittest.TestCase):
             self.assertIn("pg_restore --exit-on-error --no-owner --no-acl", commands)
             self.assertNotIn("pg_restore --list", commands)
             self.assertIn("redis-server --bind 127.0.0.1", commands)
-            self.assertEqual(commands.count("rm -f codex-control-restore-"), 2)
+            self.assertEqual(commands.count("rm -f --volumes codex-control-restore-"), 2)
+            self.assertIn("volume rm codex-control-restore-data-", commands)
+            self.assertIn("volume ls --format {{.Name}}", commands)
+            self.assertIn("dst=/var/lib/postgresql", commands)
+            self.assertIn("PGDATA=/var/lib/postgresql/recovery", commands)
+            self.assertEqual(commands.count("dst=/restore,readonly"), 2)
+            self.assertIn("/restore/sub2api-postgres.dump", commands)
+            self.assertNotIn("\ncp ", commands)
+            self.assertIn("cp /restore/redis-logical.rdb /data/dump.rdb", commands)
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
             fixture.run(
                 "isolated-restore",
@@ -272,6 +288,70 @@ class ProductionRecoveryTests(unittest.TestCase):
                 str(os.geteuid()),
                 success=False,
             )
+
+    def test_restore_accepts_the_operator_one_hour_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = RecoveryFixture(Path(temporary))
+            self.assertTrue(fixture.restore(timeout_seconds=3600).is_file())
+
+    def test_restore_cleans_containers_and_volumes_after_restore_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = RecoveryFixture(Path(temporary))
+            fixture.docker.write_text(
+                fixture.docker.read_text().replace(
+                    'case "$all" in', 'case "$all" in\n  *pg_restore*) exit 19 ;;'
+                )
+            )
+            with self.assertRaisesRegex(AssertionError, "restore isolated PostgreSQL"):
+                fixture.restore()
+            commands = fixture.log.read_text()
+            self.assertEqual(commands.count("rm -f --volumes codex-control-restore-"), 2)
+            self.assertIn("volume rm codex-control-restore-data-", commands)
+            self.assertFalse((fixture.root / "restore.json").exists())
+
+    def test_restore_rejects_insufficient_disk_before_loading_a_dump(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = RecoveryFixture(Path(temporary))
+            fixture.docker.write_text(
+                fixture.docker.read_text().replace("8388608 0 8388608", "8388608 8388607 1")
+            )
+            with self.assertRaisesRegex(AssertionError, "insufficient Docker disk space"):
+                fixture.restore()
+            commands = fixture.log.read_text()
+            self.assertNotIn("pg_restore ", commands)
+            self.assertIn("volume rm codex-control-restore-data-", commands)
+
+    def test_restore_rejects_failed_volume_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = RecoveryFixture(Path(temporary))
+            args = recovery.build_parser().parse_args([
+                "isolated-restore", "--backup-admission", str(fixture.admission),
+                "--output", str(fixture.root / "restore.json"),
+                "--expected-owner-uid", str(os.geteuid()),
+            ])
+            with mock.patch.object(recovery, "run") as run:
+                run.return_value = subprocess.CompletedProcess([], 0, b"leftover-volume\n", b"")
+                with self.assertRaisesRegex(recovery.RecoveryError, "volume remains"):
+                    recovery.remove_and_prove_absent(args.docker, [], ["leftover-volume"])
+
+    def test_private_secrets_accept_readonly_mode_but_reject_shared_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "secret"
+            path.write_bytes(b"fixture-secret\n")
+            for mode in (0o400, 0o600):
+                path.chmod(mode)
+                self.assertEqual(
+                    recovery.private_secret(path, "fixture", expected_uid=os.geteuid()),
+                    b"fixture-secret",
+                )
+            for mode in (0o440, 0o644, 0o660):
+                path.chmod(mode)
+                with self.assertRaises(recovery.RecoveryError):
+                    recovery.private_secret(path, "fixture", expected_uid=os.geteuid())
+            path.chmod(0o600)
+            os.link(path, Path(temporary) / "alias")
+            with self.assertRaises(recovery.RecoveryError):
+                recovery.private_secret(path, "fixture", expected_uid=os.geteuid())
 
     def test_restore_rejects_nonfresh_or_tampered_full_backup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -314,6 +394,16 @@ class ProductionRecoveryTests(unittest.TestCase):
             self.assertIn("redis-cli --no-auth-warning --raw PING", commands)
             self.assertNotIn("control-pg-password", commands)
             self.assertNotIn("control-redis-password", commands)
+
+    def test_live_isolation_rejects_weakened_redis_acl_flags(self) -> None:
+        for flag in ("skip-sanitize-payload", "allchannels", "+@all"):
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as temporary:
+                fixture = RecoveryFixture(Path(temporary))
+                fixture.docker.write_text(
+                    fixture.docker.read_text().replace("sanitize-payload", flag)
+                )
+                with self.assertRaisesRegex(AssertionError, "Redis ACL is not exact"):
+                    fixture.isolation()
 
     def test_live_isolation_rejects_an_enabled_nopass_user(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

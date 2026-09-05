@@ -1150,8 +1150,11 @@ def main() -> int:
             output=release_records_contents,
             stage="release records tar validation",
         )
-        require_nonempty(release_records_contents, "release records tar listing")
-        tar_listing_is_safe(release_records_contents)
+        if release_record_names:
+            require_nonempty(release_records_contents, "release records tar listing")
+            tar_listing_is_safe(release_records_contents)
+        elif release_records_contents.stat().st_size != 0:
+            fail("empty release records inventory produced a nonempty archive listing")
 
         sub2api_runtime = incomplete / "sub2api-runtime.txt"
         run_capture(

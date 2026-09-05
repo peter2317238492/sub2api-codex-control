@@ -69,6 +69,7 @@ def private_regular_bytes(
     *,
     expected_uid: int,
     max_bytes: int = MAX_JSON_BYTES,
+    accepted_modes: frozenset[int] = frozenset({0o600}),
 ) -> bytes:
     if not path.is_absolute():
         fail(f"{label} path must be absolute")
@@ -85,7 +86,8 @@ def private_regular_bytes(
             or not stat.S_ISREG(opened.st_mode)
             or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
             or opened.st_uid != expected_uid
-            or stat.S_IMODE(opened.st_mode) != 0o600
+            or stat.S_IMODE(opened.st_mode) not in accepted_modes
+            or opened.st_nlink != 1
             or opened.st_size <= 0
             or opened.st_size > max_bytes
         ):
@@ -131,7 +133,8 @@ def private_secret(path: Path | None, label: str, *, expected_uid: int) -> bytes
     if path is None:
         return b""
     raw = private_regular_bytes(
-        path, label, expected_uid=expected_uid, max_bytes=MAX_SECRET_BYTES
+        path, label, expected_uid=expected_uid, max_bytes=MAX_SECRET_BYTES,
+        accepted_modes=frozenset({0o400, 0o600}),
     ).rstrip(b"\r\n")
     if not raw or b"\x00" in raw or b"\r" in raw or b"\n" in raw:
         fail(f"{label} must contain one non-empty line")
@@ -364,9 +367,9 @@ def plan_datastores(plan: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any
     return postgres, redis
 
 
-def remove_and_prove_absent(docker: str, names: list[str]) -> None:
+def remove_and_prove_absent(docker: str, names: list[str], volumes: list[str]) -> None:
     for name in names:
-        run([docker, "rm", "-f", name], label="isolated restore cleanup", check=False)
+        run([docker, "rm", "-f", "--volumes", name], label="isolated restore cleanup", check=False)
     result = run(
         [docker, "container", "ls", "--all", "--format", "{{.Names}}"],
         label="isolated restore cleanup proof",
@@ -377,6 +380,14 @@ def remove_and_prove_absent(docker: str, names: list[str]) -> None:
         fail("isolated restore cleanup proof is not UTF-8")
     if remaining.intersection(names):
         fail("one isolated restore container remains after cleanup")
+    for volume in volumes:
+        run([docker, "volume", "rm", volume], label="isolated restore volume cleanup", check=False)
+    result = run(
+        [docker, "volume", "ls", "--format", "{{.Name}}"],
+        label="isolated restore volume cleanup proof",
+    )
+    if set(result.stdout.decode("utf-8").splitlines()).intersection(volumes):
+        fail("one isolated restore volume remains after cleanup")
 
 
 def wait_for_command(command: list[str], *, label: str, timeout_seconds: int) -> None:
@@ -427,11 +438,19 @@ def isolated_restore(args: argparse.Namespace) -> dict[str, Any]:
     token = secrets.token_hex(8)
     postgres_name = f"codex-control-restore-pg-{token}"
     redis_name = f"codex-control-restore-redis-{token}"
+    postgres_volume = f"codex-control-restore-data-{token}"
     names = [postgres_name, redis_name]
+    if any(character in str(snapshot) for character in (",", "\n", "\r")):
+        fail("backup snapshot path is not Docker-mount safe")
+    snapshot_mount = f"type=bind,src={snapshot},dst=/restore,readonly"
     started_at = utc_now()
     postgres_results: list[dict[str, Any]] = []
     redis_key_count = -1
     try:
+        run(
+            [args.docker, "volume", "create", "--label", "com.sub2api-codex.recovery=isolated", postgres_volume],
+            label="create isolated PostgreSQL restore volume",
+        )
         run(
             [
                 args.docker,
@@ -444,8 +463,10 @@ def isolated_restore(args: argparse.Namespace) -> dict[str, Any]:
                 "--network",
                 "none",
                 "--read-only",
-                "--tmpfs",
-                "/var/lib/postgresql/data:rw,nosuid,nodev,mode=0700",
+                "--mount",
+                f"type=volume,src={postgres_volume},dst=/var/lib/postgresql",
+                "--mount",
+                snapshot_mount,
                 "--tmpfs",
                 "/run/postgresql:rw,nosuid,nodev,mode=0755",
                 "--tmpfs",
@@ -456,22 +477,33 @@ def isolated_restore(args: argparse.Namespace) -> dict[str, Any]:
                 "POSTGRES_HOST_AUTH_METHOD=trust",
                 "--env",
                 "POSTGRES_USER=recovery_admin",
+                "--env",
+                "PGDATA=/var/lib/postgresql/recovery",
                 postgres_image,
             ],
             label="start isolated PostgreSQL restore",
         )
+        # The entrypoint's temporary init server only listens on a Unix socket.
         wait_for_command(
-            [args.docker, "exec", postgres_name, "pg_isready", "-U", "recovery_admin", "-d", "postgres"],
+            [args.docker, "exec", postgres_name, "pg_isready", "-h", "127.0.0.1", "-U", "recovery_admin", "-d", "postgres"],
             label="isolated PostgreSQL readiness",
             timeout_seconds=args.timeout_seconds,
         )
+        disk = run(
+            [args.docker, "exec", postgres_name, "df", "-Pk", "/var/lib/postgresql"],
+            label="isolated PostgreSQL restore disk budget",
+        )
+        try:
+            available_bytes = int(disk.stdout.decode("ascii").splitlines()[-1].split()[3]) * 1024
+        except (UnicodeDecodeError, IndexError, ValueError):
+            fail("isolated PostgreSQL restore disk budget is invalid")
+        # Compressed dumps need expansion and index space on the Docker disk.
+        minimum_bytes = 3 * sum(dump.stat().st_size for _, dump in database_dumps) + 1024**3
+        if available_bytes < minimum_bytes:
+            fail("insufficient Docker disk space for isolated PostgreSQL restore")
         for database, dump in database_dumps:
             if not dump.is_file() or sha256_file(dump) != admission["artifacts"][dump.name]["sha256"]:
                 fail("one PostgreSQL restore artifact differs from the admitted backup")
-            run(
-                [args.docker, "cp", str(dump), f"{postgres_name}:/tmp/{dump.name}"],
-                label="copy isolated PostgreSQL restore artifact",
-            )
             run(
                 [args.docker, "exec", postgres_name, "createdb", "-U", "recovery_admin", database],
                 label="create isolated PostgreSQL restore database",
@@ -485,11 +517,13 @@ def isolated_restore(args: argparse.Namespace) -> dict[str, Any]:
                     "--exit-on-error",
                     "--no-owner",
                     "--no-acl",
+                    "--jobs",
+                    "2",
                     "-U",
                     "recovery_admin",
                     "-d",
                     database,
-                    f"/tmp/{dump.name}",
+                    f"/restore/{dump.name}",
                 ],
                 label="restore isolated PostgreSQL database",
                 timeout=args.timeout_seconds,
@@ -551,6 +585,8 @@ def isolated_restore(args: argparse.Namespace) -> dict[str, Any]:
                 "--read-only",
                 "--tmpfs",
                 "/data:rw,nosuid,nodev,mode=0700",
+                "--mount",
+                snapshot_mount,
                 "--tmpfs",
                 "/tmp:rw,noexec,nosuid,nodev,mode=1777",
                 "--label",
@@ -567,7 +603,7 @@ def isolated_restore(args: argparse.Namespace) -> dict[str, Any]:
         if sha256_file(redis_dump) != admission["artifacts"][redis_dump.name]["sha256"]:
             fail("Redis restore artifact differs from the admitted backup")
         run(
-            [args.docker, "cp", str(redis_dump), f"{redis_name}:/data/dump.rdb"],
+            [args.docker, "exec", redis_name, "cp", f"/restore/{redis_dump.name}", "/data/dump.rdb"],
             label="copy isolated Redis restore artifact",
         )
         run(
@@ -614,7 +650,7 @@ def isolated_restore(args: argparse.Namespace) -> dict[str, Any]:
             fail("isolated Redis key count is invalid")
         redis_key_count = int(redis_size)
     finally:
-        remove_and_prove_absent(args.docker, names)
+        remove_and_prove_absent(args.docker, names, [postgres_volume])
 
     receipt = {
         "format_version": RECEIPT_VERSION,
@@ -904,7 +940,8 @@ def live_isolation(args: argparse.Namespace) -> dict[str, Any]:
     # Redis normalizes INCR to INCRBY in ACL LIST on supported releases.
     normalized = {"+incrby" if token == "+incr" else token for token in tokens[2:]}
     password_hashes = {token for token in normalized if token.startswith("#")}
-    non_password_tokens = normalized - password_hashes
+    # These Redis 7+ tokens describe the reset/default hardening state.
+    non_password_tokens = normalized - password_hashes - {"sanitize-payload", "resetchannels"}
     if (
         len(password_hashes) != 1
         or not all(re.fullmatch(r"#[0-9a-f]{64}", item) for item in password_hashes)
@@ -1626,8 +1663,8 @@ def main() -> int:
     os.umask(0o077)
     if args.expected_owner_uid < 0 or os.geteuid() != args.expected_owner_uid:
         fail(f"recovery admission must run as UID {args.expected_owner_uid}")
-    if not 0 < getattr(args, "timeout_seconds", 1) <= 1800:
-        fail("restore timeout must be between 1 and 1800 seconds")
+    if not 0 < getattr(args, "timeout_seconds", 1) <= 86400:
+        fail("restore timeout must be between 1 and 86400 seconds")
     if not 0 < getattr(args, "max_reverse_steps", 1) <= 8:
         fail("reverse step bound must be between 1 and 8")
     if not 0 < getattr(args, "total_timeout_seconds", 1) <= 900:
