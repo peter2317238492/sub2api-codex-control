@@ -118,6 +118,28 @@ sha256sum "/proc/$pid1_host_pid/exe" > "$work_dir/pid1-sha256.txt"
 pid1_binary_sha256=$(awk 'NR == 1 && NF >= 1 {print $1}' "$work_dir/pid1-sha256.txt")
 [ "$pid1_binary_sha256" = "$actual_binary_sha256" ] \
   || fail "container PID 1 executable hash differs from /app/sub2api"
+# The official image launches PID 1 through an entrypoint wrapper that execs
+# /app/sub2api; when the launch path is not the binary itself, hash the wrapper
+# so the verifier can bind it to the pinned lock value.
+launch_path=$(python3 -c '
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))[0]
+path = value.get("Path")
+if (
+    not isinstance(path, str)
+    or not path.startswith("/")
+    or any(character.isspace() or ord(character) < 32 for character in path)
+):
+    raise SystemExit("inspect did not return one absolute container launch path")
+print(path)
+' "$work_dir/container-before.json")
+entrypoint_sha256=
+if [ "$launch_path" != "/app/sub2api" ]; then
+  docker container exec "$container_id" sha256sum "$launch_path" \
+    > "$work_dir/entrypoint-sha256.txt"
+  entrypoint_sha256=$(awk 'NR == 1 && NF >= 1 {print $1}' "$work_dir/entrypoint-sha256.txt")
+  [ -n "$entrypoint_sha256" ] || fail "could not hash the container launch path $launch_path"
+fi
 : > "$work_dir/writable-file-sha256.txt"
 for writable_path in \
   /app/sub2api.backup \
@@ -163,6 +185,9 @@ set -- \
   --expected-alias "$expected_alias"
 if [ -n "$contract_file" ]; then
   set -- "$@" --contract-file "$contract_file"
+fi
+if [ -n "$entrypoint_sha256" ]; then
+  set -- "$@" --entrypoint-sha256 "$entrypoint_sha256"
 fi
 if [ -n "$expected_bind_source" ]; then
   set -- "$@" \

@@ -36,6 +36,11 @@
     "image_label_source": "https://github.com/Wei-Shaw/sub2api",
     "image_label_maintainer": "Wei-Shaw <github.com/Wei-Shaw>",
     "production_admission_profile": "immutable-image-v1",
+    "runtime_entrypoint_path": "/app/docker-entrypoint.sh",
+    "runtime_entrypoint_sha256": "7d3f1f532fcdefc0f405b37fb6caafa330dfcc7c531ad8bf51fcd48dad54a0b3",
+    "runtime_tmpfs": {
+      "/tmp": "rw,nosuid,nodev,noexec,size=512m,mode=1777"
+    },
     "auth_contract_file": "docs/contracts/sub2api-auth.v0.2.0.json",
     "auth_contract_sha256": "e69ecf9536f21271121c3b000d1b40562fd10618ad79a5ebe848e472e24d4c21",
     "frontend_access_token_key": "auth_token",

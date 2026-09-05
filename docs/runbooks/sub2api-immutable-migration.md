@@ -52,8 +52,18 @@ same exact service policy:
 - one literal bind source at `/app/data`, writable, `rprivate`, with
   `create_host_path: false`;
 - only `127.0.0.1:8080` published;
-- no build, process override, added capability, device, host namespace, tmpfs,
+- exactly the tmpfs mounts pinned by `sub2api.runtime_tmpfs` in
+  `versions.lock.json` (today one bounded `nosuid,nodev,noexec` `/tmp`, which
+  the gateway needs for its response spool on a read-only root filesystem) and
+  no other tmpfs;
+- no build, process override, added capability, device, host namespace,
   extra mount, config, or secret.
+
+The official image launches PID 1 through `/app/docker-entrypoint.sh`, which
+`exec`s `/app/sub2api` once it is not running as root. The runtime verifier
+therefore admits that wrapper only under the exact hash pinned by
+`sub2api.runtime_entrypoint_sha256`, hashes it inside the running container,
+and still requires the host `/proc` PID 1 executable to be the locked binary.
 
 The script rejects semantic interpolation of the image or bind path. It also
 requires the running legacy service to be owned by exactly this one active

@@ -71,6 +71,35 @@ class ImmutableSub2APIMigrationStaticTests(unittest.TestCase):
         self.assertNotIn("status=$(", body)
         self.assertIn("observed_health=$(docker container inspect", body)
 
+    def test_candidate_admits_only_the_locked_tmpfs_policy(self) -> None:
+        # The lock's sub2api.runtime_tmpfs is the only admitted tmpfs shape:
+        # the release lock preflight projects it, the pre-mutation recheck
+        # re-binds it, and both Compose projections must list exactly it.
+        for required in (
+            'tmpfs = sub2api.get("runtime_tmpfs")',
+            'print(json.dumps(tmpfs, sort_keys=True, separators=(",", ":")))',
+            "locked_tmpfs=$(sed -n '3p' \"$preflight_values\")",
+            "&& [ \"$(sed -n '3p' \"$pre_mutation_recheck\")\" = \"$locked_tmpfs\" ]",
+            '"$expected_network" "$locked_tmpfs" > "$hash_output"',
+            'expected_tmpfs_list = [f"{path}:{options}" for path, options in sorted(expected_tmpfs.items())]',
+            "if tmpfs != expected_tmpfs_list:",
+            'raise SystemExit(f"{label} Sub2API service has prohibited tmpfs")',
+        ):
+            self.assertIn(required, self.script)
+        self.assertNotIn('"network_mode", "tmpfs", "volumes_from"', self.script)
+
+    def test_candidate_image_label_binds_the_locked_image_across_compose_generations(self) -> None:
+        # Compose 5 labels the container with the sha256:-prefixed image ID
+        # where Compose 2 wrote the bare hex; both must resolve to the locked
+        # image rather than merely looking like a digest.
+        for required in (
+            'compose_image_hex = compose_image[len("sha256:"):] if compose_image.startswith("sha256:") else compose_image',
+            'if re.fullmatch(r"[0-9a-f]{64}", compose_image_hex) is None:',
+            'if "sha256:" + compose_image_hex != image.get("Id"):',
+            'raise SystemExit("candidate Compose image label does not name the locked image")',
+        ):
+            self.assertIn(required, self.script)
+
     def test_candidate_compose_is_hash_bound_and_hardened(self) -> None:
         for required in (
             "SUB2API_COMPOSE_FILE",

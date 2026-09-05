@@ -23,6 +23,9 @@ IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 DIGEST_REF_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 IMMUTABLE_PROFILE = "immutable-image-v1"
+RUNTIME_BINARY = "/app/sub2api"
+TMPFS_OPTION_RE = re.compile(r"^(?:rw|nosuid|nodev|noexec|size=[1-9][0-9]*[kmg]?|mode=[0-7]{4})$")
+TMPFS_REQUIRED_OPTIONS = frozenset({"nosuid", "nodev", "noexec"})
 MAX_AUTH_EVIDENCE_BYTES = 1024 * 1024
 MAX_AUTH_CONTRACT_BYTES = 4 * 1024 * 1024
 
@@ -371,6 +374,7 @@ def validate_host_config(
     expected_network: str,
     expected_port_bindings: dict[str, list[dict[str, str]]],
     mounts: list[dict[str, Any]],
+    expected_tmpfs: dict[str, str],
 ) -> None:
     if not isinstance(host_config, dict):
         fail("Docker inspect output has no HostConfig object")
@@ -423,7 +427,11 @@ def validate_host_config(
         }
         if not isinstance(binds, list) or len(binds) != 1 or binds[0] not in allowed_bind_specs:
             fail("Sub2API HostConfig.Binds does not match the admitted /app/data bind")
-    if host_config.get("Tmpfs") not in (None, {}):
+    tmpfs = host_config.get("Tmpfs")
+    if expected_tmpfs:
+        if tmpfs != expected_tmpfs:
+            fail("Sub2API container tmpfs mounts do not match the locked tmpfs policy")
+    elif tmpfs not in (None, {}):
         fail("Sub2API container has a prohibited tmpfs mount")
     if host_config.get("PublishAllPorts") is not False:
         fail("Sub2API container may not publish all exposed ports")
@@ -433,10 +441,68 @@ def validate_host_config(
         )
 
 
+def parse_lock_entrypoint(sub2api: dict[str, Any]) -> tuple[str | None, str | None]:
+    path = sub2api.get("runtime_entrypoint_path")
+    digest = sub2api.get("runtime_entrypoint_sha256")
+    if path is None and digest is None:
+        return None, None
+    if not isinstance(path, str) or not isinstance(digest, str):
+        fail(
+            "sub2api.runtime_entrypoint_path and sub2api.runtime_entrypoint_sha256 "
+            "must be pinned together"
+        )
+    if (
+        not path.startswith("/")
+        or posixpath.normpath(path) != path
+        or path == RUNTIME_BINARY
+        or any(character.isspace() or ord(character) < 32 for character in path)
+    ):
+        fail("sub2api.runtime_entrypoint_path is not one normalized absolute path")
+    if not SHA256_RE.fullmatch(digest):
+        fail("sub2api.runtime_entrypoint_sha256 is invalid")
+    return path, digest
+
+
+def parse_lock_tmpfs(sub2api: dict[str, Any]) -> dict[str, str]:
+    value = sub2api.get("runtime_tmpfs")
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or not value:
+        fail("sub2api.runtime_tmpfs must be a non-empty object of mount path to options")
+    result: dict[str, str] = {}
+    for path, options in value.items():
+        if (
+            not isinstance(path, str)
+            or not path.startswith("/")
+            or posixpath.normpath(path) != path
+            or path in {"/", "/app", "/dev", "/proc", "/sys"}
+            or any(path.startswith(prefix) for prefix in ("/app/", "/dev/", "/proc/", "/sys/"))
+            or any(character.isspace() or ord(character) < 32 or character in ",:" for character in path)
+        ):
+            fail("sub2api.runtime_tmpfs mounts must be normalized absolute paths outside the image tree")
+        if not isinstance(options, str) or not options:
+            fail("sub2api.runtime_tmpfs options must be one non-empty option string")
+        tokens = options.split(",")
+        if any(TMPFS_OPTION_RE.fullmatch(token) is None for token in tokens):
+            fail("sub2api.runtime_tmpfs options contain an unsupported mount option")
+        if len(set(tokens)) != len(tokens):
+            fail("sub2api.runtime_tmpfs options repeat a mount option")
+        if not TMPFS_REQUIRED_OPTIONS.issubset(tokens):
+            fail("sub2api.runtime_tmpfs mounts must be nosuid, nodev, and noexec")
+        if sum(token.startswith("size=") for token in tokens) != 1:
+            fail("sub2api.runtime_tmpfs mounts must carry exactly one size bound")
+        result[path] = options
+    return result
+
+
 def validate_process(
     container: dict[str, Any],
     image: dict[str, Any],
-) -> list[str]:
+    *,
+    entrypoint_path: str | None,
+    entrypoint_sha256: str | None,
+    observed_entrypoint_sha256: str | None,
+) -> dict[str, Any]:
     config = container.get("Config")
     image_config = image.get("Config")
     if not isinstance(config, dict) or not isinstance(image_config, dict):
@@ -462,15 +528,34 @@ def validate_process(
     image_entrypoint = raw_image_entrypoint or []
     image_cmd = raw_image_cmd or []
     process_vector = [*image_entrypoint, *image_cmd]
-    if not process_vector or process_vector[0] != "/app/sub2api":
-        fail("immutable image process vector is not rooted at /app/sub2api")
+    if entrypoint_path is None:
+        if observed_entrypoint_sha256 is not None:
+            fail("entrypoint evidence was supplied but the version lock pins no entrypoint wrapper")
+        if not process_vector or process_vector[0] != RUNTIME_BINARY:
+            fail("immutable image process vector is not rooted at /app/sub2api")
+        launch_path = RUNTIME_BINARY
+    else:
+        if (
+            len(process_vector) < 2
+            or process_vector[0] != entrypoint_path
+            or process_vector[1] != RUNTIME_BINARY
+        ):
+            fail(
+                "immutable image process vector is not the pinned entrypoint wrapper "
+                "executing /app/sub2api"
+            )
+        if observed_entrypoint_sha256 != entrypoint_sha256:
+            fail("entrypoint wrapper hash does not match the version lock")
+        launch_path = entrypoint_path
     expected_args = process_vector[1:]
-    if (
-        container.get("Path") != "/app/sub2api"
-        or container.get("Args") != expected_args
-    ):
-        fail("container PID 1 Path/Args do not execute the immutable /app/sub2api")
-    return expected_args
+    if container.get("Path") != launch_path or container.get("Args") != expected_args:
+        fail("container PID 1 Path/Args do not execute the immutable process vector")
+    return {
+        "launch_path": launch_path,
+        "args": expected_args,
+        "entrypoint_path": entrypoint_path,
+        "entrypoint_sha256": entrypoint_sha256,
+    }
 
 
 def validate_state(container: dict[str, Any], label: str) -> int:
@@ -722,6 +807,8 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
         fail(f"unsupported Sub2API production admission profile: {profile!r}")
     if "production_compatibility" in sub2api:
         fail("immutable profile may not carry production compatibility exceptions")
+    entrypoint_path, entrypoint_sha256 = parse_lock_entrypoint(sub2api)
+    expected_tmpfs = parse_lock_tmpfs(sub2api)
     expected_image = runtime_source_image
     expected_image_id = runtime_source_image_id
     image_created = runtime_source_image_created
@@ -861,8 +948,15 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
         expected_network=args.expected_network,
         expected_port_bindings=expected_port_bindings,
         mounts=mounts,
+        expected_tmpfs=expected_tmpfs,
     )
-    process_args = validate_process(container, image)
+    process = validate_process(
+        container,
+        image,
+        entrypoint_path=entrypoint_path,
+        entrypoint_sha256=entrypoint_sha256,
+        observed_entrypoint_sha256=args.entrypoint_sha256,
+    )
     initial_restart_count = validate_state(container, "Sub2API container")
     after_restart_count = validate_state(
         container_after, "post-check Sub2API container"
@@ -974,7 +1068,11 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
         "pid1_host_pid": state_pid,
         "pid1_path": args.pid1_path,
         "pid1_sha256": args.pid1_sha256,
-        "pid1_args": process_args,
+        "pid1_args": process["args"],
+        "launch_path": process["launch_path"],
+        "entrypoint_path": process["entrypoint_path"],
+        "entrypoint_sha256": process["entrypoint_sha256"],
+        "tmpfs": expected_tmpfs,
         "restart_count": initial_restart_count,
         "oci_created": image_created,
         "oci_source": source,
@@ -1000,6 +1098,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pid1-host-pid", type=int, required=True)
     parser.add_argument("--pid1-path", required=True)
     parser.add_argument("--pid1-sha256", required=True)
+    parser.add_argument("--entrypoint-sha256")
     parser.add_argument("--version-output", type=Path, required=True)
     parser.add_argument("--diff", type=Path, required=True)
     parser.add_argument("--writable-file-sha256", type=Path, required=True)
@@ -1022,6 +1121,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--pid1-host-pid must be positive")
     if not SHA256_RE.fullmatch(args.pid1_sha256):
         parser.error("--pid1-sha256 must be 64 lowercase hexadecimal characters")
+    if args.entrypoint_sha256 is not None and not SHA256_RE.fullmatch(
+        args.entrypoint_sha256
+    ):
+        parser.error("--entrypoint-sha256 must be 64 lowercase hexadecimal characters")
     bind_values = (
         args.expected_bind_source,
         args.expected_bind_uid,
